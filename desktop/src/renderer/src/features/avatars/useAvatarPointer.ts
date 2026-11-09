@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
+import { earSideFromLook, type HoverEntry } from './ears'
 import { quantizeLook, resolveLookOffset } from './look'
 import { REST_AVATAR_POINTER, type AvatarPointer } from './pose'
 
@@ -15,9 +16,14 @@ const POINTER_SURFACE = 'button, .agent-button, .pinned-agent'
 export function useAvatarPointer(
   tracksPointer: boolean,
   agentId: string | undefined,
-): { ref: RefObject<HTMLSpanElement | null>; pointer: AvatarPointer } {
+): {
+  ref: RefObject<HTMLSpanElement | null>
+  pointer: AvatarPointer
+  hoverEntry: HoverEntry | null
+} {
   const ref = useRef<HTMLSpanElement>(null)
   const [pointer, setPointer] = useState<AvatarPointer>(REST_AVATAR_POINTER)
+  const [hoverEntry, setHoverEntry] = useState<HoverEntry | null>(null)
 
   useEffect(() => {
     if (!tracksPointer) return
@@ -55,7 +61,9 @@ export function useAvatarPointer(
       }
     }
     function onEnter(event: PointerEvent): void {
-      publish({ isHovering: true, isPressed: event.buttons === 1, ...readLook(event) })
+      const look = readLook(event)
+      setHoverEntry({ at: performance.now(), side: earSideFromLook(look.lookX) })
+      publish({ isHovering: true, isPressed: event.buttons === 1, ...look })
     }
     function onMove(event: PointerEvent): void {
       publish({ isHovering: true, isPressed: event.buttons === 1, ...readLook(event) })
@@ -67,6 +75,7 @@ export function useAvatarPointer(
       publish({ isHovering: true, isPressed: false, ...readLook(event) })
     }
     function onLeave(): void {
+      setHoverEntry(null)
       publish(REST_AVATAR_POINTER)
     }
 
@@ -84,5 +93,9 @@ export function useAvatarPointer(
     }
   }, [tracksPointer, agentId])
 
-  return { ref, pointer: tracksPointer ? pointer : REST_AVATAR_POINTER }
+  return {
+    ref,
+    pointer: tracksPointer ? pointer : REST_AVATAR_POINTER,
+    hoverEntry: tracksPointer ? hoverEntry : null,
+  }
 }

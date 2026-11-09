@@ -5,6 +5,7 @@ import {
   installAgentActivityEvents,
   setAgentActivity,
 } from '../features/avatars/activity'
+import { preloadCatFrames } from '../features/avatars/catMotion'
 import { getCatAvatarImage } from '../features/avatars/images'
 import { CAT_AVATAR_IDS } from '../features/avatars/presets'
 import { REDUCED_MOTION_QUERY } from '../features/avatars/usePrefersReducedMotion'
@@ -95,6 +96,23 @@ describe('猫咪头像', () => {
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('头像尺寸无效'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('助手=developer'))
+  })
+
+  it('帧就绪后从左侧进入先半竖左耳', async () => {
+    await preloadCatFrames(async () => undefined)
+    const view = render(
+      <button>
+        <Avatar preset="bombay" agentId="assistant" tracksPointer />
+      </button>,
+    )
+    const avatar = view.container.querySelector('.avatar') as HTMLElement
+    mockBounds(avatar)
+    fireEvent.pointerEnter(view.container.querySelector('button')!, { clientX: 100, clientY: 217 })
+    expect(avatar).toHaveAttribute('data-frames', 'ready')
+    expect(avatar).toHaveAttribute('data-pose', 'hover')
+    expect(avatar).toHaveAttribute('data-ear', 'perk-half')
+    expect(avatar).toHaveAttribute('data-eye', 'open')
+    expect(avatar.querySelector('.cat-portrait')?.getAttribute('src')).toContain('ears-perk-half')
   })
 
   it('没有侧栏行时不能静默开始跟随', () => {

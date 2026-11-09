@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { installAgentActivityEvents } from './features/avatars/activity'
+import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { ChatPanel } from './features/chat/ChatPanel'
@@ -73,6 +74,10 @@ export default function App() {
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
   useEffect(() => installAgentActivityEvents(), [])
+  // 帧没解码完不切换图片，失败时保持睁眼原图，错误已在预加载里记录。
+  useEffect(() => {
+    preloadCatFrames().catch(() => undefined)
+  }, [])
 
   useEffect(() => {
     function handleShortcut(event: KeyboardEvent): void {

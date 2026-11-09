@@ -1,7 +1,20 @@
 import { Star } from 'lucide-react'
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 import { useAgentActivity } from '../features/avatars/activity'
-import { getCatAvatarImage } from '../features/avatars/images'
+import {
+  catMotionId,
+  useCatEye,
+  useCatFrameStatus,
+  useWorkingTwitch,
+} from '../features/avatars/catMotion'
+import {
+  ENTER_SETTLE_MS,
+  ENTER_TWITCH_MS,
+  PERK_HALF_MS,
+  resolveEarFrame,
+  type HoverEntry,
+} from '../features/avatars/ears'
+import { catEyeOverlaySource, catPortraitSource } from '../features/avatars/frames'
 import { resolveAvatarPresentation } from '../features/avatars/pose'
 import type { CatAvatarId } from '../features/avatars/presets'
 import { useAvatarPointer } from '../features/avatars/useAvatarPointer'
@@ -9,7 +22,7 @@ import { useLookTilt } from '../features/avatars/useLookTilt'
 import { usePrefersReducedMotion } from '../features/avatars/usePrefersReducedMotion'
 
 /**
- * 显示打包好的猫咪原图。姿态只来自 resolveAvatarPresentation。
+ * 显示打包好的猫咪帧。姿态只来自 resolveAvatarPresentation。
  * 跟随指针是侧栏专属：会话标题和选择器不传 tracksPointer，避免满屏一起转头。
  */
 export function Avatar({
@@ -27,8 +40,26 @@ export function Avatar({
 }) {
   const activity = useAgentActivity(agentId)
   const prefersReducedMotion = usePrefersReducedMotion()
-  const { ref, pointer } = useAvatarPointer(tracksPointer, agentId)
+  const frameStatus = useCatFrameStatus()
+  const framesReady = frameStatus === 'ready'
+  const motionId = catMotionId(agentId, preset)
+  const eye = useCatEye(motionId)
+  const { ref, pointer, hoverEntry } = useAvatarPointer(tracksPointer, agentId)
   const presentation = resolveAvatarPresentation({ activity, pointer, prefersReducedMotion })
+  const hoverNow = useHoverClock(hoverEntry)
+  const workingTwitch = useWorkingTwitch(
+    motionId,
+    presentation.pose === 'working' && framesReady && !prefersReducedMotion,
+  )
+  const ear = resolveEarFrame({
+    pose: presentation.pose,
+    framesReady,
+    prefersReducedMotion,
+    now: hoverEntry ? hoverNow : 0,
+    hoverEntry,
+    workingTwitch,
+  })
+  const overlay = framesReady && !prefersReducedMotion ? catEyeOverlaySource(preset, eye) : null
   useLookTilt(ref, presentation.lookX, presentation.lookY, prefersReducedMotion)
   return (
     <span
@@ -37,6 +68,9 @@ export function Avatar({
       data-avatar={preset}
       data-pose={presentation.pose}
       data-pressed={presentation.isPressed ? 'true' : 'false'}
+      data-frames={frameStatus}
+      data-eye={prefersReducedMotion || !framesReady ? 'open' : eye}
+      data-ear={ear}
       style={
         {
           '--look-x': String(presentation.lookX),
@@ -50,11 +84,14 @@ export function Avatar({
           <span className="cat-motion">
             <img
               className="cat-portrait"
-              src={getCatAvatarImage(preset)}
+              src={catPortraitSource(preset, ear)}
               alt=""
               draggable={false}
               decoding="sync"
             />
+            {overlay && (
+              <img className="cat-eyes" src={overlay} alt="" draggable={false} decoding="sync" />
+            )}
           </span>
         </span>
       </span>
@@ -74,4 +111,21 @@ export function Avatar({
       )}
     </span>
   )
+}
+
+/** 只在进场后的一小段里跟帧，竖耳稳住后就停，避免每只猫都空转。 */
+function useHoverClock(entry: HoverEntry | null): number {
+  const [now, setNow] = useState(0)
+  useEffect(() => {
+    if (!entry) return
+    const ends = entry.at + PERK_HALF_MS + ENTER_TWITCH_MS + ENTER_SETTLE_MS
+    let frame = 0
+    const tick = (time: number) => {
+      setNow(time)
+      if (time < ends) frame = requestAnimationFrame(tick)
+    }
+    frame = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(frame)
+  }, [entry])
+  return now
 }

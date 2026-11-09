@@ -59,6 +59,7 @@ test.beforeEach(async () => {
       ),
     )
     .toBe(true)
+  await expect(window.locator('.avatar').first()).toHaveAttribute('data-frames', 'ready')
 })
 
 test.afterEach(async () => {
@@ -168,9 +169,10 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
   const sources = await sidebarAvatars
     .locator('img')
     .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
-  expect(sources.every((source) => source.length > 0)).toBe(true)
+  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(
+    true,
+  )
   expect(new Set(sources).size).toBe(8)
-  const sourceByPreset = new Map(presets.map((preset, index) => [preset, sources[index]]))
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
     await window
@@ -192,9 +194,7 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
       await expect(choices.locator('[aria-pressed="true"]')).toHaveCount(1)
       const preset = await choice.locator('.avatar').getAttribute('data-avatar')
       const image = choice.locator('img')
-      expect(await image.evaluate((node: HTMLImageElement) => node.src)).toBe(
-        sourceByPreset.get(preset),
-      )
+      expect(await image.evaluate((node: HTMLImageElement) => node.src)).toContain(preset ?? '')
       expect(
         await image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
       ).toBe(true)
@@ -858,6 +858,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
     }
   }, agentIds)
   await expect(window.locator('.sidebar .avatar[data-pose="working"]')).toHaveCount(8)
+  await expect(window.locator('.sidebar .avatar[data-ear="perk"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
   await expect(header).toHaveAttribute('data-pose', 'working')
   await expect(window.getByRole('log')).toContainText('未发送')
@@ -902,6 +903,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
       listed.locator('.cat-tilt').evaluate((element) => getComputedStyle(element).transform),
     )
     .not.toBe('none')
+  await expect(listed).toHaveAttribute('data-ear', 'perk')
   await window.mouse.down()
   await expect(listed).toHaveAttribute('data-pressed', 'true')
   await window.mouse.up()
@@ -952,6 +954,8 @@ test('猫咪静息、悬停与工作中姿态', async () => {
     )
     .toBe('none')
   await expect(pinnedRail.locator('.cat-work-mark')).toHaveCount(0)
+  await expect(pinnedRail).toHaveAttribute('data-eye', 'open')
+  await expect(pinnedRail).toHaveAttribute('data-ear', 'rest')
   expect(
     await pinnedRail.evaluate((element) =>
       getComputedStyle(element).getPropertyValue('--look-x').trim(),
