@@ -166,7 +166,7 @@ export function ShareDialog({ agent, onClose }: { agent: Agent; onClose: () => v
     <Dialog title="把想法带走" onClose={onClose}>
       <p className="dialog-description">导出与「{agent.name}」的本地草稿，随时接着思考。</p>
       <div className="export-summary">
-        <Avatar preset={agent.avatar} />
+        <Avatar preset={agent.avatar} agentId={agent.id} />
         <div>
           <strong>{agent.name}</strong>
           <p>
@@ -210,7 +210,12 @@ export function AgentDetailsDialog({
   return (
     <Dialog title="你的搭档" onClose={onClose}>
       <div className="settings-brand">
-        <Avatar preset={agent.avatar} size="large" starred={agent.id === 'assistant'} />
+        <Avatar
+          preset={agent.avatar}
+          agentId={agent.id}
+          size="large"
+          starred={agent.id === 'assistant'}
+        />
         <h3>{agent.name}</h3>
         <p>{agent.description || '期待和你一起开启下一个想法。'}</p>
         <span>{agent.group}</span>
@@ -294,7 +299,7 @@ export function WorkspaceDialog({
           <div className="workspace-hidden-list">
             {hiddenAgents.map((agent) => (
               <div className="workspace-hidden-item" key={agent.id}>
-                <Avatar preset={agent.avatar} />
+                <Avatar preset={agent.avatar} agentId={agent.id} />
                 <div>
                   <strong>{agent.name}</strong>
                   <span>{agent.group}</span>

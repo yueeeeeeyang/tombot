@@ -229,7 +229,13 @@ function PinnedAgent({
   if (isRenaming) {
     return (
       <div className="pinned-agent is-editing">
-        <Avatar preset={agent.avatar} size="large" starred={isAssistant} />
+        <Avatar
+          preset={agent.avatar}
+          agentId={agent.id}
+          tracksPointer
+          size="large"
+          starred={isAssistant}
+        />
         <InlineNameInput
           initialName={agent.name}
           label="猫咪名称"
@@ -251,7 +257,13 @@ function PinnedAgent({
       title={agent.name}
       aria-pressed={isActive}
     >
-      <Avatar preset={agent.avatar} size="large" starred={isAssistant} />
+      <Avatar
+        preset={agent.avatar}
+        agentId={agent.id}
+        tracksPointer
+        size="large"
+        starred={isAssistant}
+      />
       <span className="pinned-name">{agent.name}</span>
       {isUnread && <span className="agent-unread-dot" aria-hidden="true" />}
     </button>
@@ -289,7 +301,7 @@ function AgentButton({
   if (isRenaming) {
     return (
       <div className="agent-button is-editing">
-        <Avatar preset={agent.avatar} />
+        <Avatar preset={agent.avatar} agentId={agent.id} tracksPointer />
         <span className="agent-copy">
           <InlineNameInput
             initialName={agent.name}
@@ -314,7 +326,7 @@ function AgentButton({
       onKeyDown={onMenuKeyDown}
       aria-current={isActive ? 'page' : undefined}
     >
-      <Avatar preset={agent.avatar} />
+      <Avatar preset={agent.avatar} agentId={agent.id} tracksPointer />
       <span className="agent-copy">
         <span className="agent-name">{agent.name}</span>
         <span className="agent-preview">{preview}</span>

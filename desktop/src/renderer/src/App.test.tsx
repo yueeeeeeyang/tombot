@@ -1,7 +1,8 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
+import { AGENT_ACTIVITY_EVENT } from './features/avatars/activity'
 import { loadWorkspace, STORAGE_KEY } from './features/workspace/storage'
 import {
   SIDEBAR_STORAGE_KEY,
@@ -26,6 +27,41 @@ function openAgentMenu(name: string | RegExp): HTMLElement {
 }
 
 describe('客户端交互', () => {
+  it('保存未发送草稿不会让猫咪进入工作中', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const avatar = screen.getByRole('button', { name: '小黑' }).querySelector('.avatar')
+    expect(avatar).toHaveAttribute('data-pose', 'idle')
+    await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '只是草稿')
+    await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
+    expect(screen.getByText(/· 未发送/)).toBeInTheDocument()
+    expect(avatar).toHaveAttribute('data-pose', 'idle')
+    expect(
+      screen.getByRole('button', { name: '查看小黑资料' }).querySelector('.avatar'),
+    ).toHaveAttribute('data-pose', 'idle')
+  })
+
+  it('工作中事件只改变对应猫咪的姿态，不生成回复', () => {
+    render(<App />)
+    const avatar = screen.getByRole('button', { name: '小黑' }).querySelector('.avatar')
+    const log = screen.getByRole('log').textContent
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent(AGENT_ACTIVITY_EVENT, {
+          detail: { agentId: 'assistant', activity: 'working' },
+        }),
+      )
+    })
+    expect(avatar).toHaveAttribute('data-pose', 'working')
+    expect(
+      screen.getByRole('button', { name: '查看小黑资料' }).querySelector('.avatar'),
+    ).toHaveAttribute('data-pose', 'working')
+    expect(
+      screen.getByRole('button', { name: /^游戏程序/ }).querySelector('.avatar'),
+    ).toHaveAttribute('data-pose', 'idle')
+    expect(screen.getByRole('log').textContent).toBe(log)
+  })
+
   it('输入保存为明确未发送的消息，刷新后仍可恢复', async () => {
     const user = userEvent.setup()
     const first = render(<App />)

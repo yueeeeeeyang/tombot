@@ -1,0 +1,151 @@
+/* 头像运动都放在变换上，不改 22/34/56 的布局盒。
+   减弱动效由姿态解析退回静息，同时全局样式会关掉动画；
+   悬停时的眼睛位移不是动画，所以必须靠姿态而不是只靠 animation: none。 */
+.avatar {
+  --look-x: 0;
+  --look-y: 0;
+  overflow: visible;
+}
+.cat-graphic {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.cat-rig,
+.cat-ear,
+.cat-pupil,
+.cat-lid {
+  transform-box: fill-box;
+}
+.cat-rig {
+  transform-origin: 50% 68%;
+}
+.cat-ear {
+  transform-origin: 50% 100%;
+}
+.cat-pupil,
+.cat-lid {
+  transform-origin: center;
+}
+.cat-lid {
+  transform: scaleY(0);
+}
+
+.avatar[data-pose='idle'] .cat-rig {
+  animation: cat-breathe 3.8s ease-in-out infinite;
+}
+.avatar[data-pose='idle'] .cat-lid {
+  animation: cat-blink 6.4s infinite;
+  animation-delay: var(--blink-delay, 0s);
+}
+
+.avatar[data-pose='working'] .cat-rig {
+  animation: cat-think 1.1s ease-in-out infinite;
+}
+.avatar[data-pose='working'] .cat-pupil {
+  animation: cat-think-pupil 1.1s ease-in-out infinite;
+}
+.avatar[data-pose='working'] .cat-ear-left {
+  animation: cat-ear-perk 1.1s ease-in-out infinite;
+}
+.avatar[data-pose='working'] .cat-ear-right {
+  animation: cat-ear-perk-right 1.1s ease-in-out infinite;
+}
+
+.avatar[data-pose='hover'] .cat-rig {
+  transform: rotate(calc(var(--look-x) * 6deg));
+}
+.avatar[data-pose='hover'] .cat-pupil {
+  transform: translate(calc(var(--look-x) * 75%), calc(var(--look-y) * 50%));
+  transition: transform 60ms linear;
+}
+.avatar[data-pose='hover'] .cat-ear-left {
+  animation: cat-ear-twitch 0.46s ease;
+}
+.avatar[data-pressed='true'] .cat-rig {
+  animation: none;
+  transform: scale(0.93, 0.9);
+}
+.avatar[data-pressed='true'] .cat-ear-left,
+.avatar[data-pressed='true'] .cat-ear-right {
+  animation: none;
+}
+.avatar[data-pressed='true'] .cat-ear-left {
+  transform: rotate(-16deg);
+}
+.avatar[data-pressed='true'] .cat-ear-right {
+  transform: rotate(16deg);
+}
+
+@keyframes cat-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.028);
+  }
+}
+@keyframes cat-blink {
+  0%,
+  46%,
+  54%,
+  100% {
+    transform: scaleY(0);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+@keyframes cat-think {
+  0%,
+  100% {
+    transform: rotate(-5deg);
+  }
+  50% {
+    transform: rotate(6deg) translateY(-0.6px);
+  }
+}
+@keyframes cat-think-pupil {
+  0%,
+  100% {
+    transform: translate(-70%, -55%);
+  }
+  50% {
+    transform: translate(78%, -20%);
+  }
+}
+@keyframes cat-ear-perk {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(-12deg);
+  }
+}
+@keyframes cat-ear-perk-right {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  50% {
+    transform: rotate(12deg);
+  }
+}
+@keyframes cat-ear-twitch {
+  0% {
+    transform: rotate(0deg);
+  }
+  30% {
+    transform: rotate(-16deg);
+  }
+  62% {
+    transform: rotate(5deg);
+  }
+  100% {
+    transform: rotate(0deg);
+  }
+}
