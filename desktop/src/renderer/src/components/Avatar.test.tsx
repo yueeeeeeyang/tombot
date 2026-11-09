@@ -5,8 +5,8 @@ import {
   installAgentActivityEvents,
   setAgentActivity,
 } from '../features/avatars/activity'
+import { getCatAvatarImage } from '../features/avatars/images'
 import { CAT_AVATAR_IDS } from '../features/avatars/presets'
-import { getCatPalette } from '../features/avatars/palette'
 import { REDUCED_MOTION_QUERY } from '../features/avatars/usePrefersReducedMotion'
 import { Avatar } from './Avatar'
 
@@ -31,24 +31,21 @@ describe('猫咪头像', () => {
     vi.restoreAllMocks()
   })
 
-  it('八款预设都画出可动的眼睛和耳朵，并标上自己的毛色', () => {
-    for (const preset of CAT_AVATAR_IDS) {
+  it('八款预设都使用各自的原图，静息时不显示工作标记', () => {
+    const sources = CAT_AVATAR_IDS.map((preset) => {
       const view = render(<Avatar preset={preset} />)
       const avatar = view.container.querySelector('.avatar')
+      const image = view.container.querySelector('img')
       expect(avatar).toHaveAttribute('data-avatar', preset)
       expect(avatar).toHaveAttribute('data-pose', 'idle')
       expect(avatar).toHaveAttribute('data-pressed', 'false')
-      expect(view.container.querySelector('svg')).toHaveAttribute(
-        'data-fur',
-        getCatPalette(preset).fur,
-      )
-      expect(view.container.querySelectorAll('.cat-pupil')).toHaveLength(2)
-      expect(view.container.querySelectorAll('.cat-lid')).toHaveLength(2)
-      expect(view.container.querySelector('.cat-ear-left')).not.toBeNull()
-      expect(view.container.querySelector('.cat-ear-right')).not.toBeNull()
-      expect(view.container.querySelector('.cat-face')).not.toBeNull()
+      expect(avatar?.querySelector('.cat-work-mark')).toBeNull()
+      expect(image).toHaveAttribute('src', getCatAvatarImage(preset))
+      expect(image).toHaveAttribute('draggable', 'false')
       view.unmount()
-    }
+      return image?.getAttribute('src')
+    })
+    expect(new Set(sources).size).toBe(CAT_AVATAR_IDS.length)
   })
 
   it('侧栏一行里跟随指针，离开、越界和按下都有明确结果', () => {
@@ -138,10 +135,12 @@ describe('猫咪头像', () => {
       )
     })
     expect(avatar).toHaveAttribute('data-pose', 'working')
+    expect(avatar.querySelector('.cat-work-mark')).not.toBeNull()
     expect(avatar).toHaveAttribute('data-pressed', 'false')
     expect(avatar.style.getPropertyValue('--look-x')).toBe('0')
 
     act(() => setAgentActivity('assistant', 'idle'))
+    expect(avatar.querySelector('.cat-work-mark')).toBeNull()
     expect(avatar).toHaveAttribute('data-pose', 'hover')
     expect(avatar.style.getPropertyValue('--look-x')).toBe('-1')
     release()
@@ -186,7 +185,9 @@ describe('猫咪头像', () => {
       for (const listener of listeners) listener()
     })
     expect(avatar).toHaveAttribute('data-pose', 'idle')
+    expect(avatar.querySelector('.cat-work-mark')).toBeNull()
     expect(avatar.style.getPropertyValue('--look-x')).toBe('0')
+    expect(Number(avatar.style.getPropertyValue('--tilt-x'))).toBe(0)
     expect(avatar).toHaveAttribute('data-pressed', 'false')
 
     view.unmount()

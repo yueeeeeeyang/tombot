@@ -181,8 +181,9 @@ button:disabled {
   display: inline-flex;
   flex: 0 0 auto;
 }
-.avatar > .cat-graphic {
-  user-select: none;
+.avatar > .cat-stage {
+  min-width: 0;
+  min-height: 0;
 }
 .avatar--small {
   width: 22px;

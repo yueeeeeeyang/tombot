@@ -49,15 +49,14 @@ test.beforeEach(async () => {
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   await expect
     .poll(() =>
-      window
-        .locator('.avatar svg.cat-graphic')
-        .evaluateAll(
-          (graphics) =>
-            graphics.length > 0 &&
-            graphics.every(
-              (graphic) => graphic.getAttribute('data-fur') && graphic.querySelector('.cat-face'),
-            ),
-        ),
+      window.locator('.avatar img').evaluateAll(
+        (images) =>
+          images.length > 0 &&
+          images.every((image) => {
+            const portrait = image as HTMLImageElement
+            return portrait.complete && portrait.naturalWidth > 0
+          }),
+      ),
     )
     .toBe(true)
 })
@@ -166,12 +165,12 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     elements.map((element) => element.getAttribute('data-avatar')),
   )
   expect(new Set(presets).size).toBe(8)
-  const furs = await sidebarAvatars
-    .locator('svg.cat-graphic')
-    .evaluateAll((graphics) => graphics.map((graphic) => graphic.getAttribute('data-fur')))
-  expect(furs.every((fur) => /^#[0-9a-f]{6}$/.test(fur ?? ''))).toBe(true)
-  expect(new Set(furs).size).toBe(8)
-  const furByPreset = new Map(presets.map((preset, index) => [preset, furs[index]]))
+  const sources = await sidebarAvatars
+    .locator('img')
+    .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
+  expect(sources.every((source) => source.length > 0)).toBe(true)
+  expect(new Set(sources).size).toBe(8)
+  const sourceByPreset = new Map(presets.map((preset, index) => [preset, sources[index]]))
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
     await window
@@ -192,13 +191,12 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
       await expect(choice).toHaveAttribute('aria-pressed', 'true')
       await expect(choices.locator('[aria-pressed="true"]')).toHaveCount(1)
       const preset = await choice.locator('.avatar').getAttribute('data-avatar')
-      expect(await choice.locator('svg.cat-graphic').getAttribute('data-fur')).toBe(
-        furByPreset.get(preset),
+      const image = choice.locator('img')
+      expect(await image.evaluate((node: HTMLImageElement) => node.src)).toBe(
+        sourceByPreset.get(preset),
       )
       expect(
-        await choice
-          .locator('svg.cat-graphic')
-          .evaluate((graphic) => graphic.querySelector('.cat-face') !== null),
+        await image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
       ).toBe(true)
     }
     await window.screenshot({
@@ -572,7 +570,7 @@ test('真实主题、系统变化、表单焦点、悬浮滚动条与顶部雾�
   ).toBe('rgb(17, 17, 17)')
   expect(
     await window
-      .locator('.avatar[data-avatar="bombay"] svg.cat-graphic')
+      .locator('.avatar[data-avatar="bombay"] img')
       .first()
       .evaluate((element) => getComputedStyle(element).filter),
   ).toBe('none')
@@ -822,9 +820,9 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   expect((await header.boundingBox())!.width).toBe(22)
   await expect
     .poll(() =>
-      pinned.locator('.cat-rig').evaluate((element) => getComputedStyle(element).animationName),
+      pinned.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
     )
-    .toBe('cat-breathe')
+    .toBe('cat-idle')
   await window.screenshot({ path: test.info().outputPath('cat-idle.png'), scale: 'css' })
 
   const input = window.getByRole('textbox', { name: '给小黑发消息' })
@@ -860,6 +858,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
     }
   }, agentIds)
   await expect(window.locator('.sidebar .avatar[data-pose="working"]')).toHaveCount(8)
+  await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
   await expect(header).toHaveAttribute('data-pose', 'working')
   await expect(window.getByRole('log')).toContainText('未发送')
   expect(await window.locator('.assistant-bubble').count()).toBe(repliesBefore)
@@ -874,9 +873,9 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   ).toBe('0')
   await expect
     .poll(() =>
-      pinned.locator('.cat-rig').evaluate((element) => getComputedStyle(element).animationName),
+      pinned.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
     )
-    .toBe('cat-think')
+    .toBe('cat-work')
   await window.screenshot({ path: test.info().outputPath('cat-working.png'), scale: 'css' })
 
   await window.evaluate((ids) => {
@@ -898,17 +897,17 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   )
   expect(lookLeft).toBeLessThan(0)
   expect(lookRight).toBeGreaterThan(0)
+  await expect
+    .poll(() =>
+      listed.locator('.cat-tilt').evaluate((element) => getComputedStyle(element).transform),
+    )
+    .not.toBe('none')
   await window.mouse.down()
   await expect(listed).toHaveAttribute('data-pressed', 'true')
   await window.mouse.up()
   await expect(listed).toHaveAttribute('data-pressed', 'false')
   await expect(listed).toHaveAttribute('data-pose', 'hover')
-  expect(
-    await listed
-      .locator('.cat-pupil')
-      .first()
-      .evaluate((element) => getComputedStyle(element).transform),
-  ).not.toBe('none')
+  await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(0)
   await window.screenshot({ path: test.info().outputPath('cat-hover.png'), scale: 'css' })
 
   const separator = window.getByRole('separator', { name: '调整侧栏宽度' })
@@ -947,9 +946,12 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   await expect(pinnedRail).toHaveAttribute('data-pose', 'idle')
   await expect
     .poll(() =>
-      pinnedRail.locator('.cat-rig').evaluate((element) => getComputedStyle(element).animationName),
+      pinnedRail
+        .locator('.cat-motion')
+        .evaluate((element) => getComputedStyle(element).animationName),
     )
     .toBe('none')
+  await expect(pinnedRail.locator('.cat-work-mark')).toHaveCount(0)
   expect(
     await pinnedRail.evaluate((element) =>
       getComputedStyle(element).getPropertyValue('--look-x').trim(),
