@@ -1,0 +1,109 @@
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--sidebar-width) - 4px);
+  width: 8px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+.sidebar-resizer::after {
+  content: '';
+  display: block;
+  width: 1px;
+  height: 100%;
+  margin: auto;
+  background: transparent;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+.is-resizing .sidebar-resizer::after {
+  background: var(--sidebar-border-active);
+}
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+.is-resizing,
+.is-resizing * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+.sidebar-is-collapsed .sidebar-toolbar {
+  height: 48px;
+  padding: 0;
+}
+.sidebar-is-collapsed .pinned-area {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  padding: 6px 0 14px;
+  max-height: 40vh;
+}
+.sidebar-is-collapsed .pinned-agent {
+  flex: 0 0 auto;
+  width: 54px;
+  height: 54px;
+  min-width: 0;
+  padding: 10px;
+  justify-content: center;
+}
+.sidebar-is-collapsed .pinned-agent > .avatar {
+  width: 34px;
+  height: 34px;
+}
+.sidebar-is-collapsed .avatar-star {
+  width: 15px;
+  height: 15px;
+}
+.sidebar-is-collapsed .pinned-name,
+.sidebar-is-collapsed .agent-copy,
+.sidebar-is-collapsed .profile-copy {
+  display: none;
+}
+.sidebar-is-collapsed .agent-groups {
+  padding: 0 14px 8px;
+  scrollbar-gutter: stable both-edges;
+}
+.sidebar-is-collapsed .agent-group {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.sidebar-is-collapsed .agent-group h2 {
+  display: none;
+}
+.sidebar-is-collapsed .agent-group + .agent-group {
+  margin-top: 12px;
+}
+.sidebar-is-collapsed .agent-button {
+  justify-content: center;
+  padding: 10px;
+  width: 54px;
+  height: 54px;
+  margin-left: -3px;
+}
+.sidebar-is-collapsed .agent-button + .agent-button {
+  margin-top: 4px;
+}
+.sidebar-is-collapsed .sidebar-footer {
+  flex-direction: column;
+  padding: 8px 0 16px;
+  gap: 8px;
+}
+.sidebar-is-collapsed .profile-button {
+  order: 2;
+}
+.sidebar-is-collapsed .settings-button {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: 0;
+}
+.rail-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

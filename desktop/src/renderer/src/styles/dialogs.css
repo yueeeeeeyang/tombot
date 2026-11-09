@@ -1,0 +1,423 @@
+.dialog {
+  -webkit-app-region: no-drag;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 0;
+  width: min(360px, calc(100vw - 32px));
+  max-height: calc(100dvh - 48px);
+  background: var(--canvas);
+  color: var(--text);
+  box-shadow: 0 30px 100px #00000020;
+}
+.dialog::backdrop {
+  -webkit-app-region: no-drag;
+  background: #22222230;
+  backdrop-filter: blur(5px);
+}
+.dialog--recruit {
+  width: min(480px, calc(100vw - 32px));
+}
+.dialog--recruit .dialog-content {
+  padding: 22px;
+}
+/* Electron 的原生拖拽命中测试不受顶层遮罩约束，弹窗打开时需关闭背景拖拽区。 */
+.app-shell:has(dialog[open]) .sidebar-toolbar,
+.app-shell:has(dialog[open]) .chat-header {
+  -webkit-app-region: no-drag;
+}
+.dialog-content {
+  padding: 18px;
+}
+.dialog-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+.dialog-heading h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+.dialog-description {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 0 0 16px;
+}
+.agent-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.avatar-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.avatar-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.avatar-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 2px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 10px;
+}
+.avatar-option:hover {
+  background: var(--hover);
+}
+.avatar-option[aria-pressed='true'] {
+  background: var(--selected);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.avatar-option-check {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+}
+.agent-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  position: relative;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.agent-form input,
+.agent-form textarea {
+  width: 100%;
+  padding: 9px 10px;
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  color: var(--text);
+  font-size: 13px;
+  resize: vertical;
+}
+.recruit-selects {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+.recruit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+.recruit-field .select-trigger {
+  min-height: 36px;
+  background: var(--surface-muted);
+}
+.recruit-field .select-trigger:hover,
+.recruit-field .select-trigger[aria-expanded='true'],
+.recruit-field .select-trigger:focus-visible {
+  background: var(--hover);
+}
+.agent-model-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  padding: 12px 0;
+  font-size: 12px;
+}
+.empty-model-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.empty-model-note button {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  padding: 4px 0;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  font-size: inherit;
+}
+.agent-model-summary strong {
+  font-weight: 500;
+}
+.agent-model-summary small {
+  width: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+.agent-form input::placeholder,
+.agent-form textarea::placeholder {
+  color: var(--subtle);
+}
+.optional-label {
+  position: absolute;
+  left: 70px;
+  top: 1px;
+  color: var(--subtle);
+  font-size: 11px;
+}
+.primary-button,
+.secondary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 500;
+  width: 100%;
+}
+.primary-button {
+  background: var(--button-background);
+  color: var(--button-text);
+  border: 1px solid var(--button-background);
+}
+.primary-button:hover:not(:disabled) {
+  background: var(--button-hover);
+}
+.secondary-button {
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+.secondary-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+.form-footnote {
+  margin: 0;
+  font-size: 11px;
+  text-align: center;
+  color: var(--subtle);
+  line-height: 1.8;
+}
+.form-error {
+  color: var(--error-text);
+  background: var(--error-background);
+  border: 1px solid var(--error-border);
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 0;
+}
+.settings-brand {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+  padding: 10px 0 18px;
+}
+.settings-brand h3 {
+  font-size: 18px;
+  margin: 15px 0 8px;
+  font-weight: 600;
+}
+.settings-brand p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.8;
+  margin: 0;
+}
+.settings-brand > span:last-child:not(.avatar) {
+  font-size: 11px;
+  color: var(--subtle);
+  margin-top: 10px;
+}
+.connection-dot {
+  height: 8px;
+  width: 8px;
+  border-radius: 50%;
+  background: var(--subtle);
+  margin: 0 4px;
+  flex-shrink: 0;
+}
+.details-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--surface-muted);
+  margin: 3px 0 20px;
+}
+.details-note p {
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--muted);
+  margin: 0;
+}
+.export-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--surface-muted);
+  border-radius: 13px;
+  padding: 12px;
+  margin: 16px 0;
+}
+.export-summary strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.export-summary p {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 7px 0 0;
+}
+.share-actions {
+  display: flex;
+  gap: 10px;
+  margin: 0 0 15px;
+}
+.share-actions + .form-footnote {
+  margin-bottom: 9px;
+}
+
+.workspace-stats {
+  display: flex;
+  justify-content: space-around;
+  padding: 16px;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  margin-bottom: 14px;
+}
+.workspace-stats div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.workspace-stats strong {
+  font-size: 21px;
+  font-weight: 550;
+}
+.workspace-stats span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.workspace-status {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 0;
+}
+.workspace-status > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.workspace-status > div {
+  flex: 1;
+}
+.workspace-status strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.workspace-status p {
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 5px 0 0;
+}
+.workspace-status > span:last-child {
+  white-space: nowrap;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 4px 6px;
+  background: var(--surface-muted);
+  border-radius: 5px;
+}
+.workspace-hidden {
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.workspace-hidden-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.workspace-hidden-heading h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.workspace-hidden-heading > span {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 10px;
+  text-align: center;
+}
+.workspace-hidden > p {
+  margin: 6px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.workspace-hidden-list {
+  max-height: 168px;
+  overflow-y: auto;
+}
+.workspace-hidden-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+.workspace-hidden-item > div {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.workspace-hidden-item strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-hidden-item span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.workspace-hidden-item button {
+  flex-shrink: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  padding: 4px 0;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.workspace-hidden-item button:hover {
+  color: var(--text);
+}

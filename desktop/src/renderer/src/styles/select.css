@@ -1,0 +1,89 @@
+.custom-select {
+  min-width: 0;
+}
+.select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 30px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
+}
+.select-trigger > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.select-trigger > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+}
+.select-trigger:hover:not(:disabled),
+.select-trigger[aria-expanded='true'],
+.select-trigger:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.select-trigger:active:not(:disabled) {
+  transform: none;
+}
+.select-menu {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 5px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 8px 28px #0003;
+  -webkit-app-region: no-drag;
+}
+.select-menu::backdrop {
+  background: transparent;
+  pointer-events: none;
+}
+.select-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.select-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.select-option small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.select-option > svg {
+  flex-shrink: 0;
+}
+.select-option.is-highlighted {
+  background: var(--hover);
+}
+.select-option[aria-selected='true'] {
+  color: var(--text);
+  font-weight: 550;
+}
+.select-option[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}

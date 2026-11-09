@@ -1,0 +1,11 @@
+node_modules/
+desktop/out/
+desktop/release/
+desktop/coverage/
+desktop/test-results/
+desktop/playwright-report/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
