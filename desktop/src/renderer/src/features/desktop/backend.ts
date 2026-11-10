@@ -1,11 +1,27 @@
 import type { SettingsDraft } from '../settings/settings'
 import type { AppWorkspace } from '../workspace/model'
 
-export type SessionPhase = 'loading' | 'offline' | 'setup' | 'login' | 'ready'
+export type SessionPhase = 'loading' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
+
+export interface BootstrapStep {
+  id: string
+  title: string
+  status: string
+  detail?: string
+  duration_ms: number
+}
+
+export interface BootstrapStatus {
+  phase: string
+  steps: BootstrapStep[]
+  error?: string
+  cursor: number
+}
 
 export interface SessionSnapshot {
   phase: SessionPhase
   message?: string
+  bootstrap?: BootstrapStatus
 }
 
 export interface WorkspaceSnapshot {
@@ -47,8 +63,13 @@ export interface DeliveryResult {
  */
 export interface DesktopBackend {
   savesSynchronously?: boolean
-  trySessionSync?: () => SessionPhase
+  trySessionSync?: () => SessionPhase | null
+  tryBootstrapSync?: () => BootstrapStatus | undefined
   session: () => Promise<SessionSnapshot>
+  watchBootstrap?: (
+    onStatus: (status: BootstrapStatus) => void,
+    onError: (error: Error) => void,
+  ) => () => void
   setup: (input: { setupCode: string; password: string }) => Promise<void>
   login: (password: string) => Promise<void>
   tryWorkspaceSync?: () => WorkspaceSnapshot

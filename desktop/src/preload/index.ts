@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
+interface BootstrapStatus {
+  phase: string
+  steps: Array<{ id: string; title: string; status: string; detail?: string; duration_ms: number }>
+  error?: string
+  cursor: number
+}
+
 type CallResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }
 
 async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -56,6 +63,19 @@ contextBridge.exposeInMainWorld(
       },
       openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
       startBootstrap: () => invoke('desktop:bootstrap'),
+      watchBootstrap: (
+        onStatus: (status: BootstrapStatus) => void,
+        onError: (error: Error) => void,
+      ) => {
+        const watchID = crypto.randomUUID()
+        const listener = (_event: IpcRendererEvent, payload: BootstrapStatus) => onStatus(payload)
+        ipcRenderer.on('desktop:bootstrap-status', listener)
+        void invoke('desktop:bootstrap-watch', watchID).catch((error: Error) => onError(error))
+        return () => {
+          ipcRenderer.send('desktop:bootstrap-unwatch', watchID)
+          ipcRenderer.removeListener('desktop:bootstrap-status', listener)
+        }
+      },
       listMemories: (agentId: string) => invoke('desktop:memories', agentId),
       listRoutines: (agentId: string) => invoke('desktop:routines', agentId),
       setRoutineEnabled: (id: string, revision: number, enabled: boolean) =>

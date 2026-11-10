@@ -72,7 +72,15 @@ func run(logger *slog.Logger) (result error) {
 	}
 	defer func() { result = errors.Join(result, db.Close()) }()
 	events := bus.New(db)
-	provisioner, err := provision.New(ctx, db, events, provision.Steps(cfg, db, provision.CommandRunner{}), cfg.StepTimeout)
+	steps, err := selectBootstrapSteps(cfg, db)
+	if err != nil {
+		return err
+	}
+	if provision.FixturePath() != "" {
+		// 夹具只供测试模拟进度。产品启动不会设置它，仍安装字体和浏览器。
+		logger.Warn("使用引导夹具，不安装字体和浏览器")
+	}
+	provisioner, err := provision.New(ctx, db, events, steps, cfg.StepTimeout)
 	if err != nil {
 		return err
 	}
@@ -171,12 +179,9 @@ func run(logger *slog.Logger) (result error) {
 	server := &http.Server{Addr: cfg.Addr, TLSConfig: inboundTLS, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
 	failures := make(chan error, 1)
 	bootstrapDone := make(chan struct{})
-	companion := os.Getenv("TOM_DESKTOP_COMPANION") == "1"
-	if !companion {
-		if !provisioner.Claim() {
-			stopRoutines()
-			return fmt.Errorf("引导已在运行")
-		}
+	if !provisioner.Claim() {
+		stopRoutines()
+		return fmt.Errorf("引导已在运行")
 	}
 	listener, err := net.Listen("tcp", cfg.Addr)
 	if err != nil {
@@ -189,23 +194,20 @@ func run(logger *slog.Logger) (result error) {
 		routines.Maintain(routineContext, logger, provisioner.WaitReady)
 	}()
 	defer func() { stopRoutines(); <-routineDone }()
-	if companion {
-		// 桌面阶段不安装浏览器和系统字体。工作空间接口不依赖引导完成，其余业务仍等待引导。
-		logger.Info("桌面配套模式，跳过主机引导", "addr", cfg.Addr)
-		close(bootstrapDone)
-	} else {
-		go func() {
-			defer close(bootstrapDone)
-			if err := provisioner.RunClaimed(ctx, false); err != nil {
-				logger.Error("启动引导失败", "phase", provisioner.Snapshot().Phase)
-			} else {
-				if err := browsing.Start(ctx); err != nil {
-					logger.Error("持久浏览器启动失败，浏览器功能暂不可用", "component", "browser")
-				}
-				logger.Info("服务已就绪", "version", version, "addr", cfg.Addr)
-			}
-		}()
-	}
+	go func() {
+		defer close(bootstrapDone)
+		if err := provisioner.RunClaimed(ctx, false); err != nil {
+			logger.Error("启动引导失败", "phase", provisioner.Snapshot().Phase)
+			return
+		}
+		if provision.FixturePath() != "" {
+			// 夹具没有安装浏览器。再启动会去执行一个不存在的 Chrome，并在恢复循环里空等。
+			logger.Info("引导夹具已完成，不启动浏览器", "addr", cfg.Addr)
+		} else if err := browsing.Start(ctx); err != nil {
+			logger.Error("持久浏览器启动失败，浏览器功能暂不可用", "component", "browser")
+		}
+		logger.Info("服务已就绪", "version", version, "addr", cfg.Addr)
+	}()
 	logger.Info("服务监听中", "addr", cfg.Addr, "phase", "detecting")
 	select {
 	case err = <-failures:
