@@ -5,6 +5,7 @@
 @import url('./styles/search.css');
 @import url('./styles/select.css');
 @import url('./styles/cat-menu.css');
+@import url('./styles/avatar.css');
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -180,12 +181,9 @@ button:disabled {
   display: inline-flex;
   flex: 0 0 auto;
 }
-.avatar > img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  user-select: none;
+.avatar > .cat-stage {
+  min-width: 0;
+  min-height: 0;
 }
 .avatar--small {
   width: 22px;

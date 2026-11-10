@@ -31,7 +31,10 @@ async function configureModel(): Promise<void> {
 test.beforeEach(async () => {
   browserErrors = []
   profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-test-'))
-  application = await electron.launch({ args: ['.', `--user-data-dir=${profilePath}`] })
+  // 虚拟显示器的设备像素比会略偏离 1，窗口和布局是按 CSS 像素断言的。
+  application = await electron.launch({
+    args: ['.', `--user-data-dir=${profilePath}`, '--force-device-scale-factor=1'],
+  })
   window = await application.firstWindow()
   // 等待原生窗口就绪，避免首次拖动被窗口显示过程打断。
   await expect
@@ -46,16 +49,17 @@ test.beforeEach(async () => {
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   await expect
     .poll(() =>
-      window
-        .locator('.avatar img')
-        .evaluateAll((images) =>
-          images.every(
-            (image) =>
-              (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0,
-          ),
-        ),
+      window.locator('.avatar img').evaluateAll(
+        (images) =>
+          images.length > 0 &&
+          images.every((image) => {
+            const portrait = image as HTMLImageElement
+            return portrait.complete && portrait.naturalWidth > 0
+          }),
+      ),
     )
     .toBe(true)
+  await expect(window.locator('.avatar').first()).toHaveAttribute('data-frames', 'ready')
 })
 
 test.afterEach(async () => {
@@ -162,10 +166,13 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     elements.map((element) => element.getAttribute('data-avatar')),
   )
   expect(new Set(presets).size).toBe(8)
-  const imageSources = await sidebarAvatars
+  const sources = await sidebarAvatars
     .locator('img')
     .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
-  expect(new Set(imageSources).size).toBe(8)
+  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(
+    true,
+  )
+  expect(new Set(sources).size).toBe(8)
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
     await window
@@ -185,10 +192,11 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
       await choice.click()
       await expect(choice).toHaveAttribute('aria-pressed', 'true')
       await expect(choices.locator('[aria-pressed="true"]')).toHaveCount(1)
+      const preset = await choice.locator('.avatar').getAttribute('data-avatar')
+      const image = choice.locator('img')
+      expect(await image.evaluate((node: HTMLImageElement) => node.src)).toContain(preset ?? '')
       expect(
-        await choice
-          .locator('img')
-          .evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0),
+        await image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
       ).toBe(true)
     }
     await window.screenshot({
@@ -798,3 +806,159 @@ for (const modal of [
     await expect(trigger).toBeFocused()
   })
 }
+
+test('猫咪静息、悬停与工作中姿态', async () => {
+  await window.emulateMedia({ reducedMotion: 'no-preference' })
+  const pinned = window.getByRole('button', { name: '小黑', exact: true }).locator('.avatar')
+  const listed = window.getByRole('button', { name: '游戏程序', exact: true }).locator('.avatar')
+  const header = window.locator('.chat-header .avatar')
+  await expect(pinned).toHaveAttribute('data-pose', 'idle')
+  expect((await listed.boundingBox())!.width).toBe(34)
+  expect((await listed.boundingBox())!.height).toBe(34)
+  expect((await pinned.boundingBox())!.width).toBe(56)
+  expect((await pinned.boundingBox())!.height).toBe(56)
+  expect((await header.boundingBox())!.width).toBe(22)
+  await expect
+    .poll(() =>
+      pinned.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
+    )
+    .toBe('cat-idle')
+  await window.screenshot({ path: test.info().outputPath('cat-idle.png'), scale: 'css' })
+
+  const input = window.getByRole('textbox', { name: '给小黑发消息' })
+  await input.fill('只是本地草稿')
+  await input.press('Enter')
+  await expect(window.getByRole('log')).toContainText('未发送')
+  await expect(pinned).toHaveAttribute('data-pose', 'idle')
+
+  await window.evaluate(() => {
+    globalThis.dispatchEvent(new Event('tombot:agent-activity'))
+    globalThis.dispatchEvent(
+      new CustomEvent('tombot:agent-activity', { detail: { agentId: '', activity: 'working' } }),
+    )
+  })
+  await expect(pinned).toHaveAttribute('data-pose', 'idle')
+
+  const agentIds = [
+    'assistant',
+    'developer',
+    'producer',
+    'artist',
+    'audio',
+    'coding',
+    'news',
+    'organizer',
+  ]
+  const repliesBefore = await window.locator('.assistant-bubble').count()
+  await window.evaluate((ids) => {
+    for (const agentId of ids) {
+      globalThis.dispatchEvent(
+        new CustomEvent('tombot:agent-activity', { detail: { agentId, activity: 'working' } }),
+      )
+    }
+  }, agentIds)
+  await expect(window.locator('.sidebar .avatar[data-pose="working"]')).toHaveCount(8)
+  await expect(window.locator('.sidebar .avatar[data-ear="perk"]')).toHaveCount(8)
+  await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
+  await expect(header).toHaveAttribute('data-pose', 'working')
+  await expect(window.getByRole('log')).toContainText('未发送')
+  expect(await window.locator('.assistant-bubble').count()).toBe(repliesBefore)
+  await window.mouse.move(700, 420)
+  const pinnedBox = await pinned.boundingBox()
+  await window.mouse.move(pinnedBox!.x + 4, pinnedBox!.y + pinnedBox!.height / 2)
+  await expect(pinned).toHaveAttribute('data-pose', 'working')
+  expect(
+    await pinned.evaluate((element) =>
+      getComputedStyle(element).getPropertyValue('--look-x').trim(),
+    ),
+  ).toBe('0')
+  await expect
+    .poll(() =>
+      pinned.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
+    )
+    .toBe('cat-work')
+  await window.screenshot({ path: test.info().outputPath('cat-working.png'), scale: 'css' })
+
+  await window.evaluate((ids) => {
+    for (const agentId of ids) {
+      globalThis.dispatchEvent(
+        new CustomEvent('tombot:agent-activity', { detail: { agentId, activity: 'idle' } }),
+      )
+    }
+  }, agentIds)
+  const listedBox = await listed.boundingBox()
+  await window.mouse.move(listedBox!.x + 2, listedBox!.y + listedBox!.height / 2)
+  await expect(listed).toHaveAttribute('data-pose', 'hover')
+  const lookLeft = Number(
+    await listed.evaluate((element) => getComputedStyle(element).getPropertyValue('--look-x')),
+  )
+  await window.mouse.move(listedBox!.x + listedBox!.width - 2, listedBox!.y + listedBox!.height / 2)
+  const lookRight = Number(
+    await listed.evaluate((element) => getComputedStyle(element).getPropertyValue('--look-x')),
+  )
+  expect(lookLeft).toBeLessThan(0)
+  expect(lookRight).toBeGreaterThan(0)
+  await expect
+    .poll(() =>
+      listed.locator('.cat-tilt').evaluate((element) => getComputedStyle(element).transform),
+    )
+    .not.toBe('none')
+  await expect(listed).toHaveAttribute('data-ear', 'perk')
+  await window.mouse.down()
+  await expect(listed).toHaveAttribute('data-pressed', 'true')
+  await window.mouse.up()
+  await expect(listed).toHaveAttribute('data-pressed', 'false')
+  await expect(listed).toHaveAttribute('data-pose', 'hover')
+  await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(0)
+  await window.screenshot({ path: test.info().outputPath('cat-hover.png'), scale: 'css' })
+
+  const separator = window.getByRole('separator', { name: '调整侧栏宽度' })
+  await separator.focus()
+  await separator.press('Home')
+  await expect(separator).toHaveAttribute('aria-valuenow', '88')
+  const rail = window.getByRole('button', { name: '游戏程序', exact: true }).locator('.avatar')
+  const railBox = await rail.boundingBox()
+  expect(railBox!.width).toBe(34)
+  await window.mouse.move(railBox!.x + 2, railBox!.y + railBox!.height / 2)
+  await expect(rail).toHaveAttribute('data-pose', 'hover')
+  const railLeft = Number(
+    await rail.evaluate((element) => getComputedStyle(element).getPropertyValue('--look-x')),
+  )
+  await window.mouse.move(railBox!.x + railBox!.width - 2, railBox!.y + railBox!.height / 2)
+  const railRight = Number(
+    await rail.evaluate((element) => getComputedStyle(element).getPropertyValue('--look-x')),
+  )
+  expect(railLeft).toBeLessThan(0)
+  expect(railRight).toBeGreaterThan(0)
+  const pinnedRail = window.getByRole('button', { name: '小黑', exact: true }).locator('.avatar')
+  const pinnedRailBox = await pinnedRail.boundingBox()
+  expect(pinnedRailBox!.width).toBe(34)
+  await window.mouse.move(pinnedRailBox!.x + pinnedRailBox!.width - 2, pinnedRailBox!.y + 8)
+  await expect(pinnedRail).toHaveAttribute('data-pose', 'hover')
+
+  await window.emulateMedia({ reducedMotion: 'reduce' })
+  await window.evaluate(() => {
+    globalThis.dispatchEvent(
+      new CustomEvent('tombot:agent-activity', {
+        detail: { agentId: 'assistant', activity: 'working' },
+      }),
+    )
+  })
+  await window.mouse.move(pinnedRailBox!.x + 4, pinnedRailBox!.y + pinnedRailBox!.height / 2)
+  await expect(pinnedRail).toHaveAttribute('data-pose', 'idle')
+  await expect
+    .poll(() =>
+      pinnedRail
+        .locator('.cat-motion')
+        .evaluate((element) => getComputedStyle(element).animationName),
+    )
+    .toBe('none')
+  await expect(pinnedRail.locator('.cat-work-mark')).toHaveCount(0)
+  await expect(pinnedRail).toHaveAttribute('data-eye', 'open')
+  await expect(pinnedRail).toHaveAttribute('data-ear', 'rest')
+  expect(
+    await pinnedRail.evaluate((element) =>
+      getComputedStyle(element).getPropertyValue('--look-x').trim(),
+    ),
+  ).toBe('0')
+})

@@ -158,7 +158,7 @@ export function SearchDialog({
                         onClick={() => selectResult(result)}
                       >
                         {result.agent ? (
-                          <Avatar preset={result.agent.avatar} />
+                          <Avatar preset={result.agent.avatar} agentId={result.agent.id} />
                         ) : (
                           <span className="search-setting-icon">
                             {result.section === 'general' ? (

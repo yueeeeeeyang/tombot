@@ -76,7 +76,7 @@ export function ChatPanel({
           onClick={onDetails}
           aria-label={`查看${agent.name}资料`}
         >
-          <Avatar preset={agent.avatar} size="small" />
+          <Avatar preset={agent.avatar} agentId={agent.id} size="small" />
           <span>{agent.name}</span>
           <ChevronDown className="pill-chevron" size={12} />
         </button>

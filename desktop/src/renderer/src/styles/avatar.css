@@ -1,0 +1,139 @@
+/* 原图只做变换：呼吸和轻摆、悬停倾斜、按下压扁、工作中点头。
+   倾斜用弹簧写到 --tilt-*，不跟指针一帧跳过去。
+   减弱动效时姿态解析已退回静息，全局样式也会关掉动画。 */
+.avatar {
+  --look-x: 0;
+  --look-y: 0;
+  --tilt-x: 0;
+  --tilt-y: 0;
+  overflow: visible;
+}
+.cat-stage,
+.cat-tilt,
+.cat-motion {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.cat-stage {
+  perspective: 180px;
+}
+.cat-tilt {
+  transform-origin: 50% 78%;
+  transform: rotateX(calc(var(--tilt-y) * 12deg)) rotateY(calc(var(--tilt-x) * 16deg));
+}
+.avatar[data-pose='hover'] .cat-tilt {
+  will-change: transform;
+}
+.cat-motion {
+  position: relative;
+  transform-origin: 50% 82%;
+}
+.cat-portrait,
+.cat-eyes {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  image-rendering: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+
+.avatar[data-pose='idle'] .cat-motion {
+  animation: cat-idle 3.6s ease-in-out infinite;
+}
+.avatar[data-pose='working'] .cat-motion {
+  animation: cat-work 0.72s ease-in-out infinite;
+}
+.avatar[data-pose='hover']:not([data-pressed='true']) .cat-motion {
+  animation: cat-pop 0.42s cubic-bezier(0.2, 0.85, 0.2, 1);
+}
+.avatar[data-pressed='true'] .cat-motion {
+  animation: none;
+  transform: scaleX(1.08) scaleY(0.84);
+}
+
+.cat-work-mark {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  z-index: 1;
+  display: flex;
+  width: 16px;
+  height: 8px;
+  padding: 1px 2px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--canvas);
+  pointer-events: none;
+}
+.avatar--small .cat-work-mark {
+  top: -2px;
+  right: -3px;
+  width: 12px;
+  height: 6px;
+}
+.cat-work-dots {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.cat-work-dots circle {
+  fill: var(--text);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: cat-dot 0.9s ease-in-out infinite;
+}
+.cat-work-dots circle:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.cat-work-dots circle:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes cat-idle {
+  0%,
+  100% {
+    transform: translateY(0) scaleY(1) rotate(0deg);
+  }
+  50% {
+    transform: translateY(0.4px) scaleY(1.03) rotate(1.1deg);
+  }
+}
+@keyframes cat-work {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-7deg) scale(1);
+  }
+  50% {
+    transform: translateY(-9%) rotate(8deg) scale(1.045);
+  }
+}
+@keyframes cat-pop {
+  0% {
+    transform: scale(0.94);
+  }
+  58% {
+    transform: scale(1.07);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes cat-dot {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.35;
+  }
+  40% {
+    transform: translateY(-1.4px);
+    opacity: 1;
+  }
+}
