@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -77,6 +78,59 @@ func TestOfflineChecksumRejectsModifiedArchive(t *testing.T) {
 		t.Fatalf("错误资产被接受: %v", err)
 	}
 }
+func shippedBrowserDir(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("无法定位测试文件")
+	}
+	return filepath.Join(filepath.Dir(file), "..", "..", "browser")
+}
+
+func TestShippedBrowserArchivesMatchPins(t *testing.T) {
+	dir := shippedBrowserDir(t)
+	if len(pinnedReleases) != 4 {
+		t.Fatalf("受支持平台数量变化后要同时更新随仓库提供的包: %d", len(pinnedReleases))
+	}
+	for platform, release := range pinnedReleases {
+		path := filepath.Join(dir, "chrome-"+release.Platform+".zip")
+		digest, err := hashFile(path)
+		if err != nil {
+			t.Fatalf("%s 缺少随仓库提供的离线包 %s: %v", platform, path, err)
+		}
+		if digest != release.Checksum {
+			t.Fatalf("%s 摘要不符，得到 %s", path, digest)
+		}
+	}
+}
+
+func TestLocateBrowserArchiveUsesShippedRepoCopy(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	repoBrowser := shippedBrowserDir(t)
+	data := filepath.Join(t.TempDir(), "bin", "data")
+	exe := filepath.Join(filepath.Dir(repoBrowser), "bin", "tomd")
+	source, err := locateBrowserArchive(data, exe, "", release, false)
+	want := filepath.Join(repoBrowser, "chrome-"+release.Platform+".zip")
+	if err != nil || source != want {
+		t.Fatal("未使用仓库自带的离线包", source, err, want)
+	}
+	root := t.TempDir()
+	sibling := defaultBrowserArchive(filepath.Join(root, "data"), release)
+	if err = os.MkdirAll(filepath.Dir(sibling), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(sibling, []byte("local"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err = locateBrowserArchive(filepath.Join(root, "data"), exe, "", release, false)
+	if err != nil || source != sibling {
+		t.Fatal("数据目录同级的包应优先于仓库副本", source, err)
+	}
+}
+
 func TestResolveBrowserArchiveUsesSiblingZip(t *testing.T) {
 	release, err := currentRelease()
 	if err != nil {

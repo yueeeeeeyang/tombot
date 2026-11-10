@@ -79,13 +79,11 @@ export PATH="/usr/local/go/bin:$PATH"   # 需要 Go 1.26.5 或与 go.mod 一致�
 export TOM_ADDR=127.0.0.1:8787
 export TOM_DATA_DIR="$PWD/data"
 export TOM_WORKSPACE_DIR="$PWD/workspace"
-mkdir -p browser
-# 将 Chrome for Testing 157.0.8103.38 的 chrome-<平台>.zip 放到 browser/ 后再启动。
 go build -o bin/tomd ./cmd/tomd
 ./bin/tomd
 ```
 
-托管浏览器默认读数据目录同级的 `browser/chrome-<平台>.zip`（上面就是 `server/browser/`）。引导会复制、校验并解压，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。版本、平台文件名和官方分发地址见 [server/README.md](README.md)。
+四个平台的官方包已经在 `server/browser/`，由 Git LFS 提供。若克隆后只看到指针文本，先在仓库根目录执行 `git lfs install` 和 `git lfs pull`。引导从这里复制、校验并解压，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。平台文件名见 [server/README.md](README.md)。
 
 标准输出里的一次性初始化码只用于第一次初始化，不要转发。然后：
 

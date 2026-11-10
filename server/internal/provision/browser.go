@@ -136,27 +136,57 @@ func defaultBrowserArchive(dataDir string, r release) string {
 	return filepath.Join(filepath.Dir(filepath.Clean(dataDir)), "browser", "chrome-"+r.Platform+".zip")
 }
 
-// resolveBrowserArchive 决定本次安装读哪一份本地 zip。override 对应 TOM_BROWSER_ARCHIVE。
-// 默认路径和覆盖都不存在时，只有运行时目录里已经校验通过的归档可以继续用，例如备份还原之后。
-func resolveBrowserArchive(dataDir, override string, r release, cachedValid bool) (string, error) {
+// browserArchiveCandidates 先看数据目录同级，再看可执行文件旁边和它的上一级。
+// 开发构建的 tomd 在 server/bin，随仓库的四个平台包在 server/browser，用上一级才能直接找到。
+func browserArchiveCandidates(dataDir, executable string, r release) []string {
+	name := "chrome-" + r.Platform + ".zip"
+	raw := []string{defaultBrowserArchive(dataDir, r)}
+	if executable != "" {
+		dir := filepath.Dir(filepath.Clean(executable))
+		raw = append(raw, filepath.Join(dir, "browser", name), filepath.Join(filepath.Dir(dir), "browser", name))
+	}
+	seen := map[string]bool{}
+	paths := make([]string, 0, len(raw))
+	for _, path := range raw {
+		path = filepath.Clean(path)
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+// locateBrowserArchive 决定本次安装读哪一份本地 zip。override 对应 TOM_BROWSER_ARCHIVE。
+// 候选路径都不存在时，只有运行时目录里已经校验通过的归档可以继续用，例如备份还原之后。
+func locateBrowserArchive(dataDir, executable, override string, r release, cachedValid bool) (string, error) {
 	if override != "" {
 		return override, nil
 	}
-	path := defaultBrowserArchive(dataDir, r)
-	info, err := os.Stat(path)
-	if err == nil {
-		if !info.Mode().IsRegular() {
-			return "", fmt.Errorf("官方离线浏览器包必须是普通文件：%s", path)
+	candidates := browserArchiveCandidates(dataDir, executable, r)
+	for _, path := range candidates {
+		info, err := os.Stat(path)
+		if err == nil {
+			if !info.Mode().IsRegular() {
+				return "", fmt.Errorf("官方离线浏览器包必须是普通文件：%s", path)
+			}
+			return path, nil
 		}
-		return path, nil
-	}
-	if !os.IsNotExist(err) {
-		return "", err
+		if !os.IsNotExist(err) {
+			return "", err
+		}
 	}
 	if cachedValid {
 		return "", nil
 	}
-	return "", fmt.Errorf("未找到官方离线浏览器包 %s。请将 Chrome for Testing %s 的 chrome-%s.zip 放到该路径，或设置 TOM_BROWSER_ARCHIVE 指向已放置的 zip", path, browserVersion, r.Platform)
+	return "", fmt.Errorf("未找到官方离线浏览器包 %s。各平台包已随仓库放在 server/browser/chrome-%s.zip（Git LFS）。请在仓库根目录执行 git lfs pull；数据目录不在仓库内时，把该文件复制到上述路径。需要改位置时设置 TOM_BROWSER_ARCHIVE", candidates[0], r.Platform)
+}
+
+// resolveBrowserArchive 用当前可执行文件补齐仓库内的默认包位置。
+func resolveBrowserArchive(dataDir, override string, r release, cachedValid bool) (string, error) {
+	executable, _ := os.Executable()
+	return locateBrowserArchive(dataDir, executable, override, r, cachedValid)
 }
 
 func copyBrowserArchive(source, archive string) error {
@@ -194,7 +224,7 @@ func copyBrowserArchive(source, archive string) error {
 }
 
 // EnsureBrowser 用官方离线 zip 安装托管浏览器：复制到运行时目录、核对固定摘要，再在临时目录展开并替换。
-// offline 非空时改用该路径；否则读取数据目录同级的默认包。不会从网络下载。
+// offline 非空时改用该路径；否则读取仓库自带或数据目录同级的包。不会从网络下载。
 func EnsureBrowser(ctx context.Context, dir, offline string) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -223,7 +253,7 @@ func EnsureBrowser(ctx context.Context, dir, offline string) (result error) {
 		return err
 	}
 	if digest != r.Checksum {
-		return fmt.Errorf("浏览器归档 SHA-256 不匹配，拒绝执行。请换用 Chrome for Testing %s 的官方离线 zip", browserVersion)
+		return fmt.Errorf("浏览器归档 SHA-256 不匹配，拒绝执行。请改用仓库 server/browser/ 中 Chrome for Testing %s 的官方离线 zip", browserVersion)
 	}
 	stage, err := os.MkdirTemp(root, ".browser-*")
 	if err != nil {

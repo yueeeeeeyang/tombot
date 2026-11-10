@@ -14,7 +14,7 @@ npm run dev
 
 `setup` 使用 Electron 官方安装器下载对应平台的运行时；Electron 45 不再随依赖安装自动下载运行时，需要首次安装后执行。开发模式支持界面热更新。
 
-本机服务准备托管浏览器时使用官方离线 zip，不在引导过程中下载浏览器。zip 的默认位置和取得方式见仓库 `server/MIGRATION.md` 与 `server/README.md`。
+本机服务准备托管浏览器时使用仓库 `server/browser/` 里随 Git LFS 提供的官方离线 zip，不在引导过程中下载浏览器。文件名和取出方式见 `server/README.md`。
 
 构建并打开生产资源：
 
