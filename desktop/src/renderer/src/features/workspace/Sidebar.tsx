@@ -1,5 +1,11 @@
-import { Plus, Search, Settings } from 'lucide-react'
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import { MessageSquarePlus, Plus, Search, Settings, UserPlus } from 'lucide-react'
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import workspaceCat from '../../assets/cats/workspace-cat.png'
 import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
@@ -24,6 +30,10 @@ export function Sidebar({
   onSearch,
   onCreate,
   onSettings,
+  chatGroups,
+  selected,
+  onOpenGroup,
+  onCreateGroup,
 }: {
   workspace: Workspace
   preferences: SidebarPreferences
@@ -40,6 +50,10 @@ export function Sidebar({
   onSearch: () => void
   onCreate: () => void
   onSettings: () => void
+  chatGroups: Array<{ id: string; name: string }>
+  selected: { kind: 'agent' | 'group'; id: string }
+  onOpenGroup: (id: string) => void
+  onCreateGroup: () => void
 }) {
   const assistant = workspace.agents.find((agent) => agent.id === 'assistant')!
   const { hiddenIds, pinnedIds, unreadIds } = preferences
@@ -93,14 +107,11 @@ export function Sidebar({
             >
               <Search size={18} strokeWidth={1.7} />
             </button>
-            <button
+            <CreateMenu
               className="round-button"
-              onClick={onCreate}
-              aria-label="招聘猫咪"
-              title="招聘猫咪"
-            >
-              <Plus size={21} strokeWidth={1.6} />
-            </button>
+              onRecruit={onCreate}
+              onCreateGroup={onCreateGroup}
+            />
           </>
         )}
       </div>
@@ -110,7 +121,7 @@ export function Sidebar({
             key={agent.id}
             agent={agent}
             isAssistant={agent.id === assistant.id}
-            isActive={workspace.activeAgentId === agent.id}
+            isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
             isUnread={isUnread(agent)}
             isRenaming={agent.id === renamingAgentId}
             onSelect={onSelect}
@@ -141,7 +152,7 @@ export function Sidebar({
                 <AgentButton
                   key={agent.id}
                   agent={agent}
-                  isActive={workspace.activeAgentId === agent.id}
+                  isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
                   isUnread={isUnread(agent)}
                   isRenaming={agent.id === renamingAgentId}
                   onSelect={onSelect}
@@ -153,6 +164,24 @@ export function Sidebar({
               ))}
           </section>
         ))}
+        {chatGroups.length > 0 && (
+          <section className="agent-group">
+            <h2>群聊</h2>
+            {chatGroups.map((group) => (
+              <button
+                key={group.id}
+                type="button"
+                className={`agent-button ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
+                onClick={() => onOpenGroup(group.id)}
+              >
+                <span className="agent-copy">
+                  <span className="agent-name">{group.name}</span>
+                  <span className="agent-preview">多只猫咪一起聊</span>
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
       </nav>
       <div className="sidebar-footer">
         {isCollapsed && (
@@ -165,14 +194,11 @@ export function Sidebar({
             >
               <Search size={18} />
             </button>
-            <button
+            <CreateMenu
               className="icon-button"
-              onClick={onCreate}
-              aria-label="招聘猫咪"
-              title="招聘猫咪"
-            >
-              <Plus size={21} />
-            </button>
+              onRecruit={onCreate}
+              onCreateGroup={onCreateGroup}
+            />
           </div>
         )}
         <button
@@ -298,9 +324,11 @@ function AgentButton({
   const lastMessage = agent.messages.at(-1)
   const preview = agent.draft
     ? `草稿：${agent.draft}`
-    : lastMessage
-      ? `未发送：${lastMessage.content}`
-      : agent.description
+    : lastMessage?.dmNotice
+      ? lastMessage.content
+      : lastMessage
+        ? `未发送：${lastMessage.content}`
+        : agent.description
   if (isRenaming) {
     return (
       <div className="agent-button is-editing">
@@ -336,5 +364,109 @@ function AgentButton({
       </span>
       {isUnread && <span className="agent-unread-dot" aria-hidden="true" />}
     </button>
+  )
+}
+
+/** 原来的新建按钮现在先弹出菜单，再进入招聘或建群。 */
+function CreateMenu({
+  className,
+  onRecruit,
+  onCreateGroup,
+}: {
+  className: string
+  onRecruit: () => void
+  onCreateGroup: () => void
+}) {
+  const button = useRef<HTMLButtonElement>(null)
+  const menu = useRef<HTMLDivElement>(null)
+  const [open, setOpen] = useState(false)
+  useLayoutEffect(() => {
+    if (!open) return
+    if (menu.current == null || button.current == null) return
+    const element: HTMLDivElement = menu.current
+    const trigger: HTMLButtonElement = button.current
+    if (typeof element.showPopover === 'function') element.showPopover()
+    const bounds = trigger.getBoundingClientRect()
+    const box = element.getBoundingClientRect()
+    element.style.left = `${Math.max(8, Math.min(bounds.right - box.width, innerWidth - box.width - 8))}px`
+    element.style.top = `${Math.max(8, Math.min(bounds.bottom + 6, innerHeight - box.height - 8))}px`
+    element.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+    function closeOutside(event: PointerEvent): void {
+      if (
+        event.target instanceof Node &&
+        !element.contains(event.target) &&
+        !trigger.contains(event.target)
+      )
+        setOpen(false)
+    }
+    function onKey(event: KeyboardEvent): void {
+      if (event.key !== 'Escape') return
+      event.preventDefault()
+      setOpen(false)
+      trigger.focus()
+    }
+    document.addEventListener('pointerdown', closeOutside, true)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      if (typeof element.hidePopover === 'function') element.hidePopover()
+      document.removeEventListener('pointerdown', closeOutside, true)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+  return (
+    <>
+      <button
+        ref={button}
+        className={className}
+        type="button"
+        aria-label="新建"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="新建"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Plus size={21} strokeWidth={1.6} />
+      </button>
+      {open && (
+        <div
+          ref={menu}
+          className="cat-context-menu"
+          popover="manual"
+          role="menu"
+          aria-label="新建"
+          onKeyDown={(event) => {
+            if (event.key !== 'Escape') return
+            event.preventDefault()
+            setOpen(false)
+            button.current?.focus()
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              button.current?.focus()
+              setOpen(false)
+              onRecruit()
+            }}
+          >
+            <UserPlus size={16} />
+            <span>招聘猫咪</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              button.current?.focus()
+              setOpen(false)
+              onCreateGroup()
+            }}
+          >
+            <MessageSquarePlus size={16} />
+            <span>创建群聊</span>
+          </button>
+        </div>
+      )}
+    </>
   )
 }

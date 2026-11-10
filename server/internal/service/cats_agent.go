@@ -30,9 +30,9 @@ func (s *Service) syncModel(ctx context.Context, form ModelForm, apiKey string) 
 	if tokens < 1 {
 		tokens = 1024
 	}
-	contextWindow := 8192
-	if tokens > contextWindow {
-		contextWindow = tokens
+	contextWindow := 32768
+	if tokens >= contextWindow {
+		contextWindow = tokens + 1024
 	}
 	return s.ensureModel(ctx, providerID, form.ModelName, contextWindow, tokens)
 }
@@ -54,9 +54,9 @@ func (s *Service) modelForAgent(ctx context.Context, form ModelForm, apiKey, cat
 	if tokens < 1 {
 		tokens = 1024
 	}
-	contextWindow := 8192
-	if tokens > contextWindow {
-		contextWindow = tokens
+	contextWindow := 32768
+	if tokens >= contextWindow {
+		contextWindow = tokens + 1024
 	}
 	return s.ensureModel(ctx, providerID, key, contextWindow, tokens)
 }
@@ -132,7 +132,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	var botID, conversationID string
 	err := s.db.QueryRowContext(ctx, `SELECT bots.id, conversations.id FROM bots JOIN conversations ON conversations.bot_id=bots.id AND conversations.kind='direct' AND conversations.source!='routine' WHERE bots.id=? OR bots.desktop_id=?`, agent.ID, agent.ID).Scan(&botID, &conversationID)
 	if err == nil {
-		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}, Soul: Field[string]{Set: true, Value: desktopSoul}, ToolPolicy: Field[domain.ToolPolicy]{Set: true, Value: desktopToolPolicy()}}
+		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}, Soul: Field[string]{Set: true, Value: desktopSoul}, ToolPolicy: Field[domain.ToolPolicy]{Set: true, Value: desktopToolPolicy()}, MessagingPolicy: Field[domain.MessagingPolicy]{Set: true, Value: domain.MessagingPolicy{AcceptDM: true, CanInitiate: true, AcceptGroupInvite: true}}}
 		if modelID != "" {
 			patch.ModelID = Field[*string]{Set: true, Value: &modelID}
 		}

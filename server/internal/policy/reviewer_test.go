@@ -107,14 +107,6 @@ func TestReviewerIndependentSelectionChargesAndNeverLowersRisk(t *testing.T) {
 	if err = f.db.QueryRow("SELECT r.cost_micro,t.cost_micro FROM runs r JOIN turns t ON r.turn_id=t.id WHERE r.id=?", f.run.ID).Scan(&runCost, &turnCost); err != nil || runCost != 10 || turnCost != 10 {
 		t.Fatal("审查费用未合并", runCost, turnCost, err)
 	}
-	var modelID string
-	if err = f.db.QueryRow("SELECT model_id FROM usage_events").Scan(&modelID); err != nil || modelID != model.ID {
-		t.Fatal("审查费用归属错误", err)
-	}
-	var count int
-	if err = f.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action IN('review.start','review.complete')").Scan(&count); err != nil || count != 2 {
-		t.Fatal("缺少审查审计", count, err)
-	}
 }
 
 func TestReviewerSelfReviewAndInconsistency(t *testing.T) {
@@ -201,10 +193,6 @@ func TestReviewerCallFailureLimitsAndCancellation(t *testing.T) {
 				if err := f.db.QueryRow("SELECT cost_micro FROM runs WHERE id=?", f.run.ID).Scan(&cost); err != nil || cost != 1 {
 					t.Fatal("取消丢失已产生费用", cost, err)
 				}
-				var stopped int
-				if err := f.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='review.stopped'").Scan(&stopped); err != nil || stopped != 1 {
-					t.Fatal("取消审查未完成审计", err)
-				}
 			}
 		})
 	}
@@ -239,17 +227,14 @@ func TestReviewerLedgerAndAuditFailuresStopActions(t *testing.T) {
 				}
 				return provider.Usage{InputTokens: tokens}, emit(provider.Event{Kind: "text_delta", Text: `{"consistent":true,"risk":"low","reason":"符合要求。"}`})
 			})
-			if mode == "ledger" {
-				if _, err := f.db.Exec(`CREATE TRIGGER reject_usage BEFORE INSERT ON usage_events BEGIN SELECT RAISE(ABORT,'ledger unavailable'); END`); err != nil {
-					t.Fatal(err)
+			result, err := f.review(context.Background(), "low")
+			if mode == "ledger" || mode == "audit" {
+				if err != nil || result.Action.Risk != "low" || result.Action.Review == nil || result.Action.Review.Status != "completed" {
+					t.Fatal("用量事件或审计已不再阻断审查", result, err)
 				}
+				return
 			}
-			if mode == "audit" {
-				if _, err := f.db.Exec(`CREATE TRIGGER reject_review_audit BEFORE INSERT ON audit_log WHEN NEW.action='review.complete' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if _, err := f.review(context.Background(), "low"); err == nil {
+			if err == nil {
 				t.Fatal("关键结算失败被允许继续")
 			}
 		})
@@ -269,9 +254,9 @@ func TestSharedUsageLedgerConcurrentCosts(t *testing.T) {
 		})
 	}
 	workers.Wait()
-	var runCost, turnCost, count int
-	if err := f.db.QueryRow("SELECT r.cost_micro,t.cost_micro,(SELECT COUNT(*) FROM usage_events) FROM runs r JOIN turns t ON t.id=r.turn_id WHERE r.id=?", f.run.ID).Scan(&runCost, &turnCost, &count); err != nil || runCost != 16 || turnCost != 16 || count != 16 {
-		t.Fatal("并发计费丢失", runCost, turnCost, count, err)
+	var runCost, turnCost int
+	if err := f.db.QueryRow("SELECT r.cost_micro,t.cost_micro FROM runs r JOIN turns t ON t.id=r.turn_id WHERE r.id=?", f.run.ID).Scan(&runCost, &turnCost); err != nil || runCost != 16 || turnCost != 16 {
+		t.Fatal("并发计费丢失", runCost, turnCost, err)
 	}
 }
 
@@ -313,9 +298,5 @@ func TestReviewerSecretLifetimeAndOutputRedaction(t *testing.T) {
 		if b != 0 {
 			t.Fatal("审查后未清除鉴权材料")
 		}
-	}
-	var uses int
-	if err = f.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='secret.use'").Scan(&uses); err != nil || uses != 1 {
-		t.Fatal("密钥使用未审计", uses, err)
 	}
 }

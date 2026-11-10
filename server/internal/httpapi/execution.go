@@ -5,13 +5,9 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"io.yueyang/tom/internal/agent"
 )
 
 func (s *Server) executionRoutes(r chi.Router) {
-	r.Post("/conversations/{id}/messages", handleInput(s, 202, func(ctx context.Context, r *http.Request, input agent.SendInput) (any, error) {
-		return s.Runtime.Submit(ctx, chi.URLParam(r, "id"), input, actor(r))
-	}))
 	r.Post("/turns/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
 		if err := s.Runtime.Cancel(r.Context(), chi.URLParam(r, "id"), actor(r)); err != nil {
 			s.fail(w, r, err)

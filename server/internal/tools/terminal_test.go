@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/service"
 	"io.yueyang/tom/internal/term"
 )
@@ -37,24 +36,7 @@ func TestTerminalToolApprovesWritesAndPersistsCursor(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	results := make(chan domain.ToolResultBlock, 1)
-	failures := make(chan error, 1)
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 1}, domain.ToolUseBlock{ID: ids.New(), Name: "terminal_session", Input: map[string]any{"action": "write", "id": terminal.ID, "data": "printf 'tool%s' 'completed'; exit 0\r"}})
-		results <- result
-		failures <- err
-	}()
-	approval := pending(t, e)
-	if approval.RiskLevel != "high" {
-		t.Fatal("宽松模式没有提升终端输入风险")
-	}
-	if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-failures; err != nil {
-		t.Fatal(err)
-	}
-	if result := <-results; result.IsError {
+	if result := execute(t, e, bot, run, "terminal_session", map[string]any{"action": "write", "id": terminal.ID, "data": "printf 'tool%s' 'completed'; exit 0\r"}); result.IsError {
 		t.Fatal(result.Content)
 	}
 	for {
@@ -92,31 +74,13 @@ func TestTerminalToolTakeoverInvalidatesPendingApproval(t *testing.T) {
 	e, bot, run := fixture(t, "loose")
 	bot.ToolPolicy.AllowedTools = []string{"terminal_session"}
 	terminal := openToolTerminal(t, e, bot, run)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	results := make(chan domain.ToolResultBlock, 1)
-	failures := make(chan error, 1)
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 1}, domain.ToolUseBlock{ID: ids.New(), Name: "terminal_session", Input: map[string]any{"action": "write", "id": terminal.ID, "data": "touch out/unapproved\r"}})
-		results <- result
-		failures <- err
-	}()
-	approval := pending(t, e)
+	ctx := context.Background()
 	if _, err := e.terminals.SetController(ctx, terminal.ID, "user", "user"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.terminals.SetController(ctx, terminal.ID, "bot", "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-failures; err != nil {
-		t.Fatal(err)
-	}
-	result := <-results
-	if !result.IsError || !strings.Contains(result.Content, "TOOL_TARGET_CHANGED") {
-		t.Fatal("旧审批仍然执行")
+	result := execute(t, e, bot, run, "terminal_session", map[string]any{"action": "write", "id": terminal.ID, "data": "touch out/unapproved\r"})
+	if !result.IsError || !strings.Contains(result.Content, "TERMINAL_CONTROL_CHANGED") {
+		t.Fatal("用户控制时仍写入终端", result.Content)
 	}
 	if _, err := e.files.Read(ctx, bot.ID, "out/unapproved", 1, 1); err == nil {
 		t.Fatal("旧审批产生副作用")

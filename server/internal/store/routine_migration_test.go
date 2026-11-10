@@ -57,21 +57,15 @@ INSERT INTO approvals(id,run_id,tool_call_id,bot_id,action_class,title,detail_js
 	if err = Migrate(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
-	var runID, status string
-	if err = db.QueryRow(`SELECT run_id,status FROM approvals WHERE id='approval'`).Scan(&runID, &status); err != nil || runID != "run" || status != "pending" {
-		t.Fatal("迁移丢失历史审批", runID, status, err)
+	var approvals int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='approvals'`).Scan(&approvals); err != nil || approvals != 0 {
+		t.Fatal("审批表还在", approvals, err)
 	}
 	if _, err = db.Exec(`INSERT INTO conversations(id,kind,source,bot_id,title,created_at,updated_at) VALUES('routine','direct','routine','bot','例程会话',0,0)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = db.Exec(`INSERT INTO conversations(id,kind,source,bot_id,title,created_at,updated_at) VALUES('duplicate','direct','user','bot','重复主会话',0,0)`); err == nil {
 		t.Fatal("主会话唯一约束被移除")
-	}
-	if _, err = db.Exec(`INSERT INTO approvals(id,action_class,title,detail_json,risk_level,status,expires_at,created_at) VALUES('standalone','routine.create','例程审批','{}','medium','pending',100,0)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(`INSERT INTO approvals(id,action_class,title,detail_json,risk_level,status,expires_at,created_at) VALUES('invalid','fs.write','无运行审批','{}','medium','pending',100,0)`); err == nil {
-		t.Fatal("接受任意无 Run 审批")
 	}
 	rows, err := db.Query(`PRAGMA foreign_key_check`)
 	if err != nil {

@@ -359,9 +359,6 @@ func (s *Routines) Delete(ctx context.Context, id string, revision int64, actor 
 		if active {
 			return domain.NewError(409, "TURN_IN_PROGRESS", "Stop the active routine turn before deleting its configuration.")
 		}
-		if _, err = tx.ExecContext(ctx, `UPDATE approvals SET status='expired',decided_at=? WHERE status='pending' AND id IN(SELECT approval_id FROM routine_changes WHERE routine_id=?)`, s.now().UnixMilli(), id); err != nil {
-			return err
-		}
 		if _, err = tx.ExecContext(ctx, `DELETE FROM routine_runs WHERE routine_id=?`, id); err != nil {
 			return err
 		}
@@ -498,15 +495,6 @@ func routinePublicCode(err error) string {
 }
 
 // expireRoutineTargetApprovals 在目标删除事务中使旧配置提案过期，不能在重建同名目标后误应用。
-func expireRoutineTargetApprovals(ctx context.Context, tx *sql.Tx, target domain.RoutineTarget) error {
-	result, err := tx.ExecContext(ctx, `UPDATE approvals SET status='expired',decided_at=? WHERE status='pending' AND id IN(SELECT approval_id FROM routine_changes WHERE (?!='' AND json_extract(definition_json,'$.target.bot_id')=?) OR (?!='' AND json_extract(definition_json,'$.target.group_id')=?))`, time.Now().UnixMilli(), target.BotID, target.BotID, target.GroupID, target.GroupID)
-	if err != nil {
-		return err
-	}
-	count, err := result.RowsAffected()
-	if err != nil || count == 0 {
-		return err
-	}
-	_, err = bus.Append(ctx, tx, "approval.resolved", "", map[string]string{"status": "expired"})
-	return err
+func expireRoutineTargetApprovals(context.Context, *sql.Tx, domain.RoutineTarget) error {
+	return nil
 }

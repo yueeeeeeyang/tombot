@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/provider"
 	"io.yueyang/tom/internal/store"
 )
@@ -39,16 +38,13 @@ func Cost(model domain.Model, usage provider.Usage) (int64, bool, error) {
 
 // Record 原子结算执行、摘要和审查调用，返回包含并发结算的运行总费用。
 func Record(ctx context.Context, db *sql.DB, run domain.Run, model domain.Model, usage provider.Usage) (int64, error) {
-	cost, estimated, err := Cost(model, usage)
+	cost, _, err := Cost(model, usage)
 	if err != nil {
 		return 0, err
 	}
 	var total int64
 	recordedAt := time.Now().UTC()
 	err = store.Transact(ctx, db, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO usage_events(id,run_id,turn_id,bot_id,model_id,input_tokens,output_tokens,cache_read_tokens,cost_micro,is_estimated,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, ids.New(), run.ID, run.TurnID, run.BotID, model.ID, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens, cost, estimated, recordedAt.UnixMilli()); err != nil {
-			return err
-		}
 		chain, err := ancestors(ctx, tx, run.ID)
 		if err != nil {
 			return err

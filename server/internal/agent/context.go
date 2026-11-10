@@ -29,6 +29,9 @@ func toolDuties(tools []provider.ToolSchema) string {
 	if has["routine_upsert"] || has["routine_delete"] {
 		text.WriteString("\n\nSchedules\nWhen the user asks for a reminder or a recurring task, or asks to change or cancel one, call routine_list, routine_upsert, or routine_delete yourself. Cron uses five fields and the default timezone is Asia/Shanghai. These tools apply immediately. Do not ask the user to fill a schedule form.")
 	}
+	if has["message_bot"] {
+		text.WriteString("\n\nCat messages\nWhen you should talk with another cat, call message_bot yourself. The user can read that private conversation. Do not ask the user to open it for you.")
+	}
 	return text.String()
 }
 

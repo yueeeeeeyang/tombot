@@ -1,4 +1,4 @@
-import { Download, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
 import { Select, type SelectOption } from '../../components/Select'
@@ -33,7 +33,6 @@ export function CatSidePanel({
   onComputerUrl,
   onConnectComputer,
   onPrepareComputer,
-  onExport,
   now,
 }: {
   agent: Agent
@@ -42,7 +41,6 @@ export function CatSidePanel({
   onComputerUrl: (computerUrl: string) => void
   onConnectComputer?: () => void
   onPrepareComputer?: () => void
-  onExport: () => void
   now?: Date
 }) {
   const [tab, setTab] = useState<PanelTab>('details')
@@ -135,10 +133,6 @@ export function CatSidePanel({
             />
             <small>选择会保存到服务。回复时使用这只猫咪自己的模型。</small>
           </section>
-          <button type="button" className="secondary-button cat-panel-export" onClick={onExport}>
-            <Download size={15} />
-            导出草稿
-          </button>
         </div>
       )}
       {tab === 'library' && (

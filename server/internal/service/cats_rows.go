@@ -14,13 +14,13 @@ import (
 	"io.yueyang/tom/internal/store"
 )
 
-const desktopSoul = "You are the user's cat assistant running on Tom. Think, use tools when they help, and stay inside your workspace. Reply in the user's language. When the user asks you to remember or forget, call memory_write or memory_delete. When the user asks for a reminder or a recurring task, call routine_upsert or routine_delete. Do not ask them to use the memory or schedule pages."
+const desktopSoul = "You are the user's cat assistant running on Tom. Think, use tools when they help, and stay inside your workspace. Reply in the user's language. When the user asks you to remember or forget, call memory_write or memory_delete. When the user asks for a reminder or a recurring task, call routine_upsert or routine_delete. When you need another cat, call message_bot. Do not ask the user to edit memory, schedule, or private-message pages."
 
 func desktopToolPolicy() domain.ToolPolicy {
-	return domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search", "memory_write", "memory_delete", "routine_list", "routine_upsert", "routine_delete"}, Approval: "loose"}
+	return domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search", "memory_write", "memory_delete", "routine_list", "routine_upsert", "routine_delete", "message_bot"}, Approval: "loose"}
 }
 
-const desktopMessaging = `{"accept_dm":true,"can_initiate":false,"accept_group_invite":true}`
+const desktopMessaging = `{"accept_dm":true,"can_initiate":true,"accept_group_invite":true}`
 
 func (s *Service) ensureState(ctx context.Context) (stateRow, error) {
 	row, err := s.readState(ctx)
@@ -110,25 +110,27 @@ func (s *Service) readAgents(ctx context.Context) ([]Agent, error) {
 }
 
 func (s *Service) readMessages(ctx context.Context, agentID string) ([]ChatMessage, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT messages.id, messages.sender_kind, messages.blocks_json, messages.status, messages.created_at, messages.request_id, COALESCE(messages.reply_to_id,'') FROM messages JOIN conversations ON conversations.id=messages.conversation_id JOIN bots ON bots.id=conversations.bot_id WHERE conversations.kind='direct' AND (bots.desktop_id=? OR bots.id=?) ORDER BY messages.created_at, messages.seq`, agentID, agentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT messages.id, messages.sender_kind, messages.blocks_json, messages.status, messages.created_at, messages.request_id, COALESCE(messages.reply_to_id,''), bots.id FROM messages JOIN conversations ON conversations.id=messages.conversation_id JOIN bots ON bots.id=conversations.bot_id WHERE conversations.kind='direct' AND (bots.desktop_id=? OR bots.id=?) ORDER BY messages.created_at, messages.seq`, agentID, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	messages := []ChatMessage{}
 	for rows.Next() {
-		var id, sender, encoded, status, requestID, replyID string
+		var id, sender, encoded, status, requestID, replyID, botID string
 		var created int64
-		if err = rows.Scan(&id, &sender, &encoded, &status, &created, &requestID, &replyID); err != nil {
+		if err = rows.Scan(&id, &sender, &encoded, &status, &created, &requestID, &replyID, &botID); err != nil {
 			return nil, err
 		}
 		content := textFromBlocks(encoded)
-		if strings.TrimSpace(content) == "" {
+		attachments := attachmentsFromBlocks(encoded)
+		notice := dmNoticeFromBlocks(encoded, botID)
+		if strings.TrimSpace(content) == "" && len(attachments) == 0 && notice == nil {
 			continue
 		}
 		message := ChatMessage{
 			ID: id, Role: "assistant", Content: content, CreatedAt: time.UnixMilli(created).UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-			Status: desktopStatus(status), Reactions: []Reaction{},
+			Status: desktopStatus(status), Reactions: []Reaction{}, Attachments: attachments, DmNotice: notice,
 		}
 		if sender == "user" {
 			message.Role = "user"
@@ -161,8 +163,42 @@ func (s *Service) readMessages(ctx context.Context, agentID string) ([]ChatMessa
 			return nil, err
 		}
 		messages[index].Reactions = reactions
+		if messages[index].DmNotice == nil || messages[index].DmNotice.PeerName != "" {
+			continue
+		}
+		var peerName string
+		if err = s.db.QueryRowContext(ctx, `SELECT name FROM bots WHERE id=?`, messages[index].DmNotice.PeerID).Scan(&peerName); err != nil {
+			peerName = messages[index].DmNotice.PeerID
+		}
+		messages[index].DmNotice.PeerName = peerName
+		if messages[index].DmNotice.Direction == "received" {
+			messages[index].Content = "收到 " + peerName + " 的消息"
+		} else {
+			messages[index].Content = "已发消息给 " + peerName
+		}
 	}
 	return messages, nil
+}
+
+func dmNoticeFromBlocks(encoded, botID string) *DmNotice {
+	var blocks []domain.MessageBlock
+	if json.Unmarshal([]byte(encoded), &blocks) != nil {
+		return nil
+	}
+	for _, block := range blocks {
+		if block.Kind != "handoff" || block.Handoff == nil || block.Handoff.ConversationID == "" || block.Handoff.ErrorCode != "" {
+			continue
+		}
+		notice := &DmNotice{Direction: "sent", PeerID: block.Handoff.ToBotID, ConversationID: block.Handoff.ConversationID}
+		if block.Handoff.ToBotID == botID {
+			notice.Direction = "received"
+			notice.PeerID = block.Handoff.FromBotID
+		} else if block.Handoff.FromBotID != botID {
+			return nil
+		}
+		return notice
+	}
+	return nil
 }
 
 func (s *Service) readReactions(ctx context.Context, messageID string) ([]Reaction, error) {
@@ -270,8 +306,8 @@ func (s *Service) upsertAgent(ctx context.Context, tx *sql.Tx, agent Agent, inde
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE bots SET name=?, role_title=?, soul=?, tool_policy_json=?, desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=?, updated_at=? WHERE id=?`,
-		agent.Name, fitRole(agent.Description), desktopSoul, string(tools), agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, now, botID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE bots SET name=?, role_title=?, soul=?, tool_policy_json=?, messaging_policy_json=?, desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=?, updated_at=? WHERE id=?`,
+		agent.Name, fitRole(agent.Description), desktopSoul, string(tools), desktopMessaging, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, now, botID); err != nil {
 		return "", err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE conversations SET title=?, updated_at=? WHERE bot_id=? AND kind='direct'`, agent.Name, now, botID); err != nil {
@@ -306,7 +342,11 @@ func (s *Service) syncAgentMessages(ctx context.Context, tx *sql.Tx, botID strin
 }
 
 func (s *Service) upsertMessage(ctx context.Context, tx *sql.Tx, conversationID string, message ChatMessage) error {
-	encoded, err := json.Marshal([]domain.MessageBlock{{Kind: "text", Text: message.Content}})
+	blocks := []domain.MessageBlock{{Kind: "text", Text: message.Content}}
+	for _, item := range message.Attachments {
+		blocks = append(blocks, domain.MessageBlock{Kind: "artifact", Artifact: &domain.ArtifactRef{AttachmentInput: domain.AttachmentInput{Path: item.Path, SHA256: item.SHA256}, MediaType: item.MediaType}})
+	}
+	encoded, err := json.Marshal(blocks)
 	if err != nil {
 		return err
 	}
@@ -455,6 +495,29 @@ func (s *Service) findAssistantMessage(ctx context.Context, agentID, reply strin
 		return "", nil
 	}
 	return id, nil
+}
+
+func attachmentsFromBlocks(encoded string) []MessageAttachment {
+	var blocks []domain.MessageBlock
+	if json.Unmarshal([]byte(encoded), &blocks) != nil {
+		return nil
+	}
+	attachments := []MessageAttachment{}
+	for _, block := range blocks {
+		if block.Kind != "artifact" || block.Artifact == nil || block.Artifact.Path == "" {
+			continue
+		}
+		name := block.Artifact.Path
+		if slash := strings.LastIndex(name, "/"); slash >= 0 {
+			name = name[slash+1:]
+		}
+		kind := "file"
+		if block.Artifact.IsImage() {
+			kind = "image"
+		}
+		attachments = append(attachments, MessageAttachment{Name: name, Path: block.Artifact.Path, SHA256: block.Artifact.SHA256, MediaType: block.Artifact.MediaType, Kind: kind})
+	}
+	return attachments
 }
 
 func textFromBlocks(encoded string) string {

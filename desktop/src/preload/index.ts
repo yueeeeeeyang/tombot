@@ -27,10 +27,28 @@ contextBridge.exposeInMainWorld(
       deliverMessage: (
         agentId: string,
         messageId: string,
-        onEvent?: (event: { type: string; text: string }) => void,
+        onEvent?: (event: {
+          type: string
+          text: string
+          messageId?: string
+          peerId?: string
+          peerName?: string
+          conversationId?: string
+          direction?: 'sent' | 'received'
+        }) => void,
       ) => {
-        const listener = (_event: IpcRendererEvent, payload: { type: string; text: string }) =>
-          onEvent?.(payload)
+        const listener = (
+          _event: IpcRendererEvent,
+          payload: {
+            type: string
+            text: string
+            messageId?: string
+            peerId?: string
+            peerName?: string
+            conversationId?: string
+            direction?: 'sent' | 'received'
+          },
+        ) => onEvent?.(payload)
         ipcRenderer.on('desktop:stream-event', listener)
         return invoke('desktop:deliver', { agentId, messageId }).finally(() => {
           ipcRenderer.removeListener('desktop:stream-event', listener)
@@ -44,6 +62,42 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:routine-enabled', { id, revision, enabled }),
       deleteRoutine: (id: string, revision: number) =>
         invoke('desktop:routine-delete', { id, revision }),
+      listGroups: () => invoke('desktop:groups'),
+      createGroup: (name: string, memberIds: string[]) =>
+        invoke('desktop:group-create', { name, memberIds }),
+      groupDetail: (id: string) => invoke('desktop:group', id),
+      addGroupMembers: (id: string, revision: number, botIds: string[]) =>
+        invoke('desktop:group-members', { id, revision, botIds }),
+      removeGroupMember: (id: string, revision: number, botId: string) =>
+        invoke('desktop:group-member-remove', { id, revision, botId }),
+      listConversationMessages: (conversationId: string) =>
+        invoke('desktop:conversation-messages', conversationId),
+      sendConversation: (
+        conversationId: string,
+        content: string,
+        attachments: Array<{ path: string; sha256: string }>,
+        replyToId: string | undefined,
+        onEvent?: (event: { type: string; text: string }) => void,
+      ) => {
+        const listener = (_event: IpcRendererEvent, payload: { type: string; text: string }) =>
+          onEvent?.(payload)
+        ipcRenderer.on('desktop:stream-event', listener)
+        return invoke('desktop:conversation-send', {
+          conversationId,
+          content,
+          attachments,
+          replyToId,
+        }).finally(() => ipcRenderer.removeListener('desktop:stream-event', listener))
+      },
+      uploadAttachment: (
+        file: { name: string; type: string; bytes: Uint8Array },
+        destination: { botId?: string; shared?: boolean },
+      ) => invoke('desktop:upload', { ...file, ...destination }),
+      previewAttachment: (path: string, botId?: string) =>
+        invoke('desktop:preview', { path, botId }),
+      toggleReaction: (messageId: string, emoji: string) =>
+        invoke('desktop:reaction', { messageId, emoji }),
+      ensureAgent: (agentId: string) => invoke('desktop:ensure-agent', agentId),
       loadSettings: () => invoke('desktop:load-settings'),
       saveSettings: (draft: unknown, apiKey: string) =>
         invoke('desktop:save-settings', { draft, apiKey }),

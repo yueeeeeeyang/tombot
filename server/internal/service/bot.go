@@ -416,7 +416,7 @@ func (s *Bots) Delete(ctx context.Context, id, confirmation, actor string, purge
 		}
 		conversations := `SELECT id FROM conversations WHERE bot_id=? OR initiator_bot_id=?`
 		runs := `SELECT id FROM runs WHERE bot_id=? OR conversation_id IN (` + conversations + `)`
-		for _, statement := range []string{`DELETE FROM approvals WHERE run_id IN (` + runs + `)`, `DELETE FROM tool_calls WHERE run_id IN (` + runs + `)`, `DELETE FROM runs WHERE id IN (` + runs + `)`} {
+		for _, statement := range []string{`DELETE FROM tool_calls WHERE run_id IN (` + runs + `)`, `DELETE FROM runs WHERE id IN (` + runs + `)`} {
 			if _, err := tx.ExecContext(ctx, statement, id, id, id); err != nil {
 				return err
 			}
@@ -429,7 +429,7 @@ func (s *Bots) Delete(ctx context.Context, id, confirmation, actor string, purge
 		if _, err := tx.ExecContext(ctx, `DELETE FROM conversations WHERE id IN (`+conversations+`)`, id, id); err != nil {
 			return err
 		}
-		for _, statement := range []string{`DELETE FROM routine_runs WHERE routine_id IN(SELECT id FROM routines WHERE bot_id=?)`, `DELETE FROM routines WHERE bot_id=?`, `DELETE FROM group_members WHERE bot_id=?`, `DELETE FROM policy_rules WHERE bot_id=?`, `DELETE FROM memory_index WHERE bot_id=?`, `DELETE FROM memory_fts_ascii WHERE bot_id=?`, `DELETE FROM memory_fts_cjk WHERE bot_id=?`} {
+		for _, statement := range []string{`DELETE FROM routine_runs WHERE routine_id IN(SELECT id FROM routines WHERE bot_id=?)`, `DELETE FROM routines WHERE bot_id=?`, `DELETE FROM group_members WHERE bot_id=?`, `DELETE FROM memory_index WHERE bot_id=?`, `DELETE FROM memory_fts_ascii WHERE bot_id=?`, `DELETE FROM memory_fts_cjk WHERE bot_id=?`} {
 			if _, err := tx.ExecContext(ctx, statement, id); err != nil {
 				return err
 			}

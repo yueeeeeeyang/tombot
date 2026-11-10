@@ -159,41 +159,10 @@ func (e *Executor) Execute(ctx context.Context, invocation domain.ToolInvocation
 		return result, err
 	}
 	if use.Name == "ask_user" {
-		if invocation.UserWaiter == nil {
-			return fail(domain.NewError(503, "USER_QUESTION_UNAVAILABLE", "This execution has no user interaction runtime."))
-		}
-		answer, waitErr := invocation.UserWaiter.WaitForUser(ctx, func(wait context.Context) (domain.QuestionAnswer, error) {
-			return e.approvals.AskUser(wait, run, use.ID, input.input.(domain.UserQuestion))
-		})
-		if waitErr != nil {
-			return fail(waitErr)
-		}
-		encoded, encodeErr := json.Marshal(answer)
-		if encodeErr != nil {
-			return result, encodeErr
-		}
-		result.Content = string(encoded)
-		return result, nil
+		return fail(domain.NewError(410, "USER_QUESTION_REMOVED", "Asking the user through an approval is no longer available."))
 	}
-	requireApproval := false
-	if decision != "allow" || action.ForceApproval {
-		review, reviewErr := e.reviewer.Review(ctx, run, use.ID, use.Name, raw, action)
-		// 审查可能已经结算并写入预算提醒，先唤醒客户端再等待人工审批或执行工具。
-		e.events.Notify()
-		if reviewErr != nil {
-			return result, reviewErr
-		}
-		action = review.Action
-		requireApproval = review.RequireApproval
-	}
-	ask, err := policy.NeedsApproval(bot.ToolPolicy.Approval, action.Risk)
-	if err != nil {
+	if _, err = policy.NeedsApproval(bot.ToolPolicy.Approval, action.Risk); err != nil {
 		return result, err
-	}
-	if action.ForceApproval || decision != "allow" && (ask || requireApproval) {
-		if err = e.approvals.RequestWait(ctx, run, use.ID, action); err != nil {
-			return fail(err)
-		}
 	}
 	if err = ctx.Err(); err != nil {
 		return result, err

@@ -55,9 +55,9 @@ func TestMaintenanceAtomicResetAndRepair(t *testing.T) {
 		t.Fatal("回滚唤醒事件流")
 	default:
 	}
-	var capabilities, audits, preserved int
-	if err = db.QueryRow("SELECT (SELECT COUNT(*) FROM capabilities),(SELECT COUNT(*) FROM audit_log),(SELECT COUNT(*) FROM system_state WHERE key='keep')").Scan(&capabilities, &audits, &preserved); err != nil || capabilities != 1 || audits != 0 || preserved != 1 {
-		t.Fatal("回滚破坏既有记录", capabilities, audits, preserved, err)
+	var capabilities, preserved int
+	if err = db.QueryRow("SELECT (SELECT COUNT(*) FROM capabilities),(SELECT COUNT(*) FROM system_state WHERE key='keep')").Scan(&capabilities, &preserved); err != nil || capabilities != 1 || preserved != 1 {
+		t.Fatal("回滚破坏既有记录", capabilities, preserved, err)
 	}
 	if _, err = db.Exec("DROP TRIGGER fail_reset"); err != nil {
 		t.Fatal(err)
@@ -85,8 +85,8 @@ func TestMaintenanceAtomicResetAndRepair(t *testing.T) {
 	if repairs != 1 {
 		t.Fatal("重复安装已满足的依赖", repairs)
 	}
-	if err := db.QueryRow("SELECT (SELECT COUNT(*) FROM audit_log WHERE actor='setup' AND action IN ('bootstrap.repair','bootstrap.reset')),(SELECT COUNT(*) FROM system_state WHERE key='keep')").Scan(&audits, &preserved); err != nil || audits != 2 || preserved != 1 {
-		t.Fatal("维护审计或业务记录错误", audits, preserved, err)
+	if err := db.QueryRow("SELECT COUNT(*) FROM system_state WHERE key='keep'").Scan(&preserved); err != nil || preserved != 1 {
+		t.Fatal("维护破坏了业务记录", preserved, err)
 	}
 }
 

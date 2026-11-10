@@ -11,7 +11,7 @@ export function Dialog({
   title: string
   children: ReactNode
   onClose: () => void
-  variant?: 'default' | 'search' | 'settings' | 'recruit'
+  variant?: 'default' | 'search' | 'settings' | 'recruit' | 'dm'
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   useLayoutEffect(() => {

@@ -7,7 +7,7 @@ import {
 } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildCompanion, startCompanion, type Companion } from './companionServer'
@@ -203,7 +203,7 @@ test('已初始化后要验证密码才能进入工作空间', async () => {
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
 })
 
-test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () => {
+test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
   const testInfo = test.info()
   const windowSize = await application.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0]!.getSize(),
@@ -234,7 +234,8 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   )
 
   await configureModel()
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const createDialog = window.getByRole('dialog')
   const dialogBox = await createDialog.boundingBox()
   expect(dialogBox!.width).toBe(480)
@@ -274,28 +275,6 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   ).toHaveAttribute('data-avatar', 'ragdoll')
   await expect(window.getByRole('log')).toContainText('把想法变成一篇好故事。')
 
-  await window.getByRole('button', { name: '查看写作搭档资料' }).click()
-  await window.getByRole('button', { name: '导出草稿' }).click()
-  const exportPath = join(profilePath, '导出的草稿.md')
-  // Electron 使用原生下载事件；测试指定临时目标以避开系统保存弹窗，并检查实际落盘内容。
-  await application.evaluate(({ session }, exportPath) => {
-    session.defaultSession.once('will-download', (_event, item) => item.setSavePath(exportPath))
-  }, exportPath)
-  await window.getByRole('button', { name: '导出 Markdown' }).click()
-  await expect
-    .poll(async () => {
-      try {
-        return await readFile(exportPath, 'utf8')
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return ''
-        throw error
-      }
-    })
-    .toContain('第二个尚未完成的想法')
-  const exported = await readFile(exportPath, 'utf8')
-  expect(exported).toContain('把想法变成一篇好故事。')
-  expect(exported).toContain('未发送')
-  await window.getByRole('button', { name: '关闭弹窗' }).click()
   await window.screenshot({ path: testInfo.outputPath('desktop-conversation.png'), scale: 'css' })
 })
 
@@ -324,7 +303,8 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     await window.getByRole('button', { name: '打开设置' }).click()
     await chooseOption('主题', theme === 'light' ? '浅色' : '深色')
     await window.keyboard.press('Escape')
-    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
     const choices = window.getByRole('group', { name: '预设猫咪头像' })
     await expect(choices.getByRole('button')).toHaveCount(8)
     for (const choice of await choices.getByRole('button').all()) {
@@ -346,7 +326,8 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
   }
   await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const dialog = window.getByRole('dialog', { name: '招聘猫咪' })
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
   const bounds = await dialog.boundingBox()
@@ -390,7 +371,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
     await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
     await window.keyboard.press('Escape')
 
-    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
     await expect(window.locator('select')).toHaveCount(0)
     const model = window.getByRole('combobox', { name: '模型', exact: true })
     await model.click()
@@ -416,7 +398,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
 
   await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   await window.getByRole('combobox', { name: '模型', exact: true }).click()
   const menu = window.getByRole('listbox', { name: '模型', exact: true })
   const menuBounds = await menu.boundingBox()
@@ -430,7 +413,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
 })
 
 test('招聘仅列出已配置模型，空状态配置后返回并保留表单', async () => {
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const recruit = window.getByRole('dialog', { name: '招聘猫咪' })
   const model = recruit.getByRole('combobox', { name: '模型', exact: true })
   await expect(model).toBeDisabled()
@@ -713,7 +697,8 @@ test('侧栏拖动上限、收缩阈值、头像栏操作及重新展开', async
   await window.getByRole('button', { name: '打开设置' }).click()
   await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
   await window.keyboard.press('Escape')
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   await expect(window.getByRole('dialog', { name: '招聘猫咪' })).toBeVisible()
   await window.keyboard.press('Escape')
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
@@ -971,7 +956,8 @@ for (const modal of [
     inputName: '搜索内容',
   },
   {
-    trigger: '招聘猫咪',
+    trigger: '新建',
+    menuItem: '招聘猫咪',
     title: '招聘猫咪',
     inputRole: 'textbox' as const,
     inputName: '助手名称',
@@ -989,6 +975,9 @@ for (const modal of [
       { x: 60, y: 400 },
     ]) {
       await trigger.click()
+      if ('menuItem' in modal && modal.menuItem) {
+        await window.getByRole('menuitem', { name: modal.menuItem, exact: true }).click()
+      }
       await expect(dialog).toBeVisible()
       // 页面合成点击会绕过 Electron 的原生拖拽命中测试，必须同时验证原生区域已关闭。
       expect(
@@ -1018,6 +1007,10 @@ for (const modal of [
       ).toEqual(['drag', 'drag'])
     }
     await trigger.click()
+    if ('menuItem' in modal && modal.menuItem) {
+      await window.getByRole('menuitem', { name: modal.menuItem, exact: true }).click()
+    }
+    await expect(dialog).toBeVisible()
     await window.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(trigger).toBeFocused()
@@ -1362,7 +1355,7 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   await expect(panel).toBeVisible()
   const close = panel.getByRole('button', { name: '关闭猫咪面板' })
   const search = window.getByRole('button', { name: '搜索助手和消息' })
-  const create = window.getByRole('button', { name: '招聘猫咪' })
+  const create = window.getByRole('button', { name: '新建' })
   await expect(close).toHaveClass(/round-button/)
   const closeBox = (await close.boundingBox())!
   const searchBox = (await search.boundingBox())!
@@ -1518,6 +1511,98 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
   }
 })
 
+test('群聊、私信和附件沿用原来的气泡', async () => {
+  test.setTimeout(120_000)
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const model = await startFixtureModel([['群', '里收到了']])
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', true)
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.screenshot({ path: `${artifacts}/create-menu.png`, scale: 'css' })
+    await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
+    await window.getByRole('textbox', { name: '群名称', exact: true }).fill('晨会')
+    await window.getByRole('checkbox', { name: '小黑' }).check()
+    await window.getByRole('button', { name: '创建群聊', exact: true }).click()
+    await window.getByRole('textbox', { name: '给晨会发消息' }).fill('大家看一下今天的安排')
+    await window.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(window.getByRole('log', { name: '晨会' })).toContainText('群里收到了', {
+      timeout: 30_000,
+    })
+    await window.screenshot({ path: `${artifacts}/group-chat.png`, scale: 'css' })
+    await window.getByRole('button', { name: '小黑', exact: true }).click()
+    await window
+      .locator('input[type="file"]')
+      .setInputFiles('/agent/repos/tombot/desktop/src/renderer/src/assets/cats/frames/bombay.png')
+    await expect(window.getByText('bombay.png')).toBeVisible()
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('看看这张图')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await expect(window.getByRole('log').locator('img[alt="bombay.png"]')).toBeVisible()
+    await expect(window.getByRole('log')).toContainText('群里收到了', { timeout: 20_000 })
+    await window.screenshot({ path: `${artifacts}/attachment-message.png`, scale: 'css' })
+  } finally {
+    await model.close()
+  }
+})
+
+test('猫咪主动发的私信出现在侧栏', async () => {
+  test.setTimeout(120_000)
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const model = await startDmModel()
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', true)
+    const login = await fetch(`${companion.url}/api/v1/auth/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
+    })
+    const token = ((await login.json()) as { device_token: string }).device_token
+    await fetch(`${companion.url}/api/v1/workspace/agents/developer/ready`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    })
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('请私下告诉游戏程序一声')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    const notice = window.getByRole('button', { name: /已发消息给/ })
+    await expect(notice).toBeVisible({ timeout: 30_000 })
+    await window.screenshot({ path: `${artifacts}/cat-dm.png`, scale: 'css' })
+    await notice.click()
+    const dialog = window.getByRole('dialog', { name: '小黑 ↔ 游戏程序' })
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByText('晨会我先看了')).toBeVisible()
+    await expect(dialog.getByText('好的')).toBeVisible()
+    await expect(dialog.locator('.dm-capsule')).toContainText('小黑')
+    await expect(dialog.locator('.dm-capsule')).toContainText('游戏程序')
+    await expect(dialog.locator('.dm-bubble')).toHaveCount(2)
+    await expect(dialog.locator('.user-bubble, .dialog-heading')).toHaveCount(0)
+    await expect(dialog.getByRole('textbox')).toHaveCount(0)
+    const viewportHeight = await window.evaluate(() => innerHeight)
+    const dialogBox = await dialog.boundingBox()
+    expect(dialogBox!.height).toBeGreaterThan(viewportHeight * 0.7)
+    const capsuleBox = await dialog.locator('.dm-capsule').boundingBox()
+    const firstName = await dialog.locator('.dm-name').first().boundingBox()
+    expect(firstName!.y).toBeGreaterThan(capsuleBox!.y + capsuleBox!.height + 16)
+    const thread = dialog.locator('.dm-thread')
+    expect(await thread.evaluate((element) => element.scrollTop)).toBe(0)
+    await window.screenshot({ path: `${artifacts}/cat-dm-open.png`, scale: 'css' })
+  } finally {
+    await model.close()
+  }
+})
+
 test('流式开关打开时回复逐段出现，关闭时完成后一次出现', async () => {
   test.setTimeout(120_000)
   const artifacts = '/opt/cursor/artifacts'
@@ -1636,6 +1721,64 @@ function startToolModel(): Promise<{ url: string; close: () => Promise<void> }> 
           response.write('data: [DONE]\n\n')
           response.end()
         }
+      } catch {
+        response.destroy()
+      }
+    })()
+  })
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型端口没有打开'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+          new Promise((done, fail) => {
+            server.close((error) => (error ? fail(error) : done()))
+          }),
+      })
+    })
+    server.on('error', reject)
+  })
+}
+
+function startDmModel(): Promise<{ url: string; close: () => Promise<void> }> {
+  let step = 0
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          request.on('end', () => resolve())
+          request.on('error', reject)
+          request.resume()
+        })
+        if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
+          response.writeHead(404).end()
+          return
+        }
+        const current = step
+        step += 1
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        })
+        if (current === 0) {
+          writeToolCall(
+            response,
+            'call-dm',
+            'message_bot',
+            '{"bot_id":"developer","message":"晨会我先看了。倒地保持最后一帧，移动改成爬行，倒地开火不要再把整段动作锁死。副武器走自己的一套键，按侧向速度选择左右并加上角度滞回，避免来回跳切。缺片先标清楚，不要静默。等用户说合再合，资源先留在当前版本上，不要提前开合。静止时末帧停住，移动只播爬行，开火从瞄准接射击，不要整段锁死。沙鹰只用手枪那一组动作，步枪的射击和战斗待机都不要混进来。侧向速度过了阈值再换左右，并留一点滞回，免得准星附近来回跳。缺的片段先写明，等用户确认后再接。"}',
+          )
+          return
+        }
+        response.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '好的' }, finish_reason: 'stop' }] })}\n\n`,
+        )
+        response.write('data: [DONE]\n\n')
+        response.end()
       } catch {
         response.destroy()
       }

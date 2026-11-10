@@ -255,6 +255,8 @@ func (s *Service) SaveModelForm(ctx context.Context, settings ModelForm, apiKey 
 type Dispatch struct {
 	ConversationID string
 	Content        string
+	Attachments    []domain.AttachmentInput
+	ReplyToID      string
 	AgentID        string
 	MessageID      string
 	Revision       int64
@@ -307,7 +309,62 @@ func (s *Service) PrepareDispatch(ctx context.Context, agentID, messageID string
 	if err != nil {
 		return Dispatch{}, err
 	}
-	return Dispatch{ConversationID: conversationID, Content: message.Content, AgentID: agentID, MessageID: messageID, Revision: revision}, nil
+	attachments := make([]domain.AttachmentInput, 0, len(message.Attachments))
+	for _, item := range message.Attachments {
+		attachments = append(attachments, domain.AttachmentInput{Path: item.Path, SHA256: item.SHA256})
+	}
+	replyToID := ""
+	if message.ReplyTo != nil {
+		replyToID = message.ReplyTo.MessageID
+	}
+	return Dispatch{ConversationID: conversationID, Content: message.Content, Attachments: attachments, ReplyToID: replyToID, AgentID: agentID, MessageID: messageID, Revision: revision}, nil
+}
+
+// MessageChrome 读取气泡的回复目标和表情。
+func (s *Service) MessageChrome(ctx context.Context, messageID string) (string, []Reaction, error) {
+	var reply string
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(reply_to_id,'') FROM messages WHERE id=?`, messageID).Scan(&reply)
+	if err != nil {
+		return "", nil, err
+	}
+	reactions, err := s.readReactions(ctx, messageID)
+	return reply, reactions, err
+}
+
+// EnsureAgent 让群成员在发言前就有原来的 Bot 和模型。
+func (s *Service) EnsureAgent(ctx context.Context, agentID string) error {
+	s.mu.Lock()
+	row, err := s.ensureState(ctx)
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	var agent Agent
+	found := false
+	for _, item := range row.workspace.Agents {
+		if item.ID == agentID {
+			agent = item
+			found = true
+			break
+		}
+	}
+	if !found {
+		return domain.NewError(404, "AGENT_NOT_FOUND", "助手不存在")
+	}
+	modelID := ""
+	if modelReady(row.settings) {
+		apiKey, keyErr := s.openAPIKey(row)
+		if keyErr != nil {
+			return keyErr
+		}
+		defer clearBytes(apiKey)
+		modelID, err = s.modelForAgent(ctx, row.settings, string(apiKey), agent.ModelID)
+		if err != nil {
+			return err
+		}
+	}
+	_, err = s.ensureBot(ctx, agent, modelID)
+	return err
 }
 
 // ApplyRun 把 agent 运行结果写回工作空间。失败时保留已生成的正文并标为 failed，方便重试。

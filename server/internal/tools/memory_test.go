@@ -5,64 +5,24 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
-	"io.yueyang/tom/internal/service"
 )
 
 func TestMemoryToolsRequireApprovalAndBindVersions(t *testing.T) {
-	for _, decision := range []string{"approve", "deny", "changed"} {
-		t.Run(decision, func(t *testing.T) {
-			e, bot, run := fixture(t, "standard")
-			bot.ToolPolicy.AllowedTools = append(bot.ToolPolicy.AllowedTools, "memory_write", "memory_search", "memory_delete")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			existing, err := e.memories.Write(ctx, bot.ID, "", domain.MemoryInput{Title: "核验偏好", Content: "原有核验偏好", Importance: 3}, "", "user")
-			if err != nil {
-				t.Fatal(err)
-			}
-			results := make(chan domain.ToolResultBlock, 1)
-			failures := make(chan error, 1)
-			go func() {
-				result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot}, domain.ToolUseBlock{ID: ids.New(), Name: "memory_delete", Input: map[string]any{"path": existing.Path}})
-				results <- result
-				failures <- err
-			}()
-			approval := pending(t, e)
-			if _, err = e.memories.Read(ctx, bot.ID, existing.Path); err != nil {
-				t.Fatal("审批前删除了记忆", err)
-			}
-			choice, code := "approve", ""
-			if decision == "deny" {
-				choice = "deny"
-				code = "TOOL_DENIED"
-			}
-			if decision == "changed" {
-				code = "TOOL_TARGET_CHANGED"
-				if _, err = e.memories.Write(ctx, bot.ID, existing.Path, domain.MemoryInput{Title: existing.Title, Content: "等待审批时的新偏好", Importance: 4}, existing.SHA256, "user"); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err = e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: choice}, "user"); err != nil {
-				t.Fatal(err)
-			}
-			result := <-results
-			if err = <-failures; err != nil {
-				t.Fatal(err)
-			}
-			if code != "" {
-				if !result.IsError || !strings.Contains(result.Content, code) {
-					t.Fatal(result)
-				}
-				if _, err = e.memories.Read(ctx, bot.ID, existing.Path); err != nil {
-					t.Fatal("拒绝或版本变化仍删除", err)
-				}
-			} else if result.IsError || !strings.Contains(result.Content, `"deleted":true`) {
-				t.Fatal(result)
-			}
-		})
+	e, bot, run := fixture(t, "standard")
+	bot.ToolPolicy.AllowedTools = append(bot.ToolPolicy.AllowedTools, "memory_write", "memory_search", "memory_delete")
+	ctx := context.Background()
+	existing, err := e.memories.Write(ctx, bot.ID, "", domain.MemoryInput{Title: "核验偏好", Content: "原有核验偏好", Importance: 3}, "", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := execute(t, e, bot, run, "memory_delete", map[string]any{"path": existing.Path})
+	if result.IsError || !strings.Contains(result.Content, `"deleted":true`) {
+		t.Fatal(result)
+	}
+	if _, err = e.memories.Read(ctx, bot.ID, existing.Path); err == nil {
+		t.Fatal("删除没有立即生效")
 	}
 }
 

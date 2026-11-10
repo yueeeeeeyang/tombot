@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/domain"
+	"io.yueyang/tom/internal/service"
 )
 
 func (s *Server) searchRoutes(r chi.Router) {
@@ -42,5 +43,34 @@ func (s *Server) readConversationMessages(ctx context.Context, r *http.Request) 
 			return nil, domain.NewError(400, "INVALID_CURSOR", "Message cursor must be positive.")
 		}
 	}
-	return s.Conversations.Messages(ctx, chi.URLParam(r, "id"), before, limit)
+	messages, err := s.Conversations.Messages(ctx, chi.URLParam(r, "id"), before, limit)
+	if err != nil {
+		return nil, err
+	}
+	return s.withConversationChrome(ctx, messages)
+}
+
+type viewedMessage struct {
+	domain.Message
+	ReplyToID string             `json:"reply_to_id,omitempty"`
+	Reactions []service.Reaction `json:"reactions,omitempty"`
+}
+
+func (s *Server) withConversationChrome(ctx context.Context, messages []domain.Message) ([]viewedMessage, error) {
+	viewed := make([]viewedMessage, len(messages))
+	for index, message := range messages {
+		item := viewedMessage{Message: message}
+		if s.Workspace != nil {
+			reply, reactions, err := s.Workspace.MessageChrome(ctx, message.ID)
+			if err != nil {
+				return nil, err
+			}
+			item.ReplyToID = reply
+			if len(reactions) > 0 {
+				item.Reactions = reactions
+			}
+		}
+		viewed[index] = item
+	}
+	return viewed, nil
 }

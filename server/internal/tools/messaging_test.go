@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/infra/ids"
@@ -40,67 +39,24 @@ func messagingFixture(t *testing.T, approval string) (*Executor, domain.Bot, dom
 }
 
 func TestMessagingApprovalBindsRecipientAndSharedContext(t *testing.T) {
-	for _, scenario := range []string{"approve", "deny", "changed_file", "changed_target"} {
-		t.Run(scenario, func(t *testing.T) {
-			e, bot, run, peer := messagingFixture(t, "standard")
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			writer := bot
-			writer.ToolPolicy.Approval = "loose"
-			if result := execute(t, e, writer, run, "file_write", map[string]any{"path": "shared/brief.md", "content": "明确共享的上下文"}); result.IsError {
-				t.Fatal(result)
-			}
-			var called atomic.Int32
-			messenger := messengerFunc(func(ctx context.Context, current domain.Run, id string, input domain.BotMessageRequest) (domain.BotMessageReply, error) {
-				called.Add(1)
-				if current.ID != run.ID || input.BotID != peer.ID || !input.ReplyRequired || len(input.ContextFiles) != 1 || input.ContextFiles[0].Content != "明确共享的上下文" || input.TargetBinding == "" {
-					t.Error("投递上下文不正确", input)
-				}
-				return domain.BotMessageReply{Delivered: true, Summary: "处理完成", Artifacts: []string{"shared/brief.md"}}, nil
-			})
-			results := make(chan domain.ToolResultBlock, 1)
-			failures := make(chan error, 1)
-			go func() {
-				result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Messenger: messenger}, domain.ToolUseBlock{ID: ids.New(), Name: "message_bot", Input: map[string]any{"bot_id": peer.ID, "message": "核验共享说明", "context_paths": []string{"shared/brief.md"}}})
-				results <- result
-				failures <- err
-			}()
-			approval := pending(t, e)
-			if called.Load() != 0 {
-				t.Fatal("审批前发生投递")
-			}
-			decision := "approve"
-			expected := ""
-			switch scenario {
-			case "deny":
-				decision = "deny"
-				expected = "TOOL_DENIED"
-			case "changed_file":
-				expected = "TOOL_TARGET_CHANGED"
-				if result := execute(t, e, writer, run, "file_write", map[string]any{"path": "shared/brief.md", "content": "审批后改变的内容"}); result.IsError {
-					t.Fatal(result)
-				}
-			case "changed_target":
-				expected = "TOOL_TARGET_CHANGED"
-				if _, err := e.db.Exec("UPDATE bots SET soul='Changed role instructions.' WHERE id=?", peer.ID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: decision}, "user"); err != nil {
-				t.Fatal(err)
-			}
-			result := <-results
-			if err := <-failures; err != nil {
-				t.Fatal(err)
-			}
-			if expected == "" {
-				if result.IsError || called.Load() != 1 {
-					t.Fatal(result, called.Load())
-				}
-			} else if !result.IsError || !strings.Contains(result.Content, expected) || called.Load() != 0 {
-				t.Fatal("失效审批仍被投递", result, called.Load())
-			}
-		})
+	e, bot, run, peer := messagingFixture(t, "standard")
+	ctx := context.Background()
+	writer := bot
+	writer.ToolPolicy.Approval = "loose"
+	if result := execute(t, e, writer, run, "file_write", map[string]any{"path": "shared/brief.md", "content": "明确共享的上下文"}); result.IsError {
+		t.Fatal(result)
+	}
+	var called atomic.Int32
+	messenger := messengerFunc(func(ctx context.Context, current domain.Run, id string, input domain.BotMessageRequest) (domain.BotMessageReply, error) {
+		called.Add(1)
+		if current.ID != run.ID || input.BotID != peer.ID || !input.ReplyRequired || len(input.ContextFiles) != 1 || input.ContextFiles[0].Content != "明确共享的上下文" || input.TargetBinding == "" {
+			t.Error("投递上下文不正确", input)
+		}
+		return domain.BotMessageReply{Delivered: true, Summary: "处理完成", Artifacts: []string{"shared/brief.md"}}, nil
+	})
+	result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Messenger: messenger}, domain.ToolUseBlock{ID: ids.New(), Name: "message_bot", Input: map[string]any{"bot_id": peer.ID, "message": "核验共享说明", "context_paths": []string{"shared/brief.md"}}})
+	if err != nil || result.IsError || called.Load() != 1 {
+		t.Fatal(result, called.Load(), err)
 	}
 }
 

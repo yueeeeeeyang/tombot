@@ -3,12 +3,12 @@ import { DEFAULT_CAT_MODEL_ID } from '../models/catalog'
 import {
   addAgent,
   createWorkspace,
-  exportConversation,
   MAX_AGENTS,
   MAX_MESSAGE_LENGTH,
   MAX_MESSAGES,
   replyExcerpt,
   REPLY_EXCERPT_LENGTH,
+  insertDmNotice,
   saveMessage,
   searchAgents,
   setAgentComputerUrl,
@@ -30,6 +30,40 @@ const profile: NewAgent = {
 const timestamp = '2026-11-09T07:00:00.000Z'
 
 describe('工作空间领域规则', () => {
+  it('私信提示按时间留在会话里，同一条不重复插入', () => {
+    const workspace = createWorkspace()
+    const agent = workspace.agents[0]
+    if (!agent) throw new Error('缺少初始助手')
+    const notice = {
+      id: 'dm-1',
+      createdAt: timestamp,
+      direction: 'sent' as const,
+      peerId: 'peer',
+      peerName: '游戏程序',
+      conversationId: 'dm-conv',
+    }
+    const once = insertDmNotice(workspace, agent.id, notice)
+    const twice = insertDmNotice(once, agent.id, notice)
+    const missing = insertDmNotice(workspace, 'missing', notice)
+    const message = once.agents.find((item) => item.id === agent.id)?.messages.at(-1)
+    expect(message?.content).toBe('已发消息给 游戏程序')
+    expect(message?.dmNotice).toEqual({
+      direction: 'sent',
+      peerId: 'peer',
+      peerName: '游戏程序',
+      conversationId: 'dm-conv',
+    })
+    expect(twice).toBe(once)
+    expect(missing).toBe(workspace)
+    const received = insertDmNotice(workspace, agent.id, {
+      ...notice,
+      id: 'dm-2',
+      direction: 'received',
+    })
+    expect(received.agents.find((item) => item.id === agent.id)?.messages.at(-1)?.content).toBe(
+      '收到 游戏程序 的消息',
+    )
+  })
   it('初始工作空间包含独立助手，没有伪造消息', () => {
     const workspace = createWorkspace()
     expect(appWorkspaceSchema.safeParse(workspace).success).toBe(true)
@@ -150,24 +184,6 @@ describe('工作空间领域规则', () => {
     expect(searchAgents(workspace.agents, '游戏开发')).toHaveLength(4)
     expect(searchAgents(workspace.agents, '无匹配内容')).toHaveLength(0)
     expect(searchAgents(workspace.agents, '  ')).toHaveLength(8)
-  })
-
-  it('导出仅包含用户草稿，并明确标注未发送', () => {
-    const workspace = updateDraft(
-      saveMessage(
-        updateDraft(createWorkspace(), 'assistant', '已存内容'),
-        'assistant',
-        'message-one',
-        timestamp,
-      ),
-      'assistant',
-      '未完成输入',
-    )
-    const markdown = exportConversation(workspace.agents[0]!)
-    expect(markdown).toContain('未发送')
-    expect(markdown).toContain('已存内容')
-    expect(markdown).toContain('未完成输入')
-    expect(markdown).not.toContain('你的想法，有了一个新家')
   })
 
   it('拒绝损坏的活动助手引用和重复标识', () => {
@@ -301,29 +317,6 @@ describe('工作空间领域规则', () => {
     expect(assistantReply[0]?.content).toContain(
       'This assistant message replies to an earlier message.',
     )
-  })
-
-  it('导出保留回复摘要、表情和失败状态', () => {
-    const workspace = saveMessage(
-      updateDraft(createWorkspace(), 'assistant', '已存内容'),
-      'assistant',
-      'message-one',
-      timestamp,
-    )
-    workspace.agents[0]!.messages[0] = {
-      ...workspace.agents[0]!.messages[0]!,
-      status: 'failed',
-      reactions: [
-        { emoji: '👍', count: 2 },
-        { emoji: '🎉', count: 1 },
-      ],
-      replyTo: { messageId: 'origin', excerpt: '上一句' },
-    }
-    const markdown = exportConversation(workspace.agents[0]!)
-    expect(markdown).toContain('发送失败')
-    expect(markdown).toContain('> 上一句')
-    expect(markdown).toContain('表情：👍×2 🎉')
-    expect(markdown).toContain('已存内容')
   })
 
   it('可以更换猫咪模型，空模型或猫咪不存在时不改原数据', () => {

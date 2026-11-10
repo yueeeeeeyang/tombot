@@ -191,6 +191,53 @@ func (s *Conversations) List(ctx context.Context, kind, cursor string, limit int
 	}
 	return page, nil
 }
+func (s *Conversations) SetReply(ctx context.Context, messageID, replyToID string) error {
+	if messageID == "" || replyToID == "" || messageID == replyToID {
+		return badInput("Reply target must be another message.")
+	}
+	return store.Transact(ctx, s.db, func(tx *sql.Tx) error {
+		var conversationID string
+		if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM messages WHERE id=?`, messageID).Scan(&conversationID); err != nil {
+			return notFound(err)
+		}
+		var same int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=?`, replyToID, conversationID).Scan(&same); err != nil {
+			return err
+		}
+		if same != 1 {
+			return domain.NewError(400, "MESSAGE_INVALID", "The reply target is not in this conversation.")
+		}
+		_, err := tx.ExecContext(ctx, `UPDATE messages SET reply_to_id=? WHERE id=?`, replyToID, messageID)
+		return err
+	})
+}
+
+func (s *Conversations) ToggleReaction(ctx context.Context, messageID, emoji string) error {
+	if messageID == "" || emoji == "" || len(emoji) > 16 {
+		return badInput("Choose a reaction emoji.")
+	}
+	return store.Transact(ctx, s.db, func(tx *sql.Tx) error {
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE id=?`, messageID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return domain.NewError(404, "NOT_FOUND", "The message does not exist.")
+		}
+		var count int
+		err := tx.QueryRowContext(ctx, `SELECT count FROM message_reactions WHERE message_id=? AND emoji=?`, messageID, emoji).Scan(&count)
+		if err == sql.ErrNoRows {
+			_, err = tx.ExecContext(ctx, `INSERT INTO message_reactions(message_id,emoji,count) VALUES(?,?,1)`, messageID, emoji)
+			return err
+		}
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `DELETE FROM message_reactions WHERE message_id=? AND emoji=?`, messageID, emoji)
+		return err
+	})
+}
+
 func (s *Conversations) Messages(ctx context.Context, id string, before int64, limit int) ([]domain.Message, error) {
 	if limit < 1 || limit > 200 || before < 0 {
 		return nil, badInput("Invalid message page bounds.")

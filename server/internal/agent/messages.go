@@ -70,6 +70,20 @@ func (m runMessenger) SendBotMessage(ctx context.Context, run domain.Run, callID
 	return r.readBotReply(ctx, child, reply)
 }
 
+// copyDmNotice 把私信提示写进猫咪和用户的单聊，父会话已经写过时不重复。
+func copyDmNotice(ctx context.Context, tx *sql.Tx, botID, parentConversation string, handoff domain.HandoffRef, now time.Time) error {
+	var directID string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM conversations WHERE kind='direct' AND source!='routine' AND bot_id=?`, botID).Scan(&directID)
+	if errors.Is(err, sql.ErrNoRows) || directID == "" || directID == parentConversation {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	note := domain.Message{ID: ids.New(), ConversationID: directID, SenderKind: "system", Blocks: []domain.MessageBlock{{Kind: "handoff", Handoff: &handoff}}, Status: "complete", CreatedAt: now}
+	return service.AppendMessage(ctx, tx, &note)
+}
+
 func (r *Runtime) createBotMessageLocked(ctx context.Context, parent *job, callID string, input domain.BotMessageRequest) (*job, domain.BotMessageReply, error) {
 	reply := domain.BotMessageReply{Artifacts: []string{}}
 	if r.closed || ctx.Err() != nil || parent.executionCtx == nil || parent.executionCtx.Err() != nil || r.jobs[parent.run.ID] != parent || completedJob(parent) {
@@ -233,7 +247,15 @@ func (r *Runtime) createBotMessageLocked(ctx context.Context, parent *job, callI
 		if err = service.AppendMessage(ctx, tx, &note); err != nil {
 			return err
 		}
-		if _, err = bus.Append(ctx, tx, "handoff.created", parent.run.ConversationID, map[string]any{"turn_id": parent.run.TurnID, "from_bot_id": sender.ID, "to_bot_id": target.ID, "kind": source, "conversation_id": run.ConversationID, "run_id": run.ID}); err != nil {
+		if !input.Delegation {
+			if err = copyDmNotice(ctx, tx, sender.ID, parent.run.ConversationID, handoff, now); err != nil {
+				return err
+			}
+			if err = copyDmNotice(ctx, tx, target.ID, parent.run.ConversationID, handoff, now); err != nil {
+				return err
+			}
+		}
+		if _, err = bus.Append(ctx, tx, "handoff.created", parent.run.ConversationID, map[string]any{"turn_id": parent.run.TurnID, "message_id": note.ID, "from_bot_id": sender.ID, "to_bot_id": target.ID, "from_name": sender.Name, "to_name": target.Name, "kind": source, "conversation_id": run.ConversationID, "run_id": run.ID}); err != nil {
 			return err
 		}
 		if err = store.Audit(ctx, tx, "bot:"+sender.ID, "message.deliver", run.ID, map[string]any{"parent_run_id": parent.run.ID, "target_bot_id": target.ID, "hop_depth": run.HopDepth, "reply_required": input.ReplyRequired, "delegation": input.Delegation}); err != nil {

@@ -29,7 +29,7 @@ func checkToolTimeline(t *testing.T, s *Server, conversationID string, cursor in
 	var phases []string
 	var terminal domain.ToolActivity
 	for _, ev := range events {
-		if ev.ConversationID != conversationID || (ev.Kind != "tool.status" && ev.Kind != "tool.output") {
+		if ev.ConversationID != conversationID || (ev.Kind != "tool.started" && ev.Kind != "tool.status" && ev.Kind != "tool.output") {
 			continue
 		}
 		var item domain.ToolActivity

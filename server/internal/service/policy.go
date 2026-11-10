@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"time"
 
 	"io.yueyang/tom/internal/infra/ids"
@@ -29,13 +28,8 @@ type policyReader interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func readPolicyDecision(ctx context.Context, reader policyReader, botID string, action policy.Action) (string, error) {
-	var decision string
-	err := reader.QueryRowContext(ctx, `SELECT decision FROM policy_rules WHERE bot_id IN(?,'*') AND action_class=? AND (pattern=? OR COALESCE(pattern,'')='') ORDER BY (bot_id=?) DESC,(COALESCE(pattern,'')!='') DESC,id DESC LIMIT 1`, botID, action.Class, action.Pattern, botID).Scan(&decision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
-	return decision, err
+func readPolicyDecision(context.Context, policyReader, string, policy.Action) (string, error) {
+	return "", nil
 }
 
 func writeRule(ctx context.Context, tx *sql.Tx, rule PolicyRule) error {

@@ -115,8 +115,8 @@ func TestAvatarEventFailureKeepsPreviousFileAndRevision(t *testing.T) {
 	if _, err = os.Stat(filepath.Join(workspace, *first.AvatarPath)); !os.IsNotExist(err) {
 		t.Fatal("旧头像未回收", err)
 	}
-	var updates, audits int
-	if err = db.QueryRow(`SELECT (SELECT COUNT(*) FROM events WHERE kind='bot.updated' AND json_extract(payload_json,'$.bot_id')=?),(SELECT COUNT(*) FROM audit_log WHERE action='bot.avatar')`, bot.ID).Scan(&updates, &audits); err != nil || updates != 2 || audits != 2 {
-		t.Fatal("事件与审计未原子提交", updates, audits, err)
+	var updates int
+	if err = db.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='bot.updated' AND json_extract(payload_json,'$.bot_id')=?`, bot.ID).Scan(&updates); err != nil || updates != 2 {
+		t.Fatal("头像事件未原子提交", updates, err)
 	}
 }

@@ -44,17 +44,9 @@ func routineFixture(t *testing.T) (*Routines, *Approvals, *Bots, domain.Bot) {
 	return NewRoutines(bots.db, events, dispatch), NewApprovals(bots.db, events), bots, members[0]
 }
 
-func approveRoutine(t *testing.T, routines *Routines, approvals *Approvals, input RoutineInput) domain.Routine {
+func approveRoutine(t *testing.T, routines *Routines, _ *Approvals, input RoutineInput) domain.Routine {
 	t.Helper()
-	ctx := context.Background()
-	proposal, err := routines.Propose(ctx, "", input, "device:test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "device:test"); err != nil {
-		t.Fatal(err)
-	}
-	routine, err := routines.Get(ctx, proposal.RoutineID)
+	routine, err := routines.Commit(context.Background(), input, "device:test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,60 +59,26 @@ func routineInput(bot domain.Bot) RoutineInput {
 
 func TestRoutineApprovalRevisionDenialAndAuditRollback(t *testing.T) {
 	ctx := context.Background()
-	routines, approvals, _, bot := routineFixture(t)
+	routines, _, _, bot := routineFixture(t)
 	input := routineInput(bot)
-	proposal, err := routines.Propose(ctx, "", input, "device:test")
+	routine, err := routines.Commit(ctx, input, "device:test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = routines.Get(ctx, proposal.RoutineID); err == nil {
-		t.Fatal("未审批配置提前生效")
-	}
-	if err = approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "deny"}, "device:test"); err != nil {
-		t.Fatal(err)
-	}
-	routine := approveRoutine(t, routines, approvals, input)
 	if routine.TargetMode != "new" || routine.OverlapPolicy != "skip" || routine.CatchUp != "once" || routine.Timezone != "Asia/Shanghai" || !routine.IsEnabled || routine.NextRunAt == nil {
 		t.Fatal("默认值错误", routine)
 	}
-	input.Revision = routine.Revision
-	input.Name = "新名称"
-	first, err := routines.Propose(ctx, routine.ID, input, "device:test")
-	if err != nil {
+	updated, err := routines.UpdateNow(ctx, routine.ID, RoutinePatch{Revision: routine.Revision, Name: Field[string]{Set: true, Value: "新名称"}}, "device:test")
+	if err != nil || updated.Revision != routine.Revision+1 || updated.Name != "新名称" {
+		t.Fatal(updated, err)
+	}
+	_, err = routines.UpdateNow(ctx, routine.ID, RoutinePatch{Revision: routine.Revision, Name: Field[string]{Set: true, Value: "过期名称"}}, "device:test")
+	groupError(t, err, "ROUTINE_CHANGED")
+	if err = routines.Delete(ctx, updated.ID, updated.Revision, "device:test"); err != nil {
 		t.Fatal(err)
 	}
-	second, err := routines.Propose(ctx, routine.ID, input, "device:test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, first.ApprovalID, ApprovalDecision{Decision: "approve", Remember: &RememberDecision{Scope: "global"}}, "device:test"); err == nil {
-		t.Fatal("例程允许记忆批准")
-	}
-	if _, err = routines.db.Exec(`CREATE TRIGGER fail_routine_apply BEFORE INSERT ON audit_log WHEN NEW.action='routine.apply' BEGIN SELECT RAISE(ABORT,'test_audit'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, first.ApprovalID, ApprovalDecision{Decision: "approve"}, "device:test"); err == nil {
-		t.Fatal("审计失败未阻断")
-	}
-	current, err := routines.Get(ctx, routine.ID)
-	if err != nil || current.Name != routine.Name {
-		t.Fatal("失败审批修改了配置", err)
-	}
-	if _, err = routines.db.Exec(`DROP TRIGGER fail_routine_apply`); err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, first.ApprovalID, ApprovalDecision{Decision: "approve"}, "device:test"); err != nil {
-		t.Fatal(err)
-	}
-	groupError(t, approvals.Decide(ctx, second.ApprovalID, ApprovalDecision{Decision: "approve"}, "device:test"), "ROUTINE_CHANGED")
-	current, err = routines.Get(ctx, routine.ID)
-	if err != nil || current.Revision != 2 || current.Name != "新名称" {
-		t.Fatal(current, err)
-	}
-	if err = routines.Delete(ctx, current.ID, current.Revision, "device:test"); err != nil {
-		t.Fatal(err)
-	}
-	groupError(t, approvals.Decide(ctx, second.ApprovalID, ApprovalDecision{Decision: "approve"}, "device:test"), "APPROVAL_RESOLVED")
+	_, err = routines.Get(ctx, updated.ID)
+	groupError(t, err, "NOT_FOUND")
 }
 
 func TestRoutineConcurrentClaimCatchUpAndManualSchedule(t *testing.T) {
@@ -210,7 +168,8 @@ func TestRoutineOverlapQueueRecoveryAndTargetIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	input.PinnedConversationID = other.ConversationID
-	if _, err = routines.Propose(ctx, "", input, "device:test"); err == nil {
+	input.Revision = 0
+	if _, err = routines.Commit(ctx, input, "device:test"); err == nil {
 		t.Fatal("接受其他目标的会话")
 	}
 }

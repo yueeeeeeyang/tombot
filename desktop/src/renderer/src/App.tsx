@@ -5,9 +5,15 @@ import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { CatSidePanel } from './features/chat/CatSidePanel'
 import { ChatPanel } from './features/chat/ChatPanel'
+import {
+  ConversationPanel,
+  DmThreadDialog,
+  GroupCreateDialog,
+} from './features/chat/ConversationPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   addAgent,
+  insertDmNotice,
   saveMessage,
   setAgentComputerUrl,
   setAgentModel,
@@ -15,11 +21,9 @@ import {
   updateDraft,
   type NewAgent,
 } from './features/workspace/model'
-import {
-  RecruitCatDialog,
-  ShareDialog,
-  WorkspaceDialog,
-} from './features/workspace/WorkspaceDialogs'
+import { RecruitCatDialog, WorkspaceDialog } from './features/workspace/WorkspaceDialogs'
+import { getBackend } from './features/desktop/backend'
+import type { DmNotice, MessageAttachment } from './features/workspace/model'
 import {
   CatContextMenu,
   type CatMenuAction,
@@ -48,7 +52,8 @@ import { getModelOptions } from './features/models/modelOptions'
 import { useSession } from './features/session/useSession'
 import { SessionGate } from './features/session/SessionGate'
 
-type OpenDialog = 'create' | 'search' | 'settings' | 'share' | 'workspace' | null
+type OpenDialog = 'create' | 'search' | 'settings' | 'group' | 'workspace' | null
+type Surface = { kind: 'agent' | 'group'; id: string }
 
 /** 未验证身份时只显示初始化或密码页，避免把预设工作空间当成已连接。 */
 export default function App() {
@@ -80,6 +85,9 @@ function WorkspaceApp() {
     error: settingsError,
   } = useServerSettings()
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
+  const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
+  const [chatGroups, setChatGroups] = useState<Array<{ id: string; name: string }>>([])
+  const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
   const [liveReply, setLiveReply] = useState<{ agentId: string; content: string }>()
 
   function startDelivery(agentId: string, messageId: string, quietWhenUnconfigured: boolean): void {
@@ -89,14 +97,39 @@ function WorkspaceApp() {
     let processLine = ''
     let reply = ''
     void deliver(agentId, messageId, (streamEvent) => {
+      if (
+        streamEvent.type === 'dm' &&
+        streamEvent.messageId &&
+        streamEvent.peerId &&
+        streamEvent.conversationId
+      ) {
+        const notice: DmNotice = {
+          direction: streamEvent.direction ?? 'sent',
+          peerId: streamEvent.peerId,
+          peerName: streamEvent.peerName ?? streamEvent.peerId,
+          conversationId: streamEvent.conversationId,
+        }
+        commit((previous) =>
+          insertDmNotice(previous, agentId, {
+            ...notice,
+            id: streamEvent.messageId!,
+            createdAt: new Date().toISOString(),
+          }),
+        )
+        return
+      }
       if (!settingsDraft.isStreaming) return
       if (streamEvent.type === 'process') processLine = streamEvent.text
-      else reply += streamEvent.text
+      else if (streamEvent.type === 'delta') reply += streamEvent.text
       const content = [processLine, reply].filter((part) => part !== '').join('\n')
       setLiveReply({ agentId, content })
     }).then((result) => {
       setLiveReply(undefined)
       setAgentActivity(agentId, 'idle')
+      void window.desktop?.backend
+        .listGroups?.()
+        .then(setChatGroups)
+        .catch(() => undefined)
       if (result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) return
       if (result.message) setNotice(result.message)
     })
@@ -120,6 +153,16 @@ function WorkspaceApp() {
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
   useEffect(() => installAgentActivityEvents(), [])
+  const refreshRooms = useCallback(() => {
+    const backend = window.desktop?.backend
+    void backend
+      ?.listGroups?.()
+      .then((rows) => setChatGroups(rows))
+      .catch(() => undefined)
+  }, [])
+  useEffect(() => {
+    if (ready) refreshRooms()
+  }, [ready, refreshRooms])
   // 帧没解码完不切换图片，失败时保持睁眼原图，错误已在预加载里记录。
   useEffect(() => {
     preloadCatFrames().catch(() => undefined)
@@ -159,6 +202,7 @@ function WorkspaceApp() {
     updatePreferences((previous) => setSidebarFlag(previous, agentIds, id, 'pinnedIds', false))
   }
   function selectAgent(id: string): void {
+    setSurface({ kind: 'agent', id })
     runAction(() => {
       commit((previous) => ({ ...previous, activeAgentId: id }))
       setOpenDialog(null)
@@ -336,78 +380,129 @@ function WorkspaceApp() {
         onSearch={() => setOpenDialog('search')}
         onCreate={() => setOpenDialog('create')}
         onSettings={() => openSettings()}
+        chatGroups={chatGroups}
+        selected={
+          surface.kind === 'agent' ? { kind: 'agent', id: workspace.activeAgentId } : surface
+        }
+        onOpenGroup={(id) => {
+          setSurface({ kind: 'group', id })
+          setCatPanelOpen(false)
+        }}
+        onCreateGroup={() => setOpenDialog('group')}
       />
       <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} onResizing={setResizing} />
       <div className="chat-stage">
-        <ChatPanel
-          key={agent.id}
-          agent={
-            liveReply?.agentId === agent.id
-              ? {
-                  ...agent,
-                  messages: [
-                    ...agent.messages,
-                    {
-                      id: 'live-reply',
-                      role: 'assistant',
-                      content: liveReply.content,
-                      createdAt: new Date().toISOString(),
-                      status: 'sent',
-                      reactions: [],
-                    },
-                  ],
-                }
-              : agent
-          }
-          isBlocked={isBlocked}
-          isDetailsOpen={isCatPanelOpen}
-          onDraft={(draft) =>
-            runAction(() => {
-              commit((previous) => updateDraft(previous, agent.id, draft))
-            })
-          }
-          onSave={(replyToId) => {
-            try {
-              const messageId = crypto.randomUUID()
-              const saved = commit((previous) =>
-                saveMessage(previous, agent.id, messageId, new Date().toISOString(), replyToId),
-              )
-              if (!saved) return false
-              startDelivery(agent.id, messageId, true)
-              return true
-            } catch (failure) {
-              setNotice((failure as Error).message)
-              return false
+        {surface.kind !== 'agent' ? (
+          <ConversationPanel
+            key={surface.id}
+            id={surface.id}
+            agents={workspace.agents}
+            onNotice={setNotice}
+            onError={setNotice}
+          />
+        ) : (
+          <ChatPanel
+            key={agent.id}
+            agent={
+              liveReply?.agentId === agent.id
+                ? {
+                    ...agent,
+                    messages: [
+                      ...agent.messages,
+                      {
+                        id: 'live-reply',
+                        role: 'assistant',
+                        content: liveReply.content,
+                        createdAt: new Date().toISOString(),
+                        status: 'sent',
+                        reactions: [],
+                      },
+                    ],
+                  }
+                : agent
             }
-          }}
-          onDelete={(messageId) =>
-            runAction(() => {
-              commit((previous) => ({
-                ...previous,
-                agents: previous.agents.map((item) =>
-                  item.id === agent.id
-                    ? {
-                        ...item,
-                        messages: item.messages.filter((message) => message.id !== messageId),
-                      }
-                    : item,
-                ),
-              }))
-            })
-          }
-          onReact={(messageId, emoji) =>
-            runAction(() => {
-              commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
-            })
-          }
-          onRetry={(messageId) => {
-            startDelivery(agent.id, messageId, false)
-          }}
-          onDetails={() => setCatPanelOpen((open) => !open)}
-          onNotice={setNotice}
-          onError={setNotice}
-        />
-        {isCatPanelOpen && (
+            isBlocked={isBlocked}
+            isDetailsOpen={isCatPanelOpen}
+            onDraft={(draft) =>
+              runAction(() => {
+                commit((previous) => updateDraft(previous, agent.id, draft))
+              })
+            }
+            onSave={(replyToId, attachments) => {
+              try {
+                const messageId = crypto.randomUUID()
+                const saved = commit((previous) =>
+                  saveMessage(
+                    previous,
+                    agent.id,
+                    messageId,
+                    new Date().toISOString(),
+                    replyToId,
+                    attachments,
+                  ),
+                )
+                if (!saved) return false
+                startDelivery(agent.id, messageId, true)
+                return true
+              } catch (failure) {
+                setNotice((failure as Error).message)
+                return false
+              }
+            }}
+            onDelete={(messageId) =>
+              runAction(() => {
+                commit((previous) => ({
+                  ...previous,
+                  agents: previous.agents.map((item) =>
+                    item.id === agent.id
+                      ? {
+                          ...item,
+                          messages: item.messages.filter((message) => message.id !== messageId),
+                        }
+                      : item,
+                  ),
+                }))
+              })
+            }
+            onReact={(messageId, emoji) =>
+              runAction(() => {
+                commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
+              })
+            }
+            onRetry={(messageId) => {
+              startDelivery(agent.id, messageId, false)
+            }}
+            onDetails={() => setCatPanelOpen((open) => !open)}
+            onNotice={setNotice}
+            onError={setNotice}
+            onUpload={async (file) => {
+              const uploaded = await getBackend().uploadAttachment?.(
+                {
+                  name: file.name,
+                  type: file.type,
+                  bytes: new Uint8Array(await file.arrayBuffer()),
+                },
+                { botId: agent.id },
+              )
+              if (!uploaded) throw new Error('还不能添加附件。')
+              const kind: MessageAttachment['kind'] =
+                file.type === 'image/png' || file.type === 'image/jpeg' ? 'image' : 'file'
+              return {
+                name: file.name,
+                path: uploaded.path,
+                sha256: uploaded.sha256,
+                mediaType: file.type,
+                kind,
+              }
+            }}
+            onPreview={(attachment) =>
+              getBackend().previewAttachment?.(attachment.path, agent.id) ?? Promise.resolve('')
+            }
+            peers={workspace.agents}
+            onOpenDm={(notice) => setDmThread({ notice, selfId: agent.id })}
+          />
+        )}
+        {surface.kind === 'agent' && isCatPanelOpen && (
           <CatSidePanel
             agent={agent}
             onClose={() => setCatPanelOpen(false)}
@@ -437,7 +532,6 @@ function WorkspaceApp() {
                 })
                 .catch((failure: Error) => setNotice(failure.message))
             }}
-            onExport={() => setOpenDialog('share')}
           />
         )}
       </div>
@@ -530,7 +624,28 @@ function WorkspaceApp() {
           onClose={() => setOpenDialog(null)}
         />
       )}
-      {openDialog === 'share' && <ShareDialog agent={agent} onClose={() => setOpenDialog(null)} />}
+      {dmThread && (
+        <DmThreadDialog
+          notice={dmThread.notice}
+          self={workspace.agents.find((item) => item.id === dmThread.selfId) ?? agent}
+          agents={workspace.agents}
+          onClose={() => setDmThread(undefined)}
+          onError={setNotice}
+        />
+      )}
+      {openDialog === 'group' && (
+        <GroupCreateDialog
+          agents={workspace.agents}
+          onClose={() => setOpenDialog(null)}
+          onCreate={async (name, memberIds) => {
+            const created = await getBackend().createGroup?.(name, memberIds)
+            if (!created) throw new Error('还不能创建群聊。')
+            refreshRooms()
+            setSurface({ kind: 'group', id: created.id })
+            setOpenDialog(null)
+          }}
+        />
+      )}
       {deletingAgent && (
         <DeleteCatDialog
           agent={deletingAgent}

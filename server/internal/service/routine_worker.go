@@ -95,26 +95,12 @@ func (s *Routines) Recover(ctx context.Context) error {
 func (s *Routines) expirePending(ctx context.Context, now time.Time, startup bool) error {
 	changed := false
 	err := store.Transact(ctx, s.db, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE approvals SET status='expired',decided_at=? WHERE run_id IS NULL AND status='pending' AND expires_at<=?`, now.UnixMilli(), now.UnixMilli())
-		if err != nil {
-			return err
-		}
-		count, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		changed = count > 0
-		if count > 0 {
-			if _, err = bus.Append(ctx, tx, "approval.resolved", "", map[string]string{"status": "expired"}); err != nil {
-				return err
-			}
-		}
 		if startup {
-			result, err = tx.ExecContext(ctx, `UPDATE routine_runs SET status='failed',error_code='ROUTINE_INTERRUPTED',updated_at=? WHERE status='pending'`, now.UnixMilli())
+			result, err := tx.ExecContext(ctx, `UPDATE routine_runs SET status='failed',error_code='ROUTINE_INTERRUPTED',updated_at=? WHERE status='pending'`, now.UnixMilli())
 			if err != nil {
 				return err
 			}
-			count, err = result.RowsAffected()
+			count, err := result.RowsAffected()
 			if err != nil {
 				return err
 			}

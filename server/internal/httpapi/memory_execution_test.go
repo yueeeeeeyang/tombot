@@ -104,29 +104,15 @@ func TestMemoryHTTPModelApprovalWriteSearchAndPromptIndex(t *testing.T) {
 	}
 	deadline := time.NewTimer(8 * time.Second)
 	defer deadline.Stop()
-	approved := false
 	for {
 		wake := server.Bus.Wake()
-		pending, err := server.Approvals.List(ctx, "pending", "", 20)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, approval := range pending {
-			if approved {
-				t.Fatal("无副作用的搜索再次要求标准审批")
-			}
-			if err = server.Approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-				t.Fatal(err)
-			}
-			approved = true
-		}
 		run, err := server.Runtime.Run(ctx, sent.RunID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if run.Status == "succeeded" {
-			if !approved || run.CostMicro != 30 || calls.Load() != 3 {
-				t.Fatal("审批或调用费用错误", approved, run, calls.Load())
+			if run.CostMicro != 30 || calls.Load() != 3 {
+				t.Fatal("调用费用错误", run, calls.Load())
 			}
 			break
 		}

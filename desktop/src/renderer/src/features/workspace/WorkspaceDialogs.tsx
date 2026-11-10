@@ -1,15 +1,10 @@
 import { useState, type FormEvent } from 'react'
-import { Check, CheckCheck, Copy, Download, HardDrive } from 'lucide-react'
+import { Check, HardDrive } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { Select, type SelectOption } from '../../components/Select'
 import { CAT_AVATARS } from '../avatars/presets'
-import {
-  exportConversation,
-  type Agent,
-  type NewAgent,
-  type AppWorkspace as Workspace,
-} from './model'
+import { type Agent, type NewAgent, type AppWorkspace as Workspace } from './model'
 
 /** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
 export function RecruitCatDialog({
@@ -136,68 +131,6 @@ export function RecruitCatDialog({
           猫咪资料会保存到服务。这里选中的模型会写进这只猫咪，回复时使用它。
         </p>
       </form>
-    </Dialog>
-  )
-}
-
-/** 仅导出当前助手的用户内容；剪贴板失败显示错误且允许重试。 */
-export function ShareDialog({ agent, onClose }: { agent: Agent; onClose: () => void }) {
-  const [isCopied, setCopied] = useState(false)
-  const [error, setError] = useState('')
-  const hasContent = agent.messages.length > 0 || Boolean(agent.draft.trim())
-  async function copy(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(exportConversation(agent))
-      setCopied(true)
-      setError('')
-    } catch {
-      setError('复制失败，请检查剪贴板权限，或将草稿导出为文件。')
-    }
-  }
-  function download(): void {
-    const url = URL.createObjectURL(
-      new Blob([exportConversation(agent)], { type: 'text/markdown;charset=utf-8' }),
-    )
-    const anchor = document.createElement('a')
-    anchor.href = url
-    const safeName = [...agent.name]
-      .map((character) =>
-        character.charCodeAt(0) < 32 || '<>:"/\\|?*'.includes(character) ? '_' : character,
-      )
-      .join('')
-    anchor.download = `TomBot-${safeName}-草稿.md`
-    anchor.click()
-    setTimeout(() => URL.revokeObjectURL(url), 1000)
-  }
-  return (
-    <Dialog title="把想法带走" onClose={onClose}>
-      <p className="dialog-description">导出与「{agent.name}」的本地草稿，随时接着思考。</p>
-      <div className="export-summary">
-        <Avatar preset={agent.avatar} agentId={agent.id} />
-        <div>
-          <strong>{agent.name}</strong>
-          <p>
-            {agent.messages.length} 条草稿{agent.draft.trim() ? ' · 包含正在编辑的内容' : ''}
-          </p>
-        </div>
-      </div>
-      <div className="share-actions">
-        <button className="secondary-button" disabled={!hasContent} onClick={() => void copy()}>
-          {isCopied ? <CheckCheck size={16} /> : <Copy size={16} />}
-          {isCopied ? '已复制' : '复制内容'}
-        </button>
-        <button className="primary-button" disabled={!hasContent} onClick={download}>
-          <Download size={16} />
-          导出 Markdown
-        </button>
-      </div>
-      {!hasContent && <p className="form-footnote">还没有可导出的内容，先写下你的第一个想法吧。</p>}
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      <p className="form-footnote">文件只导出到这台设备。</p>
     </Dialog>
   )
 }

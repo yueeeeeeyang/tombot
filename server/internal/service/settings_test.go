@@ -76,10 +76,6 @@ func TestReviewerSettingsSelectionAndReferences(t *testing.T) {
 	if err = catalog.DeleteModel(ctx, a.ID, "user"); err != nil {
 		t.Fatal("清空配置后不能删除模型", err)
 	}
-	var audits int
-	if err = db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='settings.update'").Scan(&audits); err != nil || audits != 5 {
-		t.Fatal("配置审计不完整", audits, err)
-	}
 }
 
 func TestReviewerSettingsRejectInvalidAndRollback(t *testing.T) {
@@ -95,17 +91,14 @@ func TestReviewerSettingsRejectInvalidAndRollback(t *testing.T) {
 			t.Fatal("无效配置被接受", encoded)
 		}
 	}
-	if _, err := db.Exec(`CREATE TRIGGER reject_settings_audit BEFORE INSERT ON audit_log WHEN NEW.action='settings.update' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`); err != nil {
+	if _, err := settings.Update(ctx, SettingsPatch{Reviewer: &ReviewerPatch{Enabled: Field[*bool]{Set: true, Value: value(true)}}}, "user"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := settings.Update(ctx, SettingsPatch{Reviewer: &ReviewerPatch{Enabled: Field[*bool]{Set: true, Value: value(true)}}}, "user"); err == nil {
-		t.Fatal("审计失败未返回")
-	}
 	saved, err := settings.Get(ctx)
-	if err != nil || saved.Reviewer.Enabled {
-		t.Fatal("审计失败仍保存设置", err)
+	if err != nil || !saved.Reviewer.Enabled {
+		t.Fatal("审查设置未保存", err)
 	}
-	if _, err = db.Exec(`INSERT INTO settings(key,value_json,updated_at) VALUES('reviewer','invalid',0)`); err != nil {
+	if _, err = db.Exec(`UPDATE settings SET value_json='invalid',updated_at=0 WHERE key='reviewer'`); err != nil {
 		t.Fatal(err)
 	}
 	for _, encoded := range []string{"invalid", "null", "{}", `{"enabled":null}`, `{"enabled":false,"model_id":""}`, `{"enabled":false} {}`} {

@@ -216,7 +216,7 @@ func TestConnectProviderNewTransactionFailureLeavesNoConfiguration(t *testing.T)
 	if _, err := catalog.ConnectProvider(context.Background(), ProviderConnectInput{Preset: "deepseek", APIKey: testkit.Random(t)}, "user", secrets); err == nil {
 		t.Fatal("模型插入失败仍成功")
 	}
-	for _, table := range []string{"providers", "models", "secrets", "audit_log"} {
+	for _, table := range []string{"providers", "models", "secrets"} {
 		var count int
 		if err := db.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 			t.Fatal("事务留下部分配置", table, err)
