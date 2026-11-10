@@ -1,6 +1,34 @@
 import { app, BrowserWindow, dialog, Menu, session } from 'electron'
+import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { registerDesktopIpc } from './desktopServer'
+
+function usesCustomUserDataDir(): boolean {
+  return process.argv.some((arg) => arg === '--user-data-dir' || arg.startsWith('--user-data-dir='))
+}
+
+/**
+ * 单实例锁会立刻解析 userData。名称若留到 ready 之后才改，锁用的是包名目录，
+ * 会话文件却写进 TomBot，下次从另一处读，地址就像没保存。
+ */
+function pinUserDataDirectory(): void {
+  app.setName('TomBot')
+  if (usesCustomUserDataDir()) return
+  const root = join(app.getPath('appData'), 'TomBot')
+  mkdirSync(root, { recursive: true })
+  const target = join(root, 'desktop-session.json')
+  if (!existsSync(target)) {
+    for (const legacy of ['tombot-desktop', 'Electron']) {
+      const file = join(app.getPath('appData'), legacy, 'desktop-session.json')
+      if (!existsSync(file)) continue
+      copyFileSync(file, target)
+      break
+    }
+  }
+  app.setPath('userData', root)
+}
+
+pinUserDataDirectory()
 
 /** 创建隔离的本地客户端窗口；加载失败时报告错误并退出，避免留下空白窗口。 */
 async function createWindow(): Promise<void> {
@@ -76,7 +104,6 @@ if (!hasInstanceLock) {
   app
     .whenReady()
     .then(async () => {
-      app.setName('TomBot')
       session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
         callback(false)
       })
