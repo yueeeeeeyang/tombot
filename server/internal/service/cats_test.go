@@ -1,4 +1,4 @@
-package desktop
+package service
 
 import (
 	"context"
@@ -6,20 +6,17 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"io.yueyang/tom/internal/auth"
 	"io.yueyang/tom/internal/domain"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/testkit"
 )
 
 func TestWorkspaceSeedSaveAndImport(t *testing.T) {
-	service := newService(t, nil)
+	service := newService(t)
 	ctx := context.Background()
 	first, err := service.Load(ctx)
 	if err != nil {
@@ -45,7 +42,7 @@ func TestWorkspaceSeedSaveAndImport(t *testing.T) {
 	if _, err = service.Import(ctx, imported); err == nil {
 		t.Fatal("已有改动的工作空间不能被旧档覆盖")
 	}
-	fresh := newService(t, nil)
+	fresh := newService(t)
 	imported.Agents[0].Name = "从旧档回来"
 	loaded, err := fresh.Import(ctx, imported)
 	if err != nil || loaded.Workspace.Agents[0].Name != "从旧档回来" || loaded.Pristine {
@@ -79,9 +76,8 @@ func TestRejectsInvalidComputerURLAndDuplicateMessage(t *testing.T) {
 	}
 }
 
-func TestDeliverWithoutModelKeepsUnsent(t *testing.T) {
-	completer := &fakeCompleter{reply: "不应该被调用"}
-	service := newService(t, completer)
+func TestPrepareDispatchWithoutModelKeepsUnsent(t *testing.T) {
+	service := newService(t)
 	ctx := context.Background()
 	snapshot, err := service.Load(ctx)
 	if err != nil {
@@ -94,13 +90,10 @@ func TestDeliverWithoutModelKeepsUnsent(t *testing.T) {
 	if _, err = service.Save(ctx, snapshot.Workspace); err != nil {
 		t.Fatal(err)
 	}
-	_, err = service.Deliver(ctx, "assistant", "draft-1")
+	_, err = service.PrepareDispatch(ctx, "assistant", "draft-1")
 	var failure *domain.Error
 	if !errors.As(err, &failure) || failure.Code != "MODEL_NOT_READY" {
 		t.Fatal("未配置模型时应拒绝投递", err)
-	}
-	if completer.calls != 0 {
-		t.Fatal("未配置模型不应访问供应商")
 	}
 	loaded, err := service.Load(ctx)
 	if err != nil || loaded.Workspace.Agents[0].Messages[0].Status != "unsent" {
@@ -108,11 +101,34 @@ func TestDeliverWithoutModelKeepsUnsent(t *testing.T) {
 	}
 }
 
-func TestDeliverStoresReplyAndHidesAPIKey(t *testing.T) {
-	completer := &fakeCompleter{reply: "我在。"}
-	service := newService(t, completer)
+func TestApplyRunPersistsAssistantReply(t *testing.T) {
+	service := newService(t)
 	ctx := context.Background()
-	view, err := service.SaveSettings(ctx, Settings{
+	snapshot, err := service.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.Workspace.Agents[0].Messages = []ChatMessage{{
+		ID: "draft-2", Role: "user", Content: "在吗", CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		Status: "unsent", Reactions: []Reaction{},
+	}}
+	saved, err := service.Save(ctx, snapshot.Workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := service.ApplyRun(ctx, "assistant", "draft-2", saved.Revision, "我在。", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := applied.Workspace.Agents[0].Messages
+	if len(messages) != 2 || messages[0].Status != "sent" || messages[1].Content != "我在。" || messages[1].Role != "assistant" {
+		t.Fatalf("运行结果没有写回: %+v", messages)
+	}
+}
+
+func TestModelFormDoesNotEchoAPIKey(t *testing.T) {
+	service := newService(t)
+	view, err := service.SaveModelForm(context.Background(), ModelForm{
 		Language: "zh-CN", Provider: "custom", BaseURL: "http://127.0.0.1:9/v1", ModelName: "desk-model",
 		Temperature: 0.7, TopP: 1, MaxOutputTokens: "128", IsStreaming: true,
 	}, "secret-key", false)
@@ -123,44 +139,11 @@ func TestDeliverStoresReplyAndHidesAPIKey(t *testing.T) {
 	if err != nil || strings.Contains(string(encoded), "secret-key") {
 		t.Fatal("接口响应包含了密钥")
 	}
-	snapshot, err := service.Load(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	snapshot.Workspace.Agents[0].Messages = []ChatMessage{{
-		ID: "draft-2", Role: "user", Content: "在吗", CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		Status: "unsent", Reactions: []Reaction{},
-	}}
-	if _, err = service.Save(ctx, snapshot.Workspace); err != nil {
-		t.Fatal(err)
-	}
-	delivered, err := service.Deliver(ctx, "assistant", "draft-2")
-	if err != nil {
-		t.Fatal(err)
-	}
-	messages := delivered.Workspace.Agents[0].Messages
-	if len(messages) != 2 || messages[0].Status != "sent" || messages[1].Role != "assistant" || messages[1].Content != "我在。" {
-		t.Fatalf("投递结果不正确: %+v", messages)
-	}
-	if completer.calls != 1 || completer.last.APIKey != "secret-key" || completer.last.Model != "desk-model" {
-		t.Fatalf("模型请求不正确: %+v calls=%d", completer.last, completer.calls)
-	}
-	again, err := service.Deliver(ctx, "assistant", "draft-2")
-	if err != nil || completer.calls != 1 || len(again.Workspace.Agents[0].Messages) != 2 {
-		t.Fatal("已发送的消息不能再次调用模型", err, completer.calls)
-	}
 }
 
-func TestDeliverFailureMarksMessageFailed(t *testing.T) {
-	completer := &fakeCompleter{err: domain.NewError(502, "MODEL_UNAVAILABLE", "模型服务没有响应，请检查 API 地址后重试。")}
-	service := newService(t, completer)
+func TestApplyRunFailureKeepsPartialReply(t *testing.T) {
+	service := newService(t)
 	ctx := context.Background()
-	if _, err := service.SaveSettings(ctx, Settings{
-		Language: "system", Provider: "openai", BaseURL: "https://models.example.test/v1", ModelName: "gpt-test",
-		Temperature: 0.2, TopP: 1, MaxOutputTokens: "64", IsStreaming: false,
-	}, "", false); err != nil {
-		t.Fatal(err)
-	}
 	snapshot, err := service.Load(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -169,48 +152,27 @@ func TestDeliverFailureMarksMessageFailed(t *testing.T) {
 		ID: "draft-3", Role: "user", Content: "试一次", CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Status: "unsent", Reactions: []Reaction{},
 	}}
-	if _, err = service.Save(ctx, snapshot.Workspace); err != nil {
-		t.Fatal(err)
-	}
-	delivered, err := service.Deliver(ctx, "assistant", "draft-3")
-	if err != nil || delivered.Code != "MODEL_FAILED" || delivered.Workspace.Agents[0].Messages[0].Status != "failed" {
-		t.Fatal("供应商失败应标为发送失败", err, delivered.Code)
-	}
-}
-
-func TestHTTPCompleterReadsAssistantText(t *testing.T) {
-	var sawAuth string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
-			t.Errorf("路径错误 %s", r.URL.Path)
-		}
-		sawAuth = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"  回应  "}}]}`)
-	}))
-	t.Cleanup(server.Close)
-	reply, err := NewHTTPCompleter().Complete(context.Background(), Completion{
-		BaseURL: server.URL + "/v1", Model: "m", MaxTokens: 16, Temperature: 0, TopP: 1, APIKey: "token",
-		Messages: []Turn{{Role: "user", Content: "你好"}},
-	})
-	if err != nil || reply != "回应" || sawAuth != "Bearer token" {
-		t.Fatal(reply, err, sawAuth)
-	}
-}
-
-func newService(t *testing.T, completer Completer) *Service {
-	t.Helper()
-	db := testkit.Database(t)
-	directory := t.TempDir()
-	authentication, err := auth.New(db, directory)
+	saved, err := service.Save(ctx, snapshot.Workspace)
 	if err != nil {
 		t.Fatal(err)
 	}
+	applied, err := service.ApplyRun(ctx, "assistant", "draft-3", saved.Revision, "说到一半", domain.NewError(502, "RUN_INTERRUPTED", "中断"))
+	if err != nil || applied.Code != "MODEL_FAILED" || applied.Workspace.Agents[0].Messages[0].Status != "failed" {
+		t.Fatal("中断应标为失败", err, applied.Code)
+	}
+	if applied.Workspace.Agents[0].Messages[1].Content != "说到一半" || applied.Workspace.Agents[0].Messages[1].Status != "failed" {
+		t.Fatal("已生成的正文应保留")
+	}
+}
+
+func newService(t *testing.T) *Service {
+	t.Helper()
+	db := testkit.Database(t)
 	key, err := secure.Random(32)
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := New(Dependencies{DB: db, Auth: authentication, Key: key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Completer: completer})
+	service, err := New(Dependencies{DB: db, Key: key, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,21 +186,4 @@ func mustJSON(t *testing.T, value any) []byte {
 		t.Fatal(err)
 	}
 	return encoded
-}
-
-type fakeCompleter struct {
-	reply string
-	err   error
-	calls int
-	last  Completion
-}
-
-func (f *fakeCompleter) Complete(_ context.Context, request Completion) (string, error) {
-	f.calls++
-	f.last = request
-	f.last.Messages = append([]Turn(nil), request.Messages...)
-	if f.err != nil {
-		return "", f.err
-	}
-	return f.reply, nil
 }

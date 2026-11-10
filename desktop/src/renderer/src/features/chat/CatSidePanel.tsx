@@ -21,6 +21,7 @@ export function CatSidePanel({
   onClose,
   onModelChange,
   onComputerUrl,
+  onConnectComputer,
   onExport,
   now,
 }: {
@@ -28,6 +29,7 @@ export function CatSidePanel({
   onClose: () => void
   onModelChange: (modelId: CatModelId) => void
   onComputerUrl: (computerUrl: string) => void
+  onConnectComputer?: () => void
   onExport: () => void
   now?: Date
 }) {
@@ -149,6 +151,7 @@ export function CatSidePanel({
             agentName={agent.name}
             computerUrl={agent.computerUrl}
             onSave={onComputerUrl}
+            onConnect={onConnectComputer}
           />
         </div>
       )}

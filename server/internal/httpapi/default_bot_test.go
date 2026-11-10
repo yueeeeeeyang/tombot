@@ -17,7 +17,7 @@ func TestDefaultBotSetupFailureCanRecoverOnLoginWithoutResettingAuthentication(t
 	server, code := fixture(t, true)
 	handler := server.Handler()
 	password := testkit.Random(t)
-	login := map[string]any{"password": password, "device": map[string]string{"name": "默认助手验收", "platform": "macos"}}
+	login := map[string]any{"password": password, "deviceName": "默认助手验收", "platform": "macos"}
 	if response := request(t, handler, "POST", "/api/v1/auth/login", login, nil); response.Code != http.StatusConflict {
 		t.Fatal("未初始化时不应登录或创建助手", response.Code)
 	}
@@ -28,7 +28,7 @@ func TestDefaultBotSetupFailureCanRecoverOnLoginWithoutResettingAuthentication(t
 	if err := os.WriteFile(conflict, []byte("目录冲突"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password}, map[string]string{"X-Tom-Setup-Code": code})
+	response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password, "setupCode": code}, nil)
 	if response.Code != http.StatusInternalServerError || !server.Auth.Initialized() {
 		t.Fatal("目录失败未显式报告或错误回滚了已提交认证", response.Code)
 	}

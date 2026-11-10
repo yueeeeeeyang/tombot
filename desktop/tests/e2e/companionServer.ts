@@ -114,7 +114,7 @@ async function waitForSession(
       throw new Error(`服务提前退出，代码 ${child.exitCode}，${readStderr().slice(-300)}`)
     }
     try {
-      const response = await fetch(`${url}/api/desktop/v1/session`, {
+      const response = await fetch(`${url}/api/v1/auth/status`, {
         signal: AbortSignal.timeout(1_000),
       })
       if (response.ok) return

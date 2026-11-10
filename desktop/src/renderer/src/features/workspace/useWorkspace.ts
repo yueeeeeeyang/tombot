@@ -166,12 +166,16 @@ export function useWorkspace() {
   }
 
   /** 把一条用户消息交给服务。模型未配置时服务不会改写未发送状态。 */
-  function deliver(agentId: string, messageId: string): Promise<DeliveryResult> {
+  function deliver(
+    agentId: string,
+    messageId: string,
+    onEvent?: (event: { type: string; text: string }) => void,
+  ): Promise<DeliveryResult> {
     return enqueue(async () => {
       try {
         const pending = backend.saveWorkspace(current.current)
         if (pending) await pending
-        const result = await backend.deliverMessage(agentId, messageId)
+        const result = await backend.deliverMessage(agentId, messageId, onEvent)
         if (result.workspace) {
           const merged = mergeDelivery(current.current, result.workspace)
           current.current = merged

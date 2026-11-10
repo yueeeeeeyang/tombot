@@ -2,17 +2,19 @@ import { useState, type FormEvent } from 'react'
 import { isComputerUrl } from '../workspace/model'
 
 /**
- * 远端电脑只有一个接入点：这只猫咪自己保存的地址。
- * 应用不创建、不探测电脑；地址为空就是未连接。
+ * 未连接时可以让服务端打开这只猫咪正在使用的电脑，也可以改填别的地址。
+ * 地址为空就是未连接，断开只清掉画面，不改服务端上的工作区。
  */
 export function ComputerPane({
   agentName,
   computerUrl,
   onSave,
+  onConnect,
 }: {
   agentName: string
   computerUrl: string
   onSave: (computerUrl: string) => void
+  onConnect?: () => void
 }) {
   const [draft, setDraft] = useState(computerUrl)
   const [error, setError] = useState('')
@@ -33,6 +35,11 @@ export function ComputerPane({
     return (
       <form className="computer-pane" onSubmit={submit}>
         <p role="status">未连接</p>
+        {onConnect && (
+          <button type="button" onClick={onConnect}>
+            连接电脑
+          </button>
+        )}
         <label>
           远端电脑地址
           <input
@@ -46,7 +53,7 @@ export function ComputerPane({
         </label>
         {error && <p role="alert">{error}</p>}
         <button type="submit">保存地址</button>
-        <p className="computer-note">保存后会在这里嵌出画面。应用不会自己创建电脑。</p>
+        <p className="computer-note">连接后嵌出这只猫咪正在使用的电脑。也可以填写其他地址。</p>
       </form>
     )
   }

@@ -19,7 +19,6 @@ import (
 	"io.yueyang/tom/internal/auth"
 	"io.yueyang/tom/internal/browser"
 	"io.yueyang/tom/internal/config"
-	"io.yueyang/tom/internal/desktop"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/httpapi"
 	"io.yueyang/tom/internal/infra/bus"
@@ -160,12 +159,12 @@ func run(logger *slog.Logger) (result error) {
 	}
 	routineContext, stopRoutines := context.WithCancel(ctx)
 	routineDone := make(chan struct{})
-	desktopService, err := desktop.New(desktop.Dependencies{DB: db, Auth: authentication, Key: key, Logger: logger})
+	cats, err := service.New(service.Dependencies{DB: db, Key: key, Logger: logger, Bots: bots, Catalog: catalog, Secrets: secrets, WorkspaceDir: cfg.WorkspaceDir})
 	if err != nil {
 		stopRoutines()
 		return err
 	}
-	api := &httpapi.Server{Audit: service.NewAuditLog(db), Usage: service.NewUsage(db), Memories: memories, Groups: service.NewGroups(db, events), Settings: settings, Files: service.NewFiles(db, bots, storage, events, memories), Runtime: runtime, Approvals: approvals, Catalog: catalog, Bots: bots, Conversations: service.NewConversations(db, events), Secrets: secrets, Config: cfg, Auth: authentication, Desktop: desktopService, Provision: provisioner, Bus: events, Key: key, Logger: logger, Version: version, Started: time.Now(), RootContext: ctx}
+	api := &httpapi.Server{Audit: service.NewAuditLog(db), Usage: service.NewUsage(db), Memories: memories, Groups: service.NewGroups(db, events), Settings: settings, Files: service.NewFiles(db, bots, storage, events, memories), Runtime: runtime, Approvals: approvals, Catalog: catalog, Bots: bots, Conversations: service.NewConversations(db, events), Secrets: secrets, Config: cfg, Auth: authentication, Workspace: cats, Provision: provisioner, Bus: events, Key: key, Logger: logger, Version: version, Started: time.Now(), RootContext: ctx}
 	api.Terminals = terminals
 	api.Routines = routines
 	api.Browser = browsing
@@ -191,7 +190,7 @@ func run(logger *slog.Logger) (result error) {
 	}()
 	defer func() { stopRoutines(); <-routineDone }()
 	if companion {
-		// 桌面阶段不安装浏览器和系统字体。原有 /api/v1 仍等待引导，桌面接口可以立即使用。
+		// 桌面阶段不安装浏览器和系统字体。工作空间接口不依赖引导完成，其余业务仍等待引导。
 		logger.Info("桌面配套模式，跳过主机引导", "addr", cfg.Addr)
 		close(bootstrapDone)
 	} else {

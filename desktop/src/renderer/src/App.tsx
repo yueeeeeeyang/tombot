@@ -80,6 +80,27 @@ function WorkspaceApp() {
     error: settingsError,
   } = useServerSettings()
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
+  const [liveReply, setLiveReply] = useState<{ agentId: string; content: string }>()
+
+  function startDelivery(agentId: string, messageId: string, quietWhenUnconfigured: boolean): void {
+    if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
+      setAgentActivity(agentId, 'working')
+    }
+    let processLine = ''
+    let reply = ''
+    void deliver(agentId, messageId, (streamEvent) => {
+      if (!settingsDraft.isStreaming) return
+      if (streamEvent.type === 'process') processLine = streamEvent.text
+      else reply += streamEvent.text
+      const content = [processLine, reply].filter((part) => part !== '').join('\n')
+      setLiveReply({ agentId, content })
+    }).then((result) => {
+      setLiveReply(undefined)
+      setAgentActivity(agentId, 'idle')
+      if (result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) return
+      if (result.message) setNotice(result.message)
+    })
+  }
   const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
   const [returnToRecruit, setReturnToRecruit] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
@@ -320,7 +341,24 @@ function WorkspaceApp() {
       <div className="chat-stage">
         <ChatPanel
           key={agent.id}
-          agent={agent}
+          agent={
+            liveReply?.agentId === agent.id
+              ? {
+                  ...agent,
+                  messages: [
+                    ...agent.messages,
+                    {
+                      id: 'live-reply',
+                      role: 'assistant',
+                      content: liveReply.content,
+                      createdAt: new Date().toISOString(),
+                      status: 'sent',
+                      reactions: [],
+                    },
+                  ],
+                }
+              : agent
+          }
           isBlocked={isBlocked}
           isDetailsOpen={isCatPanelOpen}
           onDraft={(draft) =>
@@ -335,15 +373,7 @@ function WorkspaceApp() {
                 saveMessage(previous, agent.id, messageId, new Date().toISOString(), replyToId),
               )
               if (!saved) return false
-              if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
-                setAgentActivity(agent.id, 'working')
-              }
-              void deliver(agent.id, messageId).then((result) => {
-                setAgentActivity(agent.id, 'idle')
-                if (result.code && result.code !== 'MODEL_NOT_READY' && result.message) {
-                  setNotice(result.message)
-                }
-              })
+              startDelivery(agent.id, messageId, true)
               return true
             } catch (failure) {
               setNotice((failure as Error).message)
@@ -371,13 +401,7 @@ function WorkspaceApp() {
             })
           }
           onRetry={(messageId) => {
-            if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
-              setAgentActivity(agent.id, 'working')
-            }
-            void deliver(agent.id, messageId).then((result) => {
-              setAgentActivity(agent.id, 'idle')
-              if (result.message) setNotice(result.message)
-            })
+            startDelivery(agent.id, messageId, false)
           }}
           onDetails={() => setCatPanelOpen((open) => !open)}
           onNotice={setNotice}
@@ -397,6 +421,17 @@ function WorkspaceApp() {
                 commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
               })
             }
+            onConnectComputer={() => {
+              const open = window.desktop?.backend.openComputer
+              if (!open) return
+              void open(agent.id)
+                .then((url) => {
+                  runAction(() => {
+                    commit((previous) => setAgentComputerUrl(previous, agent.id, url))
+                  })
+                })
+                .catch((failure: Error) => setNotice(failure.message))
+            }}
             onExport={() => setOpenDialog('share')}
           />
         )}

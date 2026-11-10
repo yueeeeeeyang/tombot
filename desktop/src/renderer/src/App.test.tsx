@@ -259,9 +259,20 @@ describe('客户端交互', () => {
     await chooseOption(user, '模型供应商', '自定义（兼容 OpenAI）')
     const apiKey = screen.getByLabelText('API 密钥')
     expect(apiKey).toBeEnabled()
-    fireEvent.change(apiKey, { target: { value: 'desktop-test-key' } })
-    expect(JSON.stringify(localStorage)).not.toContain('desktop-test-key')
-    expect(memoryBackend.trySettingsSync().hasApiKey).toBe(true)
+    const savedDrafts: Array<Record<string, unknown>> = []
+    const saveSettings = memoryBackend.saveSettings.bind(memoryBackend)
+    memoryBackend.saveSettings = (draft, key) => {
+      savedDrafts.push({ ...draft })
+      return saveSettings(draft, key)
+    }
+    try {
+      fireEvent.change(apiKey, { target: { value: 'desktop-test-key' } })
+      expect(JSON.stringify(localStorage)).not.toContain('desktop-test-key')
+      expect(memoryBackend.trySettingsSync().hasApiKey).toBe(true)
+      expect(savedDrafts.at(-1)).not.toHaveProperty('hasApiKey')
+    } finally {
+      memoryBackend.saveSettings = saveSettings
+    }
     const address = screen.getByLabelText('API 地址')
     fireEvent.change(address, { target: { value: '无效地址' } })
     expect(screen.getByRole('alert')).toHaveTextContent('完整的 HTTP 或 HTTPS')

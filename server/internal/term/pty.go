@@ -374,6 +374,10 @@ func (s *Session) Write(ctx context.Context, text string) error {
 	if !stopCancel() {
 		<-canceled
 	}
+	// 写期限和上下文期限是同一时刻。内核先返回超时时，上下文可能还没被标记完成，调用方就认不出取消。
+	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
+		<-operation.Done()
+	}
 	if err != nil || cancelErr != nil {
 		return errors.Join(err, cancelErr, operation.Err())
 	}

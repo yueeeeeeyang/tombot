@@ -1,4 +1,4 @@
-package desktop
+package service
 
 import (
 	"encoding/json"
@@ -98,8 +98,8 @@ type Artifact struct {
 	Preview   string `json:"preview,omitempty"`
 }
 
-// Settings 是设置页里除主题以外的选项。密钥不在这份 JSON 里。
-type Settings struct {
+// ModelForm 是设置页里除主题以外的选项。密钥不在这份 JSON 里。
+type ModelForm struct {
 	Language        string  `json:"language"`
 	Provider        string  `json:"provider"`
 	BaseURL         string  `json:"baseUrl"`
@@ -110,9 +110,9 @@ type Settings struct {
 	IsStreaming     bool    `json:"isStreaming"`
 }
 
-// SettingsView 是返回给界面的设置。hasApiKey 只说明是否保存过密钥。
-type SettingsView struct {
-	Settings
+// ModelFormView 是返回给界面的设置。hasApiKey 只说明是否保存过密钥。
+type ModelFormView struct {
+	ModelForm
 	HasAPIKey bool `json:"hasApiKey"`
 }
 
@@ -337,29 +337,29 @@ func SeedWorkspace() Workspace {
 	return workspace
 }
 
-// DefaultSettings 与桌面设置表单的初始值一致。
-func DefaultSettings() Settings {
-	return Settings{
+// DefaultModelForm 与桌面设置表单的初始值一致。
+func DefaultModelForm() ModelForm {
+	return ModelForm{
 		Language: "system", Provider: "openai", BaseURL: "", ModelName: "",
 		Temperature: 0.7, TopP: 1, MaxOutputTokens: "4096", IsStreaming: true,
 	}
 }
 
-// ParseSettings 校验设置表单。密钥由调用方单独处理，不能出现在设置 JSON 里。
-func ParseSettings(raw []byte) (Settings, error) {
+// ParseModelForm 校验设置表单。密钥由调用方单独处理，不能出现在设置 JSON 里。
+func ParseModelForm(raw []byte) (ModelForm, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	decoder.DisallowUnknownFields()
-	var settings Settings
+	var settings ModelForm
 	if err := decoder.Decode(&settings); err != nil {
-		return Settings{}, domain.NewError(400, "SETTINGS_INVALID", "模型设置格式无效")
+		return ModelForm{}, domain.NewError(400, "SETTINGS_INVALID", "模型设置格式无效")
 	}
-	if err := validateSettings(&settings); err != nil {
-		return Settings{}, err
+	if err := validateModelForm(&settings); err != nil {
+		return ModelForm{}, err
 	}
 	return settings, nil
 }
 
-func validateSettings(settings *Settings) error {
+func validateModelForm(settings *ModelForm) error {
 	switch settings.Language {
 	case "system", "zh-CN", "en":
 	default:
@@ -402,6 +402,6 @@ func parseTokenLimit(value string) (int, bool) {
 	return number, true
 }
 
-func modelReady(settings Settings) bool {
+func modelReady(settings ModelForm) bool {
 	return settings.BaseURL != "" && settings.ModelName != ""
 }

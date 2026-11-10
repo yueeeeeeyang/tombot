@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 type CallResult<T> = { ok: true; value: T } | { ok: false; code: string; message: string }
 
@@ -24,8 +24,19 @@ contextBridge.exposeInMainWorld(
       loadWorkspace: () => invoke('desktop:load-workspace'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
       importWorkspace: (workspace: unknown) => invoke('desktop:import-workspace', workspace),
-      deliverMessage: (agentId: string, messageId: string) =>
-        invoke('desktop:deliver', { agentId, messageId }),
+      deliverMessage: (
+        agentId: string,
+        messageId: string,
+        onEvent?: (event: { type: string; text: string }) => void,
+      ) => {
+        const listener = (_event: IpcRendererEvent, payload: { type: string; text: string }) =>
+          onEvent?.(payload)
+        ipcRenderer.on('desktop:stream-event', listener)
+        return invoke('desktop:deliver', { agentId, messageId }).finally(() => {
+          ipcRenderer.removeListener('desktop:stream-event', listener)
+        })
+      },
+      openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
       loadSettings: () => invoke('desktop:load-settings'),
       saveSettings: (draft: unknown, apiKey: string) =>
         invoke('desktop:save-settings', { draft, apiKey }),

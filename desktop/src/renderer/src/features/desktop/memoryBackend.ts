@@ -66,7 +66,15 @@ export class MemoryBackend implements DesktopBackend {
     return workspace
   }
 
-  async deliverMessage(agentId: string, messageId: string): Promise<DeliveryResult> {
+  openComputer(): Promise<string> {
+    return Promise.resolve('http://127.0.0.1:9/api/v1/computer/view?agent=memory&ticket=memory')
+  }
+
+  async deliverMessage(
+    agentId: string,
+    messageId: string,
+    onEvent?: (event: { type: string; text: string }) => void,
+  ): Promise<DeliveryResult> {
     const agent = this.workspace.agents.find((item) => item.id === agentId)
     const message = agent?.messages.find((item) => item.id === messageId)
     if (!agent || !message || message.role !== 'user') {
@@ -76,6 +84,8 @@ export class MemoryBackend implements DesktopBackend {
     if (!this.settings.baseUrl.trim() || !this.settings.modelName.trim()) {
       return { code: 'MODEL_NOT_READY', message: modelNotReady }
     }
+    onEvent?.({ type: 'process', text: '正在思考' })
+    onEvent?.({ type: 'delta', text: '内存测试回复' })
     const sent: ChatMessage = {
       ...message,
       status: 'sent',

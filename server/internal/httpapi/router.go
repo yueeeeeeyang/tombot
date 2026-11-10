@@ -20,7 +20,6 @@ import (
 	"io.yueyang/tom/internal/agent"
 	"io.yueyang/tom/internal/auth"
 	"io.yueyang/tom/internal/config"
-	"io.yueyang/tom/internal/desktop"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/infra/bus"
 	"io.yueyang/tom/internal/infra/ids"
@@ -60,7 +59,7 @@ type Server struct {
 	Metrics             *system.Monitor
 	Config              config.Config
 	Auth                *auth.Service
-	Desktop             *desktop.Service
+	Workspace           *service.Service
 	Provision           *provision.Provisioner
 	Bus                 *bus.Bus
 	Key                 []byte
@@ -77,7 +76,6 @@ func (s *Server) Handler() http.Handler {
 	}
 	router := chi.NewRouter()
 	router.Use(s.middleware)
-	router.Route("/api/desktop/v1", s.desktopRoutes)
 	router.Get("/health", s.healthPage)
 	router.Get("/api/v1/health", s.healthJSON)
 	router.Route("/api/v1", func(r chi.Router) {
@@ -86,11 +84,12 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/bootstrap/retry", s.maintainBootstrap(false))
 		r.Post("/bootstrap/repair", s.maintainBootstrap(false))
 		r.Post("/bootstrap/reset", s.maintainBootstrap(true))
+		r.Get("/auth/status", s.authStatus)
+		r.Post("/auth/setup", s.setup)
+		r.Post("/auth/login", s.login)
+		s.workspaceRoutes(r)
 		r.Group(func(r chi.Router) {
 			r.Use(s.ready)
-			r.Get("/auth/status", s.authStatus)
-			r.Post("/auth/setup", s.setup)
-			r.Post("/auth/login", s.login)
 			r.Group(func(r chi.Router) {
 				r.Use(s.authenticate)
 				s.configurationRoutes(r)
@@ -227,48 +226,44 @@ func (s *Server) authStatus(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) setup(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Password string `json:"password"`
+		Password  string `json:"password"`
+		SetupCode string `json:"setupCode"`
 	}
 	if err := decode(w, r, &request); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if err := s.Auth.Setup(request.Password, r.Header.Get("X-Tom-Setup-Code")); err != nil {
+	if err := s.Auth.Setup(request.Password, strings.TrimSpace(request.SetupCode)); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	if err := s.Bots.EnsureDefault(r.Context()); err != nil {
-		s.fail(w, r, err)
-		return
+	if s.Bots != nil {
+		if err := s.Bots.EnsureDefault(r.Context()); err != nil {
+			s.fail(w, r, err)
+			return
+		}
 	}
 	s.Logger.Info("管理员初始化完成", "request_id", r.Context().Value(requestKey))
 	s.respond(w, r, 201, map[string]bool{"initialized": true})
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Password string `json:"password"`
-		Device   struct {
-			Name      string `json:"name"`
-			Platform  string `json:"platform"`
-			PushToken string `json:"push_token,omitempty"`
-		} `json:"device"`
+		Password   string `json:"password"`
+		DeviceName string `json:"deviceName"`
+		Platform   string `json:"platform"`
 	}
 	if err := decode(w, r, &request); err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	// 初始化密码已经提交但工作区准备失败时，在签发设备凭据之前重试一次性助手准备。
-	if s.Auth.Initialized() {
+	if s.Bots != nil && s.Auth.Initialized() {
 		if err := s.Bots.EnsureDefault(r.Context()); err != nil {
 			s.fail(w, r, err)
 			return
 		}
 	}
-	var push *auth.PushRegistration
-	if request.Device.PushToken != "" {
-		push = &auth.PushRegistration{Token: request.Device.PushToken, Key: s.Key}
-	}
-	session, err := s.Auth.Login(r.Context(), request.Password, request.Device.Name, request.Device.Platform, push)
+	session, err := s.Auth.Login(r.Context(), request.Password, request.DeviceName, request.Platform, nil)
 	if err != nil {
 		s.fail(w, r, err)
 		return

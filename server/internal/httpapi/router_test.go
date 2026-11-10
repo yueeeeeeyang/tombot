@@ -159,7 +159,11 @@ func request(t *testing.T, handler http.Handler, method, path string, payload an
 func TestReadinessGateAndSetupContract(t *testing.T) {
 	server, _ := fixture(t, false)
 	handler := server.Handler()
-	for _, path := range []string{"/api/v1/auth/status", "/api/v1/devices", "/api/v1/bots"} {
+	status := request(t, handler, "GET", "/api/v1/auth/status", nil, nil)
+	if status.Code != 200 || !strings.Contains(status.Body.String(), `"initialized":false`) {
+		t.Fatalf("引导未完成时仍应能查看登录状态: %d %s", status.Code, status.Body.String())
+	}
+	for _, path := range []string{"/api/v1/devices", "/api/v1/bots"} {
 		response := request(t, handler, "GET", path, nil, nil)
 		if response.Code != 503 || !strings.Contains(response.Body.String(), "BOOTSTRAP_NOT_READY") {
 			t.Fatalf("就绪门禁失效: %s %d", path, response.Code)
@@ -168,18 +172,17 @@ func TestReadinessGateAndSetupContract(t *testing.T) {
 	server, code := fixture(t, true)
 	handler = server.Handler()
 	password := testkit.Random(t)
-	headers := map[string]string{"X-Tom-Setup-Code": code}
 	for _, extra := range []string{"provider", "model", "api_key"} {
-		response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password, extra: "unsupported"}, headers)
+		response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password, "setupCode": code, extra: "unsupported"}, nil)
 		if response.Code != 400 || server.Auth.Initialized() {
 			t.Fatalf("额外初始化字段被接受: %s", extra)
 		}
 	}
-	response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password}, headers)
+	response := request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password, "setupCode": code}, nil)
 	if response.Code != 201 {
 		t.Fatalf("初始化失败: %d %s", response.Code, response.Body.String())
 	}
-	response = request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password}, headers)
+	response = request(t, handler, "POST", "/api/v1/auth/setup", map[string]string{"password": password, "setupCode": code}, nil)
 	if response.Code != 409 {
 		t.Fatal("重复初始化没有返回冲突")
 	}
@@ -191,7 +194,7 @@ func TestDeviceAuthenticationRevocationAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	handler := server.Handler()
-	response := request(t, handler, "POST", "/api/v1/auth/login", map[string]any{"password": password, "device": map[string]string{"name": "测试桌面", "platform": "macos"}}, nil)
+	response := request(t, handler, "POST", "/api/v1/auth/login", map[string]any{"password": password, "deviceName": "测试桌面", "platform": "macos"}, nil)
 	if response.Code != 200 {
 		t.Fatal(response.Body.String())
 	}

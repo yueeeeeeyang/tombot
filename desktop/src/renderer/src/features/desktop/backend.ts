@@ -38,7 +38,12 @@ export interface DesktopBackend {
   loadWorkspace: () => Promise<WorkspaceSnapshot>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
   importWorkspace: (workspace: AppWorkspace) => AppWorkspace | Promise<AppWorkspace>
-  deliverMessage: (agentId: string, messageId: string) => Promise<DeliveryResult>
+  deliverMessage: (
+    agentId: string,
+    messageId: string,
+    onEvent?: (event: { type: string; text: string }) => void,
+  ) => Promise<DeliveryResult>
+  openComputer?: (agentId: string) => Promise<string>
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>
   saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>

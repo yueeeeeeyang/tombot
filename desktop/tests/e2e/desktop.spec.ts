@@ -6,6 +6,7 @@ import {
   type Page,
 } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -147,14 +148,14 @@ async function updateServerWorkspace(
   await expect
     .poll(() => window.evaluate(() => document.documentElement.dataset.workspaceSave ?? 'saved'))
     .toBe('saved')
-  const login = await fetch(`${companion.url}/api/desktop/v1/login`, {
+  const login = await fetch(`${companion.url}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
   })
   if (!login.ok) throw new Error(`登录服务失败：${login.status}`)
   const token = ((await login.json()) as { device_token: string }).device_token
-  const current = await fetch(`${companion.url}/api/desktop/v1/workspace`, {
+  const current = await fetch(`${companion.url}/api/v1/workspace`, {
     headers: { authorization: `Bearer ${token}` },
   })
   if (!current.ok) throw new Error(`读取工作空间失败：${current.status}`)
@@ -178,7 +179,7 @@ async function updateServerWorkspace(
     }
   }
   mutate(snapshot.workspace)
-  const saved = await fetch(`${companion.url}/api/desktop/v1/workspace`, {
+  const saved = await fetch(`${companion.url}/api/v1/workspace`, {
     method: 'PUT',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
     body: JSON.stringify(snapshot.workspace),
@@ -1435,3 +1436,159 @@ test('资料库按时间分组展示产物，电脑在没有地址时保持未�
   await panel.getByRole('button', { name: '保存地址', exact: true }).click()
   await expect(panel.getByRole('alert')).toContainText('HTTP 或 HTTPS')
 })
+
+test('连接电脑使用这只猫咪的工作区，断开后回到未连接', async () => {
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
+  const panel = window.getByRole('complementary', { name: '小黑' })
+  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await panel.getByRole('button', { name: '连接电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('运行中')
+  await expect(panel.getByTitle('小黑的远端电脑')).toBeVisible()
+  const view = window.frameLocator('[title="小黑的远端电脑"]')
+  await expect(view.getByRole('heading', { name: '引导' })).toBeVisible()
+  await expect(view.getByText('尚未开始')).toBeVisible()
+  await expect(view.getByRole('heading', { name: '文件' })).toBeVisible()
+  await expect(view.getByRole('heading', { name: '终端' })).toBeVisible()
+  await view.locator('body').screenshot({ path: `${artifacts}/computer-view.png` })
+  await window.screenshot({ path: `${artifacts}/computer-connected.png`, scale: 'css' })
+  await panel.getByRole('button', { name: '全屏查看', exact: true }).click()
+  await expect(panel.getByRole('button', { name: '还原', exact: true })).toBeVisible()
+  await panel.getByRole('button', { name: '断开', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await window.screenshot({ path: `${artifacts}/computer-disconnected.png`, scale: 'css' })
+})
+
+test('流式开关打开时回复逐段出现，关闭时完成后一次出现', async () => {
+  test.setTimeout(120_000)
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const model = await startFixtureModel([
+    ['你', '好'],
+    ['甲', '乙'],
+  ])
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await expect(window.getByRole('switch', { name: /流式响应/ })).toBeChecked()
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', true)
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('打个招呼')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('你')
+    await window.screenshot({ path: `${artifacts}/stream-in-progress.png`, scale: 'css' })
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('你好')
+
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('switch', { name: /流式响应/ }).click()
+    await expect(window.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', false)
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('再来一次')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    const started = Date.now()
+    let sawPartial = false
+    while (Date.now() - started < 1_200) {
+      const texts = await window.locator('.message-text').allTextContents()
+      if (texts.some((text) => text.includes('甲') && !text.includes('甲乙'))) sawPartial = true
+      await window.waitForTimeout(100)
+    }
+    expect(sawPartial).toBe(false)
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('甲乙')
+    await expect(window.getByRole('alert')).toHaveCount(0)
+  } finally {
+    await model.close()
+  }
+})
+
+/** 等设置写进服务。主进程的请求不会出现在页面网络记录里。 */
+async function waitForModel(modelName: string, isStreaming: boolean): Promise<void> {
+  const login = await fetch(`${companion.url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
+  })
+  if (!login.ok) throw new Error(`登录服务失败：${login.status}`)
+  const token = ((await login.json()) as { device_token: string }).device_token
+  await expect
+    .poll(
+      async () => {
+        const response = await fetch(`${companion.url}/api/v1/model-settings`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) return ''
+        const body = (await response.json()) as { modelName?: string; isStreaming?: boolean }
+        return body.modelName === modelName && body.isStreaming === isStreaming ? 'ready' : ''
+      },
+      { timeout: 15_000 },
+    )
+    .toBe('ready')
+}
+
+/** 按 OpenAI 兼容流式分两段返回。两段之间留出时间，方便截到进行中的回复。 */
+function startFixtureModel(
+  pairs: Array<[string, string]>,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  let index = 0
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          request.on('end', () => resolve())
+          request.on('error', reject)
+          request.resume()
+        })
+        if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
+          response.writeHead(404).end()
+          return
+        }
+        const pair = pairs[Math.min(index, pairs.length - 1)] ?? ['', '']
+        index += 1
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        })
+        response.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: pair[0] } }] })}\n\n`,
+        )
+        await new Promise((resolve) => setTimeout(resolve, 1_600))
+        response.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: pair[1] }, finish_reason: 'stop' }] })}\n\n`,
+        )
+        response.write('data: [DONE]\n\n')
+        response.end()
+      } catch {
+        response.destroy()
+      }
+    })()
+  })
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型端口没有打开'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+          new Promise((done, fail) => {
+            server.close((error) => (error ? fail(error) : done()))
+          }),
+      })
+    })
+    server.on('error', reject)
+  })
+}

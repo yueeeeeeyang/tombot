@@ -1,4 +1,4 @@
-import { app, ipcMain } from 'electron'
+import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -75,7 +75,7 @@ async function call(
   await loadToken()
   let response: Response
   try {
-    response = await fetch(`${serverUrl()}/api/desktop/v1${path}`, {
+    response = await fetch(`${serverUrl()}/api/v1${path}`, {
       method,
       headers: {
         'content-type': 'application/json',
@@ -98,7 +98,13 @@ async function call(
   }
   if (!response.ok) {
     const code = payload.error?.code ?? 'REQUEST_FAILED'
-    throw Object.assign(new Error(codeMessages[code] ?? '服务暂时无法完成这个操作。'), { code })
+    const serverMessage = payload.error?.message
+    const message =
+      codeMessages[code] ??
+      (serverMessage && /[\u4e00-\u9fff]/.test(serverMessage)
+        ? serverMessage
+        : '服务暂时无法完成这个操作。')
+    throw Object.assign(new Error(message), { code })
   }
   return payload
 }
@@ -115,7 +121,7 @@ async function handle<T>(task: () => Promise<T>): Promise<CallResult<T>> {
 export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:session', () =>
     handle(async () => {
-      const status = (await call('GET', '/session')) as {
+      const status = (await call('GET', '/auth/status')) as {
         initialized: boolean
         authenticated: boolean
       }
@@ -128,7 +134,9 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:setup', (_event, input: { setupCode: string; password: string }) =>
-    handle(() => call('POST', '/setup', { setupCode: input.setupCode, password: input.password })),
+    handle(() =>
+      call('POST', '/auth/setup', { setupCode: input.setupCode, password: input.password }),
+    ),
   )
   ipcMain.handle('desktop:login', (_event, password: string) => handle(() => login(password)))
   ipcMain.handle('desktop:load-workspace', () => handle(() => call('GET', '/workspace')))
@@ -143,10 +151,10 @@ export function registerDesktopIpc(): void {
       return snapshot.workspace
     }),
   )
-  ipcMain.handle('desktop:deliver', (_event, input: { agentId: string; messageId: string }) =>
+  ipcMain.handle('desktop:deliver', (event, input: { agentId: string; messageId: string }) =>
     handle(async () => {
       try {
-        return await call('POST', '/messages/deliver', input, 70_000)
+        return await readStream(event, input)
       } catch (error) {
         const coded = error as { code?: string; message?: string }
         if (coded.code === 'MODEL_NOT_READY') {
@@ -156,21 +164,101 @@ export function registerDesktopIpc(): void {
       }
     }),
   )
-  ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/settings')))
+  ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
+  ipcMain.handle('desktop:computer', (_event, agentId: string) =>
+    handle(async () => {
+      const result = (await call('POST', '/computer', { agentId })) as { url: string }
+      return result.url
+    }),
+  )
   ipcMain.handle(
     'desktop:save-settings',
     (_event, input: { draft: Record<string, unknown>; apiKey: string }) =>
-      handle(() =>
-        call('PUT', '/settings', {
-          ...input.draft,
+      handle(() => {
+        const draft = input.draft
+        return call('PUT', '/model-settings', {
+          language: draft.language,
+          provider: draft.provider,
+          baseUrl: draft.baseUrl,
+          modelName: draft.modelName,
+          temperature: draft.temperature,
+          topP: draft.topP,
+          maxOutputTokens: draft.maxOutputTokens,
+          isStreaming: draft.isStreaming,
           ...(input.apiKey ? { apiKey: input.apiKey } : {}),
-        }),
-      ),
+        })
+      }),
   )
 }
 
+async function readStream(
+  event: IpcMainInvokeEvent,
+  input: { agentId: string; messageId: string },
+): Promise<unknown> {
+  await loadToken()
+  const response = await fetch(`${serverUrl()}/api/v1/messages/stream`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(input),
+    signal: AbortSignal.timeout(90_000),
+  })
+  const type = response.headers.get('content-type') ?? ''
+  if (!type.includes('text/event-stream')) {
+    const text = await response.text()
+    const payload = text
+      ? (JSON.parse(text) as { error?: { code?: string; message?: string } })
+      : {}
+    if (!response.ok) {
+      const code = payload.error?.code ?? 'REQUEST_FAILED'
+      throw Object.assign(new Error(codeMessages[code] ?? '服务暂时无法完成这个操作。'), { code })
+    }
+    return payload
+  }
+  const reader = response.body?.getReader()
+  if (!reader)
+    throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let donePayload: unknown
+  const push = async (block: string) => {
+    const name = /^event: (\S+)/m.exec(block)?.[1]
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6))
+      .join('\n')
+    if (!name || !data) return
+    const parsed = JSON.parse(data) as { text?: string; code?: string; message?: string }
+    if (name === 'delta' || name === 'process') {
+      event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
+    }
+    if (name === 'done') donePayload = parsed
+    if (name === 'error') {
+      throw Object.assign(new Error(parsed.message ?? 'agent 运行失败。'), {
+        code: parsed.code ?? 'MODEL_FAILED',
+      })
+    }
+  }
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) await push(block)
+  }
+  if (buffer.trim()) await push(buffer)
+  if (!donePayload)
+    throw Object.assign(new Error('agent 没有返回结果。'), { code: 'RESPONSE_INVALID' })
+  return donePayload
+}
+
 async function login(password: string): Promise<void> {
-  const session = (await call('POST', '/login', {
+  const session = (await call('POST', '/auth/login', {
     password,
     deviceName: 'TomBot 桌面',
     platform: devicePlatform(),

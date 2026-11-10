@@ -273,7 +273,7 @@ function ModelSettings({
           </div>
           <div className="setting-row">
             <span className="setting-label" id="streaming-label">
-              流式响应<small>偏好会保存，回复仍在完成后一次出现</small>
+              流式响应<small>开启后逐段出现，关闭后在完成后一次出现</small>
             </span>
             <button
               type="button"
