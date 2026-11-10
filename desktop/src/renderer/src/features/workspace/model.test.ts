@@ -7,10 +7,15 @@ import {
   MAX_AGENTS,
   MAX_MESSAGE_LENGTH,
   MAX_MESSAGES,
+  replyExcerpt,
+  REPLY_EXCERPT_LENGTH,
   saveMessage,
   searchAgents,
+  toggleReaction,
+  toModelTranscript,
   updateDraft,
-  workspaceSchema,
+  currentWorkspaceSchema,
+  type ChatMessage,
   type NewAgent,
 } from './model'
 
@@ -25,7 +30,8 @@ const timestamp = '2026-11-09T07:00:00.000Z'
 describe('工作空间领域规则', () => {
   it('初始工作空间包含独立助手，没有伪造消息', () => {
     const workspace = createWorkspace()
-    expect(workspaceSchema.safeParse(workspace).success).toBe(true)
+    expect(currentWorkspaceSchema.safeParse(workspace).success).toBe(true)
+    expect(workspace.version).toBe(3)
     expect(workspace.agents).toHaveLength(8)
     expect(new Set(workspace.agents.map((agent) => agent.avatar)).size).toBe(8)
     expect(workspace.agents.every((agent) => agent.messages.length === 0)).toBe(true)
@@ -44,7 +50,7 @@ describe('工作空间领域规则', () => {
     for (const avatar of ['', 'black', 'https://example.test/avatar.png', WORKSPACE_AVATAR.id]) {
       const workspace = createWorkspace()
       expect(
-        workspaceSchema.safeParse({
+        currentWorkspaceSchema.safeParse({
           ...workspace,
           agents: [{ ...workspace.agents[0], avatar }],
         }).success,
@@ -115,8 +121,11 @@ describe('工作空间领域规则', () => {
     const workspace = updateDraft(createWorkspace(), 'assistant', '尚未保存')
     workspace.agents[0]!.messages = Array.from({ length: MAX_MESSAGES }, (_, index) => ({
       id: `message-${index}`,
+      role: 'user',
       content: '内容',
       createdAt: timestamp,
+      status: 'unsent',
+      reactions: [],
     }))
     expect(() => saveMessage(workspace, 'assistant', 'overflow', timestamp)).toThrow('上限')
     expect(workspace.agents[0]?.draft).toBe('尚未保存')
@@ -157,10 +166,157 @@ describe('工作空间领域规则', () => {
 
   it('拒绝损坏的活动助手引用和重复标识', () => {
     expect(
-      workspaceSchema.safeParse({ ...createWorkspace(), activeAgentId: 'missing' }).success,
+      currentWorkspaceSchema.safeParse({ ...createWorkspace(), activeAgentId: 'missing' }).success,
     ).toBe(false)
     const workspace = createWorkspace()
     workspace.agents[1]!.id = 'assistant'
-    expect(workspaceSchema.safeParse(workspace).success).toBe(false)
+    expect(currentWorkspaceSchema.safeParse(workspace).success).toBe(false)
+  })
+
+  it('保存回复时记下原文摘要，目标丢失或空白输入不会改动草稿', () => {
+    const workspace = saveMessage(
+      updateDraft(createWorkspace(), 'assistant', '原来的想法\n还没说完'),
+      'assistant',
+      'message-one',
+      timestamp,
+    )
+    const replied = saveMessage(
+      updateDraft(workspace, 'assistant', '接着说'),
+      'assistant',
+      'message-two',
+      timestamp,
+      'message-one',
+    )
+    expect(replied.agents[0]?.messages[1]).toMatchObject({
+      role: 'user',
+      status: 'unsent',
+      content: '接着说',
+      reactions: [],
+      replyTo: { messageId: 'message-one', excerpt: '原来的想法 还没说完' },
+    })
+    expect(replied.agents[0]?.draft).toBe('')
+    expect(workspace.agents[0]?.messages).toHaveLength(1)
+    const pending = updateDraft(workspace, 'assistant', '找不到对象')
+    expect(() => saveMessage(pending, 'assistant', 'message-two', timestamp, 'missing')).toThrow(
+      '不存在',
+    )
+    expect(pending.agents[0]?.draft).toBe('找不到对象')
+  })
+
+  it('同一表情再次切换会取消，未知表情和缺失消息不会改动原会话', () => {
+    const workspace = saveMessage(
+      updateDraft(createWorkspace(), 'assistant', '一个想法'),
+      'assistant',
+      'message-one',
+      timestamp,
+    )
+    const reacted = toggleReaction(workspace, 'assistant', 'message-one', '👍')
+    expect(reacted.agents[0]?.messages[0]?.reactions).toEqual([{ emoji: '👍', count: 1 }])
+    expect(
+      toggleReaction(reacted, 'assistant', 'message-one', '👍').agents[0]?.messages[0]?.reactions,
+    ).toEqual([])
+    expect(workspace.agents[0]?.messages[0]?.reactions).toEqual([])
+    const counted = toggleReaction(workspace, 'assistant', 'message-one', '👍')
+    counted.agents[0]!.messages[0]!.reactions = [{ emoji: '👍', count: 3 }]
+    expect(
+      toggleReaction(counted, 'assistant', 'message-one', '👍').agents[0]?.messages[0]?.reactions,
+    ).toEqual([])
+    expect(() => toggleReaction(workspace, 'assistant', 'message-one', '💩')).toThrow('不支持')
+    expect(() => toggleReaction(workspace, 'assistant', 'missing', '👍')).toThrow('消息不存在')
+    expect(() => toggleReaction(workspace, 'missing', 'message-one', '👍')).toThrow('助手不存在')
+    expect(workspace.agents[0]?.messages[0]?.reactions).toEqual([])
+  })
+
+  it('拒绝重复表情和回复自己的消息', () => {
+    const workspace = createWorkspace()
+    const invalid = {
+      ...workspace.agents[0]!,
+      messages: [
+        {
+          id: 'message-one',
+          role: 'user' as const,
+          content: '内容',
+          createdAt: timestamp,
+          status: 'unsent' as const,
+          reactions: [
+            { emoji: '👍' as const, count: 1 },
+            { emoji: '👍' as const, count: 2 },
+          ],
+          replyTo: { messageId: 'message-one', excerpt: '内容' },
+        },
+      ],
+    }
+    expect(
+      currentWorkspaceSchema.safeParse({
+        ...workspace,
+        agents: [invalid, ...workspace.agents.slice(1)],
+      }).success,
+    ).toBe(false)
+  })
+
+  it('回复摘要按码点截断，模型上下文使用英文说明和仍在的原文', () => {
+    expect(replyExcerpt('第一行\n第二行')).toBe('第一行 第二行')
+    expect(replyExcerpt('😀'.repeat(REPLY_EXCERPT_LENGTH + 1))).toBe(
+      `${'😀'.repeat(REPLY_EXCERPT_LENGTH - 1)}…`,
+    )
+    const original: ChatMessage = {
+      id: 'origin',
+      role: 'assistant',
+      content: '完整的原先回复',
+      createdAt: timestamp,
+      status: 'sent',
+      reactions: [],
+    }
+    const reply: ChatMessage = {
+      id: 'reply',
+      role: 'user',
+      content: '我接着说',
+      createdAt: timestamp,
+      status: 'unsent',
+      reactions: [],
+      replyTo: { messageId: 'origin', excerpt: '完整的原先回复' },
+    }
+    const transcript = toModelTranscript([original, reply])
+    expect(transcript[0]).toEqual({ role: 'assistant', content: '完整的原先回复' })
+    expect(transcript[1]?.content).toContain('The user is replying to an earlier message.')
+    expect(transcript[1]?.content).toContain('Quoted message:\n完整的原先回复')
+    expect(transcript[1]?.content).toContain('Reply:\n我接着说')
+    const orphan = toModelTranscript([
+      { ...reply, replyTo: { messageId: 'gone', excerpt: '只剩摘要' } },
+    ])
+    expect(orphan[0]?.content).toContain('Quoted message:\n只剩摘要')
+    expect(orphan[0]?.content).not.toContain('完整的原先回复')
+    const assistantReply = toModelTranscript([
+      {
+        ...original,
+        replyTo: { messageId: 'reply', excerpt: '我接着说' },
+      },
+    ])
+    expect(assistantReply[0]?.content).toContain(
+      'This assistant message replies to an earlier message.',
+    )
+  })
+
+  it('导出保留回复摘要、表情和失败状态', () => {
+    const workspace = saveMessage(
+      updateDraft(createWorkspace(), 'assistant', '已存内容'),
+      'assistant',
+      'message-one',
+      timestamp,
+    )
+    workspace.agents[0]!.messages[0] = {
+      ...workspace.agents[0]!.messages[0]!,
+      status: 'failed',
+      reactions: [
+        { emoji: '👍', count: 2 },
+        { emoji: '🎉', count: 1 },
+      ],
+      replyTo: { messageId: 'origin', excerpt: '上一句' },
+    }
+    const markdown = exportConversation(workspace.agents[0]!)
+    expect(markdown).toContain('发送失败')
+    expect(markdown).toContain('> 上一句')
+    expect(markdown).toContain('表情：👍×2 🎉')
+    expect(markdown).toContain('已存内容')
   })
 })

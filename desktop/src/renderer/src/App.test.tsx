@@ -34,7 +34,8 @@ describe('客户端交互', () => {
     expect(avatar).toHaveAttribute('data-pose', 'idle')
     await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '只是草稿')
     await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
-    expect(screen.getByText(/· 未发送/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
+    expect(screen.queryByText(/· 未发送/)).not.toBeInTheDocument()
     expect(avatar).toHaveAttribute('data-pose', 'idle')
     expect(
       screen.getByRole('button', { name: '查看小黑资料' }).querySelector('.avatar'),
@@ -74,7 +75,8 @@ describe('客户端交互', () => {
     await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '一起设计客户端')
     await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
     expect(within(screen.getByRole('log')).getByText('一起设计客户端')).toBeInTheDocument()
-    expect(screen.getByText(/· 未发送/)).toBeInTheDocument()
+    expect(screen.queryByText(/· 未发送/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('')
     first.unmount()
     render(<App />)
