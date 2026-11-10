@@ -445,7 +445,7 @@ export function exportConversation(agent: Agent): string {
     return `### ${new Date(message.createdAt).toLocaleString('zh-CN')} · ${speaker} · ${status}\n\n${quote}${message.content}${reactions}`
   })
   return [
-    `# ${agent.name}\n\nTomBot 本地草稿 · 尚未发送至服务端`,
+    `# ${agent.name}\n\nTomBot 草稿 · 尚未交给模型`,
     ...messages,
     ...(agent.draft.trim() ? [`### 正在编辑\n\n${agent.draft}`] : []),
   ].join('\n\n')

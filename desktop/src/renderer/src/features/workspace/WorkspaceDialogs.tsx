@@ -132,7 +132,7 @@ export function RecruitCatDialog({
         <button className="primary-button" type="submit" disabled={modelOptions.length === 0}>
           招聘猫咪
         </button>
-        <p className="form-footnote">猫咪资料保存在本机，模型选择暂仅预览。</p>
+        <p className="form-footnote">猫咪资料会保存到服务。这里的模型名称只决定能否招聘。</p>
       </form>
     </Dialog>
   )
@@ -228,14 +228,14 @@ export function WorkspaceDialog({
         </div>
         <div>
           <strong>{messageCount}</strong>
-          <span>条本地草稿</span>
+          <span>条消息</span>
         </div>
       </div>
       <div className="workspace-status">
         <HardDrive size={18} />
         <div>
-          <strong>本地工作空间</strong>
-          <p>助手、消息与输入草稿保存在当前设备</p>
+          <strong>本机偏好</strong>
+          <p>主题、侧栏置顶和隐藏保存在当前设备</p>
         </div>
         <span>已启用</span>
       </div>
@@ -243,9 +243,9 @@ export function WorkspaceDialog({
         <span className="connection-dot" />
         <div>
           <strong>服务端连接</strong>
-          <p>对话、文件上传与语音功能等待服务端接入</p>
+          <p>助手、消息和模型设置由服务保存。文件上传与语音仍不可用</p>
         </div>
-        <span>未连接</span>
+        <span>已连接</span>
       </div>
       {hiddenAgents.length > 0 && (
         <section className="workspace-hidden" aria-label="已隐藏的助手">

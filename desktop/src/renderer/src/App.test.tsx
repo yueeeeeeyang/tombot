@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { AGENT_ACTIVITY_EVENT } from './features/avatars/activity'
-import { loadWorkspace, STORAGE_KEY } from './features/workspace/storage'
+import { memoryBackend } from './features/desktop/memoryBackend'
+import { createWorkspace } from './features/workspace/model'
+import { STORAGE_KEY } from './features/workspace/storage'
 import {
   SIDEBAR_STORAGE_KEY,
   loadSidebarPreferences,
@@ -133,9 +135,9 @@ describe('客户端交互', () => {
     await user.type(nameInput, '创作搭档')
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '招聘猫咪' }))
     expect(screen.getByRole('textbox', { name: '给创作搭档发消息' })).toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.at(-1)?.name).toBe('创作搭档')
-    expect(loadWorkspace(localStorage).agents.at(-1)?.avatar).toBe('calico')
-    expect(loadWorkspace(localStorage).agents.at(-1)?.group).toBe('游戏开发')
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.name).toBe('创作搭档')
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.avatar).toBe('calico')
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.group).toBe('游戏开发')
     expect(
       screen.getByRole('button', { name: '查看创作搭档资料' }).querySelector('.avatar'),
     ).toHaveAttribute('data-avatar', 'calico')
@@ -249,13 +251,17 @@ describe('客户端交互', () => {
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
   })
 
-  it('模型表单支持参数预览、边界校验及栏目切换，凭据入口保持禁用', async () => {
+  it('模型表单支持参数校验、栏目切换，并把密钥交给服务而不是本地存储', async () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     await user.click(screen.getByRole('button', { name: '模型设置' }))
     await chooseOption(user, '模型供应商', '自定义（兼容 OpenAI）')
-    expect(screen.getByLabelText('API 密钥')).toBeDisabled()
+    const apiKey = screen.getByLabelText('API 密钥')
+    expect(apiKey).toBeEnabled()
+    fireEvent.change(apiKey, { target: { value: 'desktop-test-key' } })
+    expect(JSON.stringify(localStorage)).not.toContain('desktop-test-key')
+    expect(memoryBackend.trySettingsSync().hasApiKey).toBe(true)
     const address = screen.getByLabelText('API 地址')
     fireEvent.change(address, { target: { value: '无效地址' } })
     expect(screen.getByRole('alert')).toHaveTextContent('完整的 HTTP 或 HTTPS')
@@ -284,18 +290,62 @@ describe('客户端交互', () => {
 
   it('存储写入失败保留内存草稿并允许重试', () => {
     render(<App />)
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
-      throw new Error('写入失败')
-    })
+    memoryBackend.failSave = new Error(
+      '本地保存失败，当前内容仅保留在内存中。请释放磁盘空间后重试保存。',
+    )
     fireEvent.change(screen.getByRole('textbox', { name: '给小黑发消息' }), {
       target: { value: '不能丢失的想法' },
     })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败')
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('不能丢失的想法')
-    setItem.mockRestore()
+    memoryBackend.failSave = null
     fireEvent.click(screen.getByRole('button', { name: '重试保存' }))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents[0]?.draft).toBe('不能丢失的想法')
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('不能丢失的想法')
+  })
+
+  it('把本机旧工作空间导入尚未改动的服务', () => {
+    const legacy = createWorkspace()
+    legacy.agents[0]!.draft = '旧草稿'
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy))
+    render(<App />)
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('旧草稿')
+    expect(memoryBackend.tryWorkspaceSync().pristine).toBe(false)
+  })
+
+  it('未初始化时先核对初始化码和密码，通过后才进入工作空间', async () => {
+    memoryBackend.phase = 'setup'
+    const user = userEvent.setup()
+    render(<App />)
+    expect(screen.getByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: '给小黑发消息' })).not.toBeInTheDocument()
+    await user.type(screen.getByLabelText('初始化码'), memoryBackend.setupCode)
+    await user.type(screen.getByLabelText('密码'), '短')
+    await user.type(screen.getByLabelText('确认密码'), '短')
+    await user.click(screen.getByRole('button', { name: '完成初始化' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('至少 12')
+    await user.clear(screen.getByLabelText('密码'))
+    await user.clear(screen.getByLabelText('确认密码'))
+    const password = '口'.repeat(12)
+    await user.type(screen.getByLabelText('密码'), password)
+    await user.type(screen.getByLabelText('确认密码'), password)
+    await user.click(screen.getByRole('button', { name: '完成初始化' }))
+    expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+  })
+
+  it('已初始化时要验证密码，错误密码不会打开工作空间', async () => {
+    memoryBackend.phase = 'login'
+    memoryBackend.password = '口'.repeat(12)
+    const user = userEvent.setup()
+    render(<App />)
+    expect(screen.getByRole('heading', { name: '验证密码' })).toBeInTheDocument()
+    await user.type(screen.getByLabelText('密码'), '错'.repeat(12))
+    await user.click(screen.getByRole('button', { name: '进入工作空间' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('密码不正确')
+    await user.clear(screen.getByLabelText('密码'))
+    await user.type(screen.getByLabelText('密码'), '口'.repeat(12))
+    await user.click(screen.getByRole('button', { name: '进入工作空间' }))
+    expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
   })
 
   it('存储损坏时禁止输入，不覆盖原内容', () => {
@@ -428,9 +478,10 @@ describe('客户端交互', () => {
     expect(screen.getByRole('menu', { name: '移至分组' })).toBeInTheDocument()
     await user.click(screen.getByRole('menuitemradio', { name: '未分组' }))
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'producer')?.group).toBe(
-      '未分组',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'producer')
+        ?.group,
+    ).toBe('未分组')
 
     openAgentMenu('游戏负责人 + 策划')
     await user.click(screen.getByRole('menuitem', { name: '重命名猫咪' }))
@@ -456,9 +507,10 @@ describe('客户端交互', () => {
     expect(screen.queryByRole('textbox', { name: '猫咪名称' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '制作人' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'producer')?.name).toBe(
-      '制作人',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'producer')
+        ?.name,
+    ).toBe('制作人')
 
     await user.click(screen.getByRole('button', { name: '制作人' }))
     expect(screen.getByRole('textbox', { name: '给制作人发消息' })).toBeInTheDocument()
@@ -472,7 +524,9 @@ describe('客户端交互', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '制作人' })).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.some((item) => item.id === 'producer')).toBe(false)
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.some((item) => item.id === 'producer'),
+    ).toBe(false)
     expect(loadSidebarPreferences(localStorage).pinnedIds).toEqual([])
     expect(
       within(document.querySelector('.pinned-area') as HTMLElement).getAllByRole('button'),
@@ -527,9 +581,10 @@ describe('客户端交互', () => {
     expect(groupInput).toHaveValue('新分组')
     const section = groupInput.closest('section') as HTMLElement
     expect(within(section).getByRole('button', { name: '游戏负责人 + 策划' })).toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'producer')?.group).toBe(
-      '新分组',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'producer')
+        ?.group,
+    ).toBe('新分组')
 
     await user.clear(groupInput)
     await user.type(groupInput, '制作组')
@@ -537,9 +592,10 @@ describe('客户端交互', () => {
     expect(screen.queryByRole('textbox', { name: '分组名称' })).not.toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '制作组' })).toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'producer')?.group).toBe(
-      '制作组',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'producer')
+        ?.group,
+    ).toBe('制作组')
 
     openAgentMenu('游戏程序')
     await user.click(screen.getByRole('menuitem', { name: '移至' }))
@@ -553,9 +609,10 @@ describe('客户端交互', () => {
     expect(screen.getByRole('textbox', { name: '分组名称' })).toHaveValue('制作组')
     await user.keyboard('{Escape}')
     expect(screen.getByRole('heading', { name: '新分组' })).toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'developer')?.group).toBe(
-      '新分组',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'developer')
+        ?.group,
+    ).toBe('新分组')
   })
 
   it('置顶猫咪在原位重命名，取消后恢复原名', async () => {
@@ -575,9 +632,10 @@ describe('客户端交互', () => {
     await user.type(pinnedInput, '程序猫')
     await user.keyboard('{Enter}')
     expect(within(pinnedArea).getByRole('button', { name: '程序猫' })).toBeInTheDocument()
-    expect(loadWorkspace(localStorage).agents.find((item) => item.id === 'developer')?.name).toBe(
-      '程序猫',
-    )
+    expect(
+      memoryBackend.tryWorkspaceSync().workspace.agents.find((item) => item.id === 'developer')
+        ?.name,
+    ).toBe('程序猫')
 
     fireEvent.contextMenu(within(pinnedArea).getByRole('button', { name: '程序猫' }), {
       clientX: 220,

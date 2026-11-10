@@ -119,7 +119,7 @@ export function CatSidePanel({
               options={catModelOptions()}
               onChange={onModelChange}
             />
-            <small>只保存在这台设备，不会连接模型服务。</small>
+            <small>选择会保存到服务。调用供应商时使用设置里的地址和模型名称。</small>
           </section>
           <button type="button" className="secondary-button cat-panel-export" onClick={onExport}>
             <Download size={15} />

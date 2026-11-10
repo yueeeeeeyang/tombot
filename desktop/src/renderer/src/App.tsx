@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
-import { installAgentActivityEvents } from './features/avatars/activity'
+import { installAgentActivityEvents, setAgentActivity } from './features/avatars/activity'
 import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
@@ -42,14 +42,25 @@ import { SearchDialog } from './features/search/SearchDialog'
 import { SettingsDialog } from './features/settings/SettingsDialog'
 import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
-import { createSettingsDraft, type SettingsSection } from './features/settings/settings'
+import { type SettingsSection } from './features/settings/settings'
+import { useServerSettings } from './features/settings/useServerSettings'
 import { getModelOptions } from './features/models/modelOptions'
+import { useSession } from './features/session/useSession'
+import { SessionGate } from './features/session/SessionGate'
 
 type OpenDialog = 'create' | 'search' | 'settings' | 'share' | 'workspace' | null
 
-/** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
+/** 未验证身份时只显示初始化或密码页，避免把预设工作空间当成已连接。 */
 export default function App() {
-  const { workspace, commit, error, isBlocked } = useWorkspace()
+  const session = useSession()
+  useTheme()
+  if (session.phase !== 'ready') return <SessionGate session={session} />
+  return <WorkspaceApp />
+}
+
+/** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
+function WorkspaceApp() {
+  const { workspace, commit, deliver, error, isBlocked, ready } = useWorkspace()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_WIDTH.default)
@@ -60,7 +71,14 @@ export default function App() {
   const [renamingAgentId, setRenamingAgentId] = useState<string>()
   const [editingGroupName, setEditingGroupName] = useState<string>()
   const [deletingAgentId, setDeletingAgentId] = useState<string>()
-  const [settingsDraft, setSettingsDraft] = useState(createSettingsDraft)
+  const {
+    draft: settingsDraft,
+    setDraft: setSettingsDraft,
+    apiKey,
+    setApiKey,
+    hasApiKey,
+    error: settingsError,
+  } = useServerSettings()
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
   const [returnToRecruit, setReturnToRecruit] = useState(false)
@@ -76,7 +94,7 @@ export default function App() {
   const hiddenAgents = workspace.agents.filter((candidate) =>
     preferences.hiddenIds.includes(candidate.id),
   )
-  const bannerMessage = error || themeError || sidebarError || notice
+  const bannerMessage = error || themeError || sidebarError || settingsError || notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
@@ -268,6 +286,14 @@ export default function App() {
     })
   }
 
+  if (!ready) {
+    return (
+      <main className="session-gate">
+        <p role="status">正在打开工作空间</p>
+      </main>
+    )
+  }
+
   return (
     <div
       className={`app-shell ${sidebarWidth === SIDEBAR_WIDTH.collapsed ? 'sidebar-is-collapsed' : ''} ${isResizing ? 'is-resizing' : ''}`}
@@ -304,15 +330,20 @@ export default function App() {
           }
           onSave={(replyToId) => {
             try {
-              commit((previous) =>
-                saveMessage(
-                  previous,
-                  agent.id,
-                  crypto.randomUUID(),
-                  new Date().toISOString(),
-                  replyToId,
-                ),
+              const messageId = crypto.randomUUID()
+              const saved = commit((previous) =>
+                saveMessage(previous, agent.id, messageId, new Date().toISOString(), replyToId),
               )
+              if (!saved) return false
+              if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
+                setAgentActivity(agent.id, 'working')
+              }
+              void deliver(agent.id, messageId).then((result) => {
+                setAgentActivity(agent.id, 'idle')
+                if (result.code && result.code !== 'MODEL_NOT_READY' && result.message) {
+                  setNotice(result.message)
+                }
+              })
               return true
             } catch (failure) {
               setNotice((failure as Error).message)
@@ -339,7 +370,15 @@ export default function App() {
               commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
             })
           }
-          onRetry={() => setNotice('服务端尚未接入，暂时无法重新发送。')}
+          onRetry={(messageId) => {
+            if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
+              setAgentActivity(agent.id, 'working')
+            }
+            void deliver(agent.id, messageId).then((result) => {
+              setAgentActivity(agent.id, 'idle')
+              if (result.message) setNotice(result.message)
+            })
+          }}
           onDetails={() => setCatPanelOpen((open) => !open)}
           onNotice={setNotice}
           onError={setNotice}
@@ -438,6 +477,9 @@ export default function App() {
           onSectionChange={setSettingsSection}
           draft={settingsDraft}
           onChange={setSettingsDraft}
+          apiKey={apiKey}
+          hasApiKey={hasApiKey}
+          onApiKeyChange={setApiKey}
         />
       )}
       {openDialog === 'workspace' && (

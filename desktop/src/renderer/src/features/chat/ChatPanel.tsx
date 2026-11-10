@@ -157,7 +157,7 @@ export function ChatPanel({
               </ul>
               <div className="local-note">
                 <span className="local-note-dot" />
-                当前为本地工作空间，消息会保存为草稿。连接服务端后，即可开始与助手对话。
+                消息会保存到服务。配置模型后，助手才会回复。
               </div>
             </div>
           </div>
