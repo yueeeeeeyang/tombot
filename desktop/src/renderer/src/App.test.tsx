@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { AGENT_ACTIVITY_EVENT } from './features/avatars/activity'
 import { memoryBackend } from './features/desktop/memoryBackend'
-import { createWorkspace } from './features/workspace/model'
+import { createWorkspace, emptyWorkspace } from './features/workspace/model'
 import { STORAGE_KEY } from './features/workspace/storage'
 import {
   SIDEBAR_STORAGE_KEY,
@@ -112,7 +112,9 @@ describe('客户端交互', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     await user.click(screen.getByRole('button', { name: '模型设置' }))
-    await user.type(screen.getByRole('textbox', { name: '模型名称' }), '写作模型')
+    fireEvent.change(screen.getByRole('textbox', { name: '模型名称' }), {
+      target: { value: '写作模型' },
+    })
     await user.click(screen.getByRole('button', { name: '关闭设置' }))
     await user.click(screen.getByRole('button', { name: '新建' }))
     await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
@@ -151,28 +153,35 @@ describe('客户端交互', () => {
     expect(screen.queryByRole('complementary', { name: '创作搭档' })).not.toBeInTheDocument()
   })
 
-  it('未配置模型时禁止招聘，可转到设置后返回且保留已填猫咪资料', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await user.click(screen.getByRole('button', { name: '新建' }))
-    await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
-    const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByRole('button', { name: '招聘猫咪' })).toBeDisabled()
-    expect(screen.getByRole('combobox', { name: '模型' })).toBeDisabled()
-    expect(screen.getByRole('combobox', { name: '模型' })).toHaveTextContent('暂无已配置模型')
-    await user.type(screen.getByRole('textbox', { name: '助手名称' }), '专属猫咪')
-    await user.click(screen.getByRole('button', { name: '布偶猫' }))
-    await user.click(screen.getByRole('button', { name: '前往模型设置' }))
-    await user.type(screen.getByRole('textbox', { name: '模型名称' }), 'my-custom-model')
-    await user.click(screen.getByRole('button', { name: '关闭设置' }))
-    expect(screen.getByRole('dialog', { name: '招聘猫咪' })).toBeInTheDocument()
-    expect(screen.getByRole('textbox', { name: '助手名称' })).toHaveValue('专属猫咪')
-    expect(screen.getByRole('button', { name: '布偶猫' })).toHaveAttribute('aria-pressed', 'true')
-    await chooseOption(user, '模型', 'my-custom-model')
-    expect(screen.getByRole('combobox', { name: '模型' })).toHaveTextContent('my-custom-model')
-    await user.click(screen.getByRole('combobox', { name: '模型' }))
-    expect(screen.getAllByRole('option')).toHaveLength(1)
-    expect(screen.queryByRole('option', { name: '跟随工作空间设置' })).not.toBeInTheDocument()
+  it('没有默认模型时停在初始化页，拉取成功后才能招聘第一只猫咪', async () => {
+    memoryBackend.reset()
+    memoryBackend.loadFixture({
+      workspace: emptyWorkspace(),
+      settings: { provider: 'deepseek', providerName: 'DeepSeek', baseUrl: '', modelName: '' },
+      apiKey: '',
+    })
+    try {
+      const user = userEvent.setup()
+      render(<App />)
+      expect(screen.getByRole('heading', { name: '配置默认模型' })).toBeInTheDocument()
+      expect(screen.queryByRole('heading', { name: '招聘第一只猫咪' })).not.toBeInTheDocument()
+      await user.type(screen.getByLabelText('API 密钥'), 'bad-key')
+      await user.click(screen.getByRole('button', { name: '拉取模型' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('API Key 验证失败')
+      await user.clear(screen.getByLabelText('API 密钥'))
+      await user.type(screen.getByLabelText('API 密钥'), 'good-key')
+      await user.click(screen.getByRole('button', { name: '拉取模型' }))
+      const next = screen.getByRole('button', { name: '继续' })
+      await waitFor(() => expect(next).toBeEnabled())
+      await user.click(next)
+      expect(await screen.findByRole('heading', { name: '招聘第一只猫咪' })).toBeInTheDocument()
+      await user.type(screen.getByRole('textbox', { name: '助手名称' }), '阿花')
+      await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
+      expect(screen.getByRole('textbox', { name: '给阿花发消息' })).toBeInTheDocument()
+      expect(screen.queryByText('good-key')).not.toBeInTheDocument()
+    } finally {
+      memoryBackend.reset()
+    }
   })
 
   it('搜索无结果有空状态，搜索结果可跳转', async () => {
@@ -203,7 +212,7 @@ describe('客户端交互', () => {
     await user.type(screen.getByRole('combobox', { name: '搜索内容' }), '模型')
     await user.keyboard('{Enter}')
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: '模型供应商' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '内置提供商' })).toBeInTheDocument()
   })
 
   it('搜索空结果及中文输入法确认不误触发导航', () => {
@@ -259,7 +268,7 @@ describe('客户端交互', () => {
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     await user.click(screen.getByRole('button', { name: '模型设置' }))
-    await chooseOption(user, '模型供应商', '自定义（兼容 OpenAI）')
+    await user.click(screen.getByRole('button', { name: '自定义提供商' }))
     const apiKey = screen.getByLabelText('API 密钥')
     expect(apiKey).toBeEnabled()
     const savedDrafts: Array<Record<string, unknown>> = []
@@ -280,25 +289,19 @@ describe('客户端交互', () => {
     fireEvent.change(address, { target: { value: '无效地址' } })
     expect(screen.getByRole('alert')).toHaveTextContent('完整的 HTTP 或 HTTPS')
     fireEvent.change(address, { target: { value: 'https://models.example.test/api' } })
-    fireEvent.change(screen.getByRole('slider', { name: '温度' }), { target: { value: '1.2' } })
-    fireEvent.change(screen.getByRole('slider', { name: 'Top P' }), { target: { value: '0.85' } })
-    await user.click(screen.getByRole('switch', { name: /流式响应/ }))
-    expect(screen.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
-    const outputLength = screen.getByRole('spinbutton', { name: /最大输出长度/ })
-    for (const value of ['', '0', '131073', '2.5']) {
-      fireEvent.change(outputLength, { target: { value } })
-      expect(screen.getByRole('alert')).toHaveTextContent('之间的整数')
-    }
-    fireEvent.change(outputLength, { target: { value: '131072' } })
+    expect(screen.queryByRole('slider', { name: '温度' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /流式响应/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '通用' }))
     await user.click(screen.getByRole('button', { name: '模型设置' }))
-    expect(screen.getByRole('combobox', { name: '模型供应商' })).toHaveTextContent(
-      '自定义（兼容 OpenAI）',
+    expect(screen.getByRole('button', { name: '自定义提供商' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     )
-    expect(screen.getByRole('slider', { name: '温度' })).toHaveValue('1.2')
-    expect(screen.getByRole('slider', { name: 'Top P' })).toHaveValue('0.85')
-    expect(screen.getByRole('spinbutton', { name: /最大输出长度/ })).toHaveValue(131072)
+    expect(screen.getByLabelText('API 地址')).toHaveValue('https://models.example.test/api')
+    expect(screen.queryByRole('combobox', { name: '提供商' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '内置提供商' }))
+    expect(screen.getByRole('combobox', { name: '提供商' })).toHaveTextContent('DeepSeek')
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
   })
 
@@ -318,13 +321,19 @@ describe('客户端交互', () => {
     expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('不能丢失的想法')
   })
 
-  it('把本机旧工作空间导入尚未改动的服务', () => {
+  it('本机旧档不会导入，侧栏显示已连接服务的主机名', () => {
+    memoryBackend.serverUrl = 'https://tom.example.com:8443'
     const legacy = createWorkspace()
     legacy.agents[0]!.draft = '旧草稿'
     localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy))
     render(<App />)
-    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('旧草稿')
-    expect(memoryBackend.tryWorkspaceSync().pristine).toBe(false)
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('')
+    expect(screen.queryByText('服务端已有工作空间，本机旧档没有导入。')).not.toBeInTheDocument()
+    expect(screen.queryByText('本地模式')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '我的工作空间' })).toHaveTextContent(
+      'tom.example.com:8443',
+    )
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('')
   })
 
   it('未初始化时先核对初始化码和密码，通过后才进入工作空间', async () => {
@@ -362,11 +371,11 @@ describe('客户端交互', () => {
     expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
   })
 
-  it('存储损坏时禁止输入，不覆盖原内容', () => {
+  it('损坏的本机旧档不会挡住服务端工作空间', () => {
     localStorage.setItem(STORAGE_KEY, '损坏内容')
     render(<App />)
-    expect(screen.getByRole('alert')).toHaveTextContent('原始内容已保留')
-    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeDisabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeEnabled()
     expect(localStorage.getItem(STORAGE_KEY)).toBe('损坏内容')
   })
 

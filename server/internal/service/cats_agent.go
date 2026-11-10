@@ -9,6 +9,9 @@ import (
 	"io.yueyang/tom/internal/domain"
 )
 
+// defaultMaxOutputTokens 是桌面模型的默认输出上限。界面不再收集这项参数。
+const defaultMaxOutputTokens = 4096
+
 // syncModel 把桌面里填写的供应商写入原来的目录和密钥，返回模型标识。
 func (s *Service) syncModel(ctx context.Context, form ModelForm, apiKey string) (string, error) {
 	if s.catalog == nil || s.secrets == nil {
@@ -26,15 +29,7 @@ func (s *Service) syncModel(ctx context.Context, form ModelForm, apiKey string) 
 	if err != nil {
 		return "", err
 	}
-	tokens, _ := parseTokenLimit(form.MaxOutputTokens)
-	if tokens < 1 {
-		tokens = 1024
-	}
-	contextWindow := 32768
-	if tokens >= contextWindow {
-		contextWindow = tokens + 1024
-	}
-	return s.ensureModel(ctx, providerID, form.ModelName, contextWindow, tokens)
+	return s.ensureModel(ctx, providerID, form.ModelName, 32768, defaultMaxOutputTokens)
 }
 
 // modelForAgent 先记下设置里的供应商，再让这只猫咪的 modelId 成为实际调用的模型。
@@ -50,15 +45,7 @@ func (s *Service) modelForAgent(ctx context.Context, form ModelForm, apiKey, cat
 	if err := s.db.QueryRowContext(ctx, `SELECT id FROM providers WHERE display_name='桌面' ORDER BY created_at LIMIT 1`).Scan(&providerID); err != nil {
 		return "", err
 	}
-	tokens, _ := parseTokenLimit(form.MaxOutputTokens)
-	if tokens < 1 {
-		tokens = 1024
-	}
-	contextWindow := 32768
-	if tokens >= contextWindow {
-		contextWindow = tokens + 1024
-	}
-	return s.ensureModel(ctx, providerID, key, contextWindow, tokens)
+	return s.ensureModel(ctx, providerID, key, 32768, defaultMaxOutputTokens)
 }
 
 func (s *Service) ensureSecret(ctx context.Context, apiKey string) (*string, error) {

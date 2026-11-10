@@ -78,7 +78,6 @@ export interface DesktopBackend {
   tryWorkspaceSync?: () => WorkspaceSnapshot
   loadWorkspace: () => Promise<WorkspaceSnapshot>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
-  importWorkspace: (workspace: AppWorkspace) => AppWorkspace | Promise<AppWorkspace>
   deliverMessage: (
     agentId: string,
     messageId: string,
@@ -151,6 +150,11 @@ export interface DesktopBackend {
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>
   saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>
+  listBuiltinProviders?: () => Promise<Array<{ id: string; name: string }>>
+  listProviderModels?: (
+    providerId: string,
+    apiKey: string,
+  ) => Promise<Array<{ id: string; name: string }>>
 }
 
 /** 读取当前页面的服务通道。没有桥接时直接失败，不用本地数据假装已连接。 */

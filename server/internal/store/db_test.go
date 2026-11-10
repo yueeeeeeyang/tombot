@@ -24,7 +24,7 @@ func TestMigrationIntegrityAndForeignKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	var count int
-	if err = db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 21 {
+	if err = db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil || count != 24 {
 		t.Fatalf("迁移数量: %d %v", count, err)
 	}
 	if _, err = db.Exec(`INSERT INTO models(id,provider_id,model_key,display_name,context_window,max_output,input_price_micro,output_price_micro,created_at) VALUES('m','missing','m','模型',1024,256,0,0,0)`); err == nil {

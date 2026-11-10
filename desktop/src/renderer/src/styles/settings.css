@@ -200,6 +200,49 @@
 .setting-row input[aria-invalid='true'] {
   border-color: var(--error-border);
 }
+.provider-kind {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: min(250px, 65%);
+}
+.provider-kind button {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.provider-kind button[aria-pressed='true'] {
+  background: var(--selected);
+  border-color: var(--border-strong);
+  color: var(--text);
+  font-weight: 550;
+}
+.provider-fetch {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.provider-fetch:hover:not(:disabled) {
+  background: var(--hover);
+}
+.provider-fetch:disabled {
+  color: var(--subtle);
+  cursor: not-allowed;
+}
+.setting-note {
+  margin: 0 14px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .settings-preview-note {
   margin: 20px 12px 0;
   font-size: 11px;

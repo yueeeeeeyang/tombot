@@ -20,7 +20,6 @@ const codeMessages: Record<string, string> = {
   BOOTSTRAP_RUNNING: '引导正在进行，请稍候。',
   MODEL_NOT_READY: '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
-  WORKSPACE_NOT_PRISTINE: '服务端已有工作空间，本机旧档没有导入。',
   OFFLINE: '无法连接服务。请确认地址和网络后重试。',
   SERVER_URL_MISSING: '还没有填写服务地址。',
 }
@@ -311,14 +310,6 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:save-workspace', (_event, workspace: unknown) =>
     handle(() => call('PUT', '/workspace', workspace)),
   )
-  ipcMain.handle('desktop:import-workspace', (_event, workspace: unknown) =>
-    handle(async () => {
-      const snapshot = (await call('POST', '/workspace/import', workspace)) as {
-        workspace: unknown
-      }
-      return snapshot.workspace
-    }),
-  )
   ipcMain.handle('desktop:deliver', (event, input: { agentId: string; messageId: string }) =>
     handle(async () => {
       try {
@@ -333,6 +324,24 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
+  ipcMain.handle('desktop:model-providers', () =>
+    handle(async () => {
+      const listed = (await call('GET', '/model-providers')) as Array<{ id: string; name: string }>
+      return listed
+    }),
+  )
+  ipcMain.handle(
+    'desktop:provider-models',
+    (_event, input: { providerId: string; apiKey: string }) =>
+      handle(async () => {
+        const result = (await call(
+          'POST',
+          `/model-providers/${encodeURIComponent(input.providerId)}/models`,
+          { apiKey: input.apiKey },
+        )) as { models?: Array<{ id: string; name: string }> }
+        return result.models ?? []
+      }),
+  )
   ipcMain.handle('desktop:bootstrap', () => handle(() => call('POST', '/bootstrap/retry')))
   ipcMain.handle('desktop:bootstrap-watch', (event, watchID: unknown) =>
     handle(async () => {
@@ -511,12 +520,9 @@ export function registerDesktopIpc(): void {
         return call('PUT', '/model-settings', {
           language: draft.language,
           provider: draft.provider,
+          providerName: draft.providerName,
           baseUrl: draft.baseUrl,
           modelName: draft.modelName,
-          temperature: draft.temperature,
-          topP: draft.topP,
-          maxOutputTokens: draft.maxOutputTokens,
-          isStreaming: draft.isStreaming,
           ...(input.apiKey ? { apiKey: input.apiKey } : {}),
         })
       }),

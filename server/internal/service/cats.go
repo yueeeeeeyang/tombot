@@ -13,6 +13,7 @@ import (
 	"io.yueyang/tom/internal/domain"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/provider"
 	"io.yueyang/tom/internal/secret"
 )
 
@@ -44,7 +45,7 @@ type Dependencies struct {
 	WorkspaceDir string
 }
 
-// Snapshot 是一次读取到的工作空间。Pristine 为真时才接受本机旧档导入。
+// Snapshot 是一次读取到的工作空间。Pristine 只表示还没有用户改动。
 type Snapshot struct {
 	Workspace Workspace `json:"workspace"`
 	Pristine  bool      `json:"pristine"`
@@ -149,7 +150,7 @@ func (s *Service) ComputerAccess(agentID, ticket string) (string, error) {
 	return entry.botID, nil
 }
 
-// Load 返回工作空间。第一次读取时写入与桌面一致的预设猫咪。
+// Load 返回工作空间。第一次读取时写入空工作空间，不种样例猫咪。
 func (s *Service) Load(ctx context.Context) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -180,28 +181,27 @@ func (s *Service) Save(ctx context.Context, workspace Workspace) (Snapshot, erro
 	return Snapshot{Workspace: row.workspace, Pristine: false, Revision: row.revision}, nil
 }
 
-// Import 只在服务端还是预设、没有用户改动时接收本机旧档。之后拒绝覆盖。
-func (s *Service) Import(ctx context.Context, workspace Workspace) (Snapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := validateWorkspace(&workspace); err != nil {
-		return Snapshot{}, err
+// ListBuiltinModels 用内置地址和密钥拉取模型。密钥只用于这次请求，不会出现在结果里。
+func (s *Service) ListBuiltinModels(ctx context.Context, apiKey, baseURL string) ([]provider.DiscoveredModel, error) {
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		s.mu.Lock()
+		row, err := s.readState(ctx)
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		opened, openErr := s.openAPIKey(row)
+		if openErr != nil {
+			return nil, openErr
+		}
+		key = strings.TrimSpace(string(opened))
+		clearBytes(opened)
 	}
-	row, err := s.ensureState(ctx)
-	if err != nil {
-		return Snapshot{}, err
+	if key == "" {
+		return nil, domain.NewError(400, "PROVIDER_AUTH_FAILED", "请填写 API Key。")
 	}
-	if !row.pristine {
-		return Snapshot{}, domain.NewError(409, "WORKSPACE_NOT_PRISTINE", "服务端已有工作空间，不能再用本机旧档覆盖。")
-	}
-	row.workspace = workspace
-	row.pristine = false
-	row.revision++
-	if err = s.writeState(ctx, row); err != nil {
-		return Snapshot{}, err
-	}
-	s.logger.Info("已导入桌面旧工作空间", "revision", row.revision)
-	return Snapshot{Workspace: workspace, Pristine: false, Revision: row.revision}, nil
+	return provider.DiscoverDeepSeek(ctx, baseURL, []byte(key), 20*time.Second)
 }
 
 // LoadModelForm 返回表单和密钥是否存在，不返回密钥本身。

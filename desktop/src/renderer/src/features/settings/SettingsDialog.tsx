@@ -1,13 +1,8 @@
 import { Settings, SlidersHorizontal, X } from 'lucide-react'
+import { ModelProviderFields } from './ModelProviderFields'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../components/Select'
-import {
-  MODEL_PARAMETER_LIMITS,
-  validateSettingsDraft,
-  type SettingsDraft,
-  type SettingsSection,
-  type ThemePreference,
-} from './settings'
+import { type SettingsDraft, type SettingsSection, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {
   theme: ThemePreference
@@ -79,7 +74,7 @@ export function SettingsDialog({
           <p className="settings-preview-note">
             {section === 'general'
               ? '主题即时生效。语言选择会保存，界面仍使用简体中文'
-              : '模型设置会保存到服务。填写 API 地址和模型名称后即可发送'}
+              : '模型设置会保存到服务。密钥只留在服务端，不会回显。'}
           </p>
           {themeError && (
             <p className="form-error" role="alert">
@@ -137,157 +132,19 @@ function GeneralSettings({
   )
 }
 
-/** 渲染供应商与参数表单。密钥只提交给服务，不会留在本地存储。 */
-function ModelSettings({
-  draft,
-  onChange,
-  apiKey,
-  hasApiKey,
-  onApiKeyChange,
-}: Pick<SettingsDialogProps, 'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'>) {
-  const errors = validateSettingsDraft(draft)
+/** 渲染供应商表单。密钥只提交给服务，不会留在本地存储。 */
+function ModelSettings(
+  props: Pick<
+    SettingsDialogProps,
+    'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'
+  >,
+) {
   return (
-    <>
-      <div className="settings-section">
-        <h3>模型供应商</h3>
-        <div className="settings-card">
-          <div className="setting-row">
-            <span>供应商</span>
-            <Select
-              label="模型供应商"
-              value={draft.provider}
-              onChange={(value) => onChange({ ...draft, provider: value })}
-              options={[
-                { value: 'openai', label: 'OpenAI' },
-                { value: 'anthropic', label: 'Anthropic' },
-                { value: 'deepseek', label: 'DeepSeek' },
-                { value: 'google', label: 'Google' },
-                { value: 'custom', label: '自定义（兼容 OpenAI）' },
-              ]}
-            />
-          </div>
-          <div className="setting-field">
-            <label className="setting-row" htmlFor="model-base-url">
-              <span>API 地址</span>
-              <input
-                id="model-base-url"
-                className="setting-text-input"
-                type="url"
-                value={draft.baseUrl}
-                maxLength={500}
-                placeholder="输入供应商 API 地址"
-                aria-invalid={Boolean(errors.baseUrl)}
-                aria-describedby={errors.baseUrl ? 'model-base-url-error' : undefined}
-                onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })}
-              />
-            </label>
-            {errors.baseUrl && (
-              <p className="setting-error" id="model-base-url-error" role="alert">
-                {errors.baseUrl}
-              </p>
-            )}
-          </div>
-          <label className="setting-row" htmlFor="model-api-key">
-            <span>API 密钥</span>
-            <input
-              id="model-api-key"
-              className="setting-text-input"
-              type="password"
-              value={apiKey}
-              placeholder={hasApiKey ? '已保存，留空则不修改' : '输入 API 密钥'}
-              autoComplete="off"
-              onChange={(event) => onApiKeyChange(event.target.value)}
-            />
-          </label>
-          <label className="setting-row">
-            <span>模型名称</span>
-            <input
-              className="setting-text-input"
-              value={draft.modelName}
-              maxLength={120}
-              placeholder="输入模型名称"
-              onChange={(event) => onChange({ ...draft, modelName: event.target.value })}
-            />
-          </label>
-        </div>
+    <div className="settings-section">
+      <h3>模型供应商</h3>
+      <div className="settings-card">
+        <ModelProviderFields {...props} />
       </div>
-      <div className="settings-section">
-        <h3>模型参数</h3>
-        <div className="settings-card">
-          <label className="setting-row">
-            <span className="setting-label">
-              温度<small>控制回复的随机性</small>
-            </span>
-            <span className="setting-range">
-              <input
-                type="range"
-                aria-label="温度"
-                {...MODEL_PARAMETER_LIMITS.temperature}
-                value={draft.temperature}
-                onChange={(event) =>
-                  onChange({ ...draft, temperature: Number(event.target.value) })
-                }
-              />
-              <output>{draft.temperature.toFixed(1)}</output>
-            </span>
-          </label>
-          <label className="setting-row">
-            <span className="setting-label">
-              Top P<small>控制候选词的采样范围</small>
-            </span>
-            <span className="setting-range">
-              <input
-                type="range"
-                aria-label="Top P"
-                {...MODEL_PARAMETER_LIMITS.topP}
-                value={draft.topP}
-                onChange={(event) => onChange({ ...draft, topP: Number(event.target.value) })}
-              />
-              <output>{draft.topP.toFixed(2)}</output>
-            </span>
-          </label>
-          <div className="setting-field">
-            <label className="setting-row" htmlFor="max-output-tokens">
-              <span className="setting-label">
-                最大输出长度<small>单次回复的长度上限</small>
-              </span>
-              <span className="setting-number">
-                <input
-                  id="max-output-tokens"
-                  type="number"
-                  step={1}
-                  {...MODEL_PARAMETER_LIMITS.maxOutputTokens}
-                  value={draft.maxOutputTokens}
-                  aria-invalid={Boolean(errors.maxOutputTokens)}
-                  aria-describedby={errors.maxOutputTokens ? 'max-output-error' : undefined}
-                  onChange={(event) => onChange({ ...draft, maxOutputTokens: event.target.value })}
-                />
-                <span>Token</span>
-              </span>
-            </label>
-            {errors.maxOutputTokens && (
-              <p className="setting-error" id="max-output-error" role="alert">
-                {errors.maxOutputTokens}
-              </p>
-            )}
-          </div>
-          <div className="setting-row">
-            <span className="setting-label" id="streaming-label">
-              流式响应<small>开启后逐段出现，关闭后在完成后一次出现</small>
-            </span>
-            <button
-              type="button"
-              className="setting-switch"
-              role="switch"
-              aria-labelledby="streaming-label"
-              aria-checked={draft.isStreaming}
-              onClick={() => onChange({ ...draft, isStreaming: !draft.isStreaming })}
-            >
-              <span />
-            </button>
-          </div>
-        </div>
-      </div>
-    </>
+    </div>
   )
 }

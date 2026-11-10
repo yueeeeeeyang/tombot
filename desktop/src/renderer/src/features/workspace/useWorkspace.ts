@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBackend, type DeliveryResult, type DesktopBackend } from '../desktop/backend'
-import { readLegacyWorkspace } from '../desktop/legacyWorkspace'
-import { createWorkspace, type AppWorkspace } from './model'
+import { emptyWorkspace, type AppWorkspace } from './model'
 
 interface WorkspaceState {
   workspace: AppWorkspace
@@ -27,27 +26,9 @@ function mergeDelivery(local: AppWorkspace, remote: AppWorkspace): AppWorkspace 
 }
 
 function readInitial(backend: DesktopBackend): WorkspaceState {
-  const legacy = readLegacyWorkspace(localStorage)
-  if (legacy.status === 'blocked') {
-    return { workspace: createWorkspace(), error: legacy.message, isBlocked: true, ready: true }
-  }
   const sync = backend.tryWorkspaceSync?.()
-  if (!sync) return { workspace: createWorkspace(), error: '', isBlocked: false, ready: false }
-  if (legacy.status === 'ready' && sync.pristine) {
-    try {
-      const imported = backend.importWorkspace(legacy.workspace)
-      if (!(imported instanceof Promise)) {
-        return { workspace: imported, error: '', isBlocked: false, ready: true }
-      }
-    } catch (error) {
-      return {
-        workspace: sync.workspace,
-        error: (error as Error).message,
-        isBlocked: false,
-        ready: true,
-      }
-    }
-  }
+  // 没有同步快照时先占位，真正的列表等服务返回后再换上，不用本机旧档填充。
+  if (!sync) return { workspace: emptyWorkspace(), error: '', isBlocked: false, ready: false }
   return { workspace: sync.workspace, error: '', isBlocked: false, ready: true }
 }
 
@@ -73,24 +54,11 @@ export function useWorkspace() {
     if (initial.ready) return
     let cancelled = false
     void (async () => {
-      const legacy = readLegacyWorkspace(localStorage)
-      if (legacy.status === 'blocked') {
-        if (cancelled) return
-        blocked.current = true
-        setBlocked(true)
-        setError(legacy.message)
-        setReady(true)
-        return
-      }
       try {
         const snapshot = await backend.loadWorkspace()
-        let next = snapshot.workspace
-        if (legacy.status === 'ready' && snapshot.pristine) {
-          next = await backend.importWorkspace(legacy.workspace)
-        }
         if (cancelled) return
-        current.current = next
-        setWorkspace(next)
+        current.current = snapshot.workspace
+        setWorkspace(snapshot.workspace)
         setReady(true)
       } catch (failure) {
         if (cancelled) return

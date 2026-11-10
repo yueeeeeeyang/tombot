@@ -34,6 +34,7 @@ export function Sidebar({
   selected,
   onOpenGroup,
   onCreateGroup,
+  serverUrl,
 }: {
   workspace: Workspace
   preferences: SidebarPreferences
@@ -54,8 +55,14 @@ export function Sidebar({
   selected: { kind: 'agent' | 'group'; id: string }
   onOpenGroup: (id: string) => void
   onCreateGroup: () => void
+  serverUrl: string
 }) {
-  const assistant = workspace.agents.find((agent) => agent.id === 'assistant')!
+  const serverHost = hostOf(serverUrl)
+  const assistant =
+    workspace.agents.find((agent) => agent.id === 'assistant') ??
+    workspace.agents.find((agent) => agent.id === workspace.activeAgentId) ??
+    workspace.agents[0]
+  if (!assistant) return null
   const { hiddenIds, pinnedIds, unreadIds } = preferences
   const pinnedAgents = [
     assistant,
@@ -212,10 +219,12 @@ export function Sidebar({
           </span>
           <span className="profile-copy">
             <span>我的工作空间</span>
-            <small>
-              <i />
-              本地模式
-            </small>
+            {serverHost && (
+              <small>
+                <i />
+                {serverHost}
+              </small>
+            )}
           </span>
         </button>
         <button
@@ -229,6 +238,16 @@ export function Sidebar({
       </div>
     </aside>
   )
+}
+
+/** 左下角只展示已连接服务的主机名，避免再写成单机模式。 */
+function hostOf(serverUrl: string): string {
+  if (!serverUrl) return ''
+  try {
+    return new URL(serverUrl).host
+  } catch {
+    return ''
+  }
 }
 
 /** 置顶卡片在重命名时切换为原位输入，避免跳转弹窗。 */

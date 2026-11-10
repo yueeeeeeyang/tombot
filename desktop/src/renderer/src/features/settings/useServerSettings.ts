@@ -7,12 +7,9 @@ function settingsDraftFrom(view: SettingsDraft): SettingsDraft {
   return {
     language: view.language,
     provider: view.provider,
+    providerName: view.providerName ?? '',
     baseUrl: view.baseUrl,
     modelName: view.modelName,
-    temperature: view.temperature,
-    topP: view.topP,
-    maxOutputTokens: view.maxOutputTokens,
-    isStreaming: view.isStreaming,
   }
 }
 
@@ -53,7 +50,7 @@ export function useServerSettings() {
 
   function persist(next: SettingsDraft, key: string): void {
     const errors = validateSettingsDraft(next)
-    if (errors.baseUrl || errors.maxOutputTokens) return
+    if (errors.baseUrl) return
     const clean = settingsDraftFrom(next)
     if (backend.savesSynchronously) {
       try {

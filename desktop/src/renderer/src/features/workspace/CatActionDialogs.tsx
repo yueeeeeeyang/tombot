@@ -17,7 +17,7 @@ export function DeleteCatDialog({
     <Dialog title="删除猫咪" onClose={onClose}>
       <p className="dialog-description">
         确定删除「{agent.name}」吗？它的 {agent.messages.length}{' '}
-        条本地消息和输入草稿也会被删除，此操作无法撤销。
+        条消息和输入草稿也会被删除，此操作无法撤销。
       </p>
       {error && (
         <p className="form-error" role="alert">

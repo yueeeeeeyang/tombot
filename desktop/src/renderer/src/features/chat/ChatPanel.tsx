@@ -30,7 +30,7 @@ type ChatPanelProps = {
   onOpenDm?: (notice: DmNotice) => void
 }
 
-/** 渲染当前助手的使用指南、本地消息和输入区；不生成或伪造模型回复。 */
+/** 渲染当前助手的使用指南、消息和输入区；不生成或伪造模型回复。 */
 export function ChatPanel({
   agent,
   isBlocked,
@@ -200,7 +200,7 @@ export function ChatPanel({
               </div>
             </div>
           </div>
-          <div className="saved-messages" role="log" aria-label="本地消息" aria-live="polite">
+          <div className="saved-messages" role="log" aria-label="消息" aria-live="polite">
             {agent.messages.map((message, index) => {
               const label = messageTimeSeparator(
                 message.createdAt,

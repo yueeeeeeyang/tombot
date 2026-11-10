@@ -24,7 +24,6 @@ function installBackend(overrides: Partial<DesktopBackend> = {}): DesktopBackend
     login: vi.fn(),
     loadWorkspace: vi.fn(),
     saveWorkspace: vi.fn(),
-    importWorkspace: vi.fn(),
     deliverMessage: vi.fn(),
     loadSettings: vi.fn(),
     saveSettings: vi.fn(),

@@ -72,6 +72,9 @@ test.beforeEach(async () => {
   await window.emulateMedia({ colorScheme: null })
   window.on('pageerror', (error) => browserErrors.push(error.message))
   await unlock()
+  await expect(window.getByRole('heading', { name: '配置默认模型' })).toBeVisible()
+  await seedSampleWorkspace()
+  await window.reload()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   await expect
     .poll(() =>
@@ -122,8 +125,10 @@ async function appRegion(selector: string): Promise<string> {
 async function expectSessionDrag(): Promise<void> {
   expect(await appRegion('.session-gate')).toBe('drag')
   expect(await appRegion('.session-traffic-lights')).toBe('no-drag')
-  expect(await appRegion('.session-card')).toBe('no-drag')
-  const controls = window.locator('.session-card input, .session-card button')
+  expect(await appRegion('.session-card, .session-page')).toBe('no-drag')
+  const controls = window.locator(
+    '.session-card input, .session-card button, .session-card textarea, .session-page input, .session-page button, .session-page textarea',
+  )
   expect(await controls.count()).toBeGreaterThan(0)
   for (let index = 0; index < (await controls.count()); index += 1) {
     expect(
@@ -198,6 +203,70 @@ async function unlock(): Promise<void> {
   await window.getByLabel('密码', { exact: true }).fill(password)
   await window.getByLabel('确认密码', { exact: true }).fill(password)
   await window.getByRole('button', { name: '完成初始化' }).click()
+}
+
+const sampleCats = [
+  ['assistant', '小黑', '你的日常搭档，陪你把想法变成现实。', '我的助手', 'bombay'],
+  ['developer', '游戏程序', '代码、逻辑和实现，交给我一起想。', '游戏开发', 'orange-tabby'],
+  [
+    'producer',
+    '游戏负责人 + 策划',
+    '从一个好点子，到一份清晰的计划。',
+    '游戏开发',
+    'british-shorthair',
+  ],
+  ['artist', '游戏美术', '一起寻找属于这个世界的视觉语言。', '游戏开发', 'calico'],
+  ['audio', '游戏音效', '让每一个场景，都有自己的声音。', '游戏开发', 'siamese'],
+  ['coding', '编程搭档', '聊聊代码，也聊聊下一步怎么做。', '未分组', 'american-shorthair'],
+  ['news', '资讯助手', '为你整理值得关注的新鲜事。', '未分组', 'ragdoll'],
+  ['organizer', '整理助手', '少一点杂乱，多一点井井有条。', '未分组', 'persian'],
+] as const
+
+/** 给已经初始化的服务写入样例猫咪和自定义模型，让原有用例仍从主界面开始。 */
+async function seedSampleWorkspace(): Promise<void> {
+  const login = await fetch(`${companion.url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
+  })
+  if (!login.ok) throw new Error(`登录服务失败：${login.status}`)
+  const token = ((await login.json()) as { device_token: string }).device_token
+  const headers = { authorization: `Bearer ${token}`, 'content-type': 'application/json' }
+  const workspace = {
+    version: 5,
+    activeAgentId: 'assistant',
+    agents: sampleCats.map(([id, name, description, group, avatar]) => ({
+      id,
+      name,
+      description,
+      group,
+      avatar,
+      modelId: 'gpt-4o',
+      messages: [],
+      draft: '',
+      artifacts: [],
+      computerUrl: '',
+    })),
+  }
+  const saved = await fetch(`${companion.url}/api/v1/workspace`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(workspace),
+  })
+  if (!saved.ok) throw new Error(`写入工作空间失败：${saved.status} ${await saved.text()}`)
+  const settings = await fetch(`${companion.url}/api/v1/model-settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      language: 'system',
+      provider: 'custom',
+      providerName: '测试供应商',
+      baseUrl: '',
+      modelName: '项目模型',
+      apiKey: 'e2e-custom-key',
+    }),
+  })
+  if (!settings.ok) throw new Error(`写入模型设置失败：${settings.status} ${await settings.text()}`)
 }
 
 /** 等服务确认保存后再重载，避免把还在传输的草稿看成丢失。 */
@@ -365,6 +434,7 @@ test('引导未完成时显示进度，重试成功后才进入工作空间', as
   await expect(window.getByText('准备托管浏览器')).toBeVisible()
   await expect(window.getByRole('alert')).toHaveText('夹具没有浏览器，测试不会下载 Chrome')
   await expect(window.getByRole('button', { name: '重新准备' })).toBeVisible()
+  await seedSampleWorkspace()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toHaveCount(0)
   await expect(window.locator('.session-step--running')).toHaveCount(0)
   await expect(window.locator('.session-step-spinner')).toHaveCount(0)
@@ -435,6 +505,10 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
   )
   expect(await window.evaluate(() => typeof (globalThis as Record<string, unknown>).process)).toBe(
     'undefined',
+  )
+  await expect(window.getByText('本地模式')).toHaveCount(0)
+  await expect(window.getByRole('button', { name: '我的工作空间' })).toContainText(
+    new URL(companion.url).host,
   )
 
   await configureModel()
@@ -561,16 +635,13 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
     await expect(language).toHaveText('英语')
     await chooseOption('语言', '跟随系统')
     await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('button', { name: '自定义提供商' }).click()
     await expect(window.locator('select')).toHaveCount(0)
-    await window.getByRole('combobox', { name: '模型供应商' }).click()
-    const providerMenu = window.getByRole('listbox', { name: '模型供应商' })
-    expect(await providerMenu.evaluate((element) => element.matches(':popover-open'))).toBe(true)
     await window.screenshot({
       path: test.info().outputPath(`provider-menu-${theme}.png`),
       scale: 'css',
     })
     await window.getByLabel('API 地址').click()
-    await expect(providerMenu).toBeHidden()
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('项目模型')
     await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
     await window.keyboard.press('Escape')
@@ -616,32 +687,24 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
   await window.screenshot({ path: test.info().outputPath('recruit-compact.png'), scale: 'css' })
 })
 
-test('招聘仅列出已配置模型，空状态配置后返回并保留表单', async () => {
+test('招聘只列出已经配置的模型', async () => {
+  await window.getByRole('button', { name: '打开设置' }).click()
+  await window.getByRole('button', { name: '模型设置', exact: true }).click()
+  await window.getByRole('button', { name: '自定义提供商' }).click()
+  await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('团队模型')
+  await window.keyboard.press('Escape')
   await window.getByRole('button', { name: '新建', exact: true }).click()
   await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const recruit = window.getByRole('dialog', { name: '招聘猫咪' })
   const model = recruit.getByRole('combobox', { name: '模型', exact: true })
-  await expect(model).toBeDisabled()
-  await expect(model).toHaveText('暂无已配置模型')
-  await expect(recruit.getByRole('button', { name: '招聘猫咪', exact: true })).toBeDisabled()
+  await expect(model).toBeEnabled()
+  await expect(model).toHaveText('团队模型')
   await window.getByRole('textbox', { name: '助手名称' }).fill('我的猫咪')
   await window.getByRole('button', { name: '三花猫', exact: true }).click()
   await chooseOption('分组', '游戏开发')
-  await window.screenshot({ path: test.info().outputPath('recruit-empty-model.png'), scale: 'css' })
-  await window.getByRole('button', { name: '前往模型设置' }).click()
-  await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
-  await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('团队模型')
-  await window.keyboard.press('Escape')
-  await expect(recruit).toBeVisible()
-  await expect(window.getByRole('textbox', { name: '助手名称' })).toHaveValue('我的猫咪')
-  await expect(window.getByRole('button', { name: '三花猫', exact: true })).toHaveAttribute(
-    'aria-pressed',
-    'true',
-  )
-  await expect(window.getByRole('combobox', { name: '分组' })).toHaveText('游戏开发')
   await model.click()
   await expect(window.getByRole('option')).toHaveCount(1)
-  await expect(window.getByRole('option')).toHaveText('团队模型openai')
+  await expect(window.getByRole('option')).toHaveText('团队模型自定义供应商')
   await window.getByRole('option', { name: '团队模型', exact: true }).click()
   await recruit.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   await expect(window.getByRole('textbox', { name: '给我的猫咪发消息' })).toBeVisible()
@@ -711,16 +774,14 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   await chooseOption('主题', '深色')
   await chooseOption('语言', '简体中文')
   await window.getByRole('button', { name: '模型设置', exact: true }).click()
-  await chooseOption('模型供应商', 'Anthropic')
+  await window.getByRole('button', { name: '内置提供商' }).click()
+  await expect(window.getByRole('combobox', { name: '提供商', exact: true })).toHaveText('DeepSeek')
   const apiKey = window.getByLabel('API 密钥')
   await expect(apiKey).toBeEnabled()
   await expect(apiKey).toHaveAttribute('type', 'password')
   await apiKey.fill('layout-check-key')
-  const outputLength = window.getByRole('spinbutton', { name: /最大输出长度/ })
-  await outputLength.fill('0')
-  await expect(window.getByRole('alert')).toContainText('之间的整数')
-  await outputLength.fill('8192')
-  await expect(window.getByRole('alert')).toHaveCount(0)
+  await expect(window.getByRole('spinbutton', { name: /最大输出长度/ })).toHaveCount(0)
+  await expect(window.getByRole('switch', { name: /流式响应/ })).toHaveCount(0)
   await window.locator('.settings-pane').evaluate((element) => {
     element.scrollTop = 0
   })
@@ -754,8 +815,6 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   const bounds = await settingsDialog.boundingBox()
   expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(640)
   await expect(window.getByRole('button', { name: '关闭设置' })).toBeVisible()
-  await window.getByRole('switch', { name: /流式响应/ }).click()
-  await expect(window.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
   await window.screenshot({
     path: testInfo.outputPath('desktop-settings-compact.png'),
     scale: 'css',
@@ -1684,7 +1743,7 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
     await window.getByLabel('API 密钥').fill('fixture-key')
     await window.keyboard.press('Escape')
-    await waitForModel('fixture-model', true)
+    await waitForModel('fixture-model')
     await window
       .getByRole('textbox', { name: '给小黑发消息' })
       .fill('请记住我每周三晨跑，并在当天早上9点提醒我')
@@ -1728,7 +1787,7 @@ test('群聊、私信和附件沿用原来的气泡', async () => {
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
     await window.getByLabel('API 密钥').fill('fixture-key')
     await window.keyboard.press('Escape')
-    await waitForModel('fixture-model', true)
+    await waitForModel('fixture-model')
     await window.getByRole('button', { name: '新建', exact: true }).click()
     await window.screenshot({ path: `${artifacts}/create-menu.png`, scale: 'css' })
     await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
@@ -1768,7 +1827,7 @@ test('猫咪主动发的私信出现在侧栏', async () => {
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
     await window.getByLabel('API 密钥').fill('fixture-key')
     await window.keyboard.press('Escape')
-    await waitForModel('fixture-model', true)
+    await waitForModel('fixture-model')
     const login = await fetch(`${companion.url}/api/v1/auth/login`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1808,7 +1867,7 @@ test('猫咪主动发的私信出现在侧栏', async () => {
   }
 })
 
-test('流式开关打开时回复逐段出现，关闭时完成后一次出现', async () => {
+test('回复按默认方式逐段出现', async () => {
   test.setTimeout(120_000)
   const artifacts = '/opt/cursor/artifacts'
   await mkdir(artifacts, { recursive: true })
@@ -1822,9 +1881,9 @@ test('流式开关打开时回复逐段出现，关闭时完成后一次出现',
     await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
     await window.getByLabel('API 密钥').fill('fixture-key')
-    await expect(window.getByRole('switch', { name: /流式响应/ })).toBeChecked()
+    await expect(window.getByRole('switch', { name: /流式响应/ })).toHaveCount(0)
     await window.keyboard.press('Escape')
-    await waitForModel('fixture-model', true)
+    await waitForModel('fixture-model')
     await window.getByRole('textbox', { name: '给小黑发消息' }).fill('打个招呼')
     await window.getByRole('button', { name: '保存为本地草稿' }).click()
     await expect
@@ -1834,26 +1893,6 @@ test('流式开关打开时回复逐段出现，关闭时完成后一次出现',
     await expect
       .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
       .toContain('你好')
-
-    await window.getByRole('button', { name: '打开设置' }).click()
-    await window.getByRole('button', { name: '模型设置', exact: true }).click()
-    await window.getByRole('switch', { name: /流式响应/ }).click()
-    await expect(window.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
-    await window.keyboard.press('Escape')
-    await waitForModel('fixture-model', false)
-    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('再来一次')
-    await window.getByRole('button', { name: '保存为本地草稿' }).click()
-    const started = Date.now()
-    let sawPartial = false
-    while (Date.now() - started < 1_200) {
-      const texts = await window.locator('.message-text').allTextContents()
-      if (texts.some((text) => text.includes('甲') && !text.includes('甲乙'))) sawPartial = true
-      await window.waitForTimeout(100)
-    }
-    expect(sawPartial).toBe(false)
-    await expect
-      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
-      .toContain('甲乙')
     await expect(window.getByRole('alert')).toHaveCount(0)
   } finally {
     await model.close()
@@ -1861,7 +1900,7 @@ test('流式开关打开时回复逐段出现，关闭时完成后一次出现',
 })
 
 /** 等设置写进服务。主进程的请求不会出现在页面网络记录里。 */
-async function waitForModel(modelName: string, isStreaming: boolean): Promise<void> {
+async function waitForModel(modelName: string): Promise<void> {
   const login = await fetch(`${companion.url}/api/v1/auth/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -1876,8 +1915,8 @@ async function waitForModel(modelName: string, isStreaming: boolean): Promise<vo
           headers: { authorization: `Bearer ${token}` },
         })
         if (!response.ok) return ''
-        const body = (await response.json()) as { modelName?: string; isStreaming?: boolean }
-        return body.modelName === modelName && body.isStreaming === isStreaming ? 'ready' : ''
+        const body = (await response.json()) as { modelName?: string }
+        return body.modelName === modelName ? 'ready' : ''
       },
       { timeout: 15_000 },
     )
@@ -2018,6 +2057,113 @@ function writeToolCall(response: ServerResponse, id: string, name: string, args:
   response.write('data: [DONE]\n\n')
   response.end()
 }
+
+/** 只在本机响应 DeepSeek 的模型列表，端到端不会访问 api.deepseek.com。 */
+function startDeepSeekMock(): Promise<{
+  url: string
+  requests: number
+  close: () => Promise<void>
+}> {
+  let requests = 0
+  const server = createServer((request, response: ServerResponse) => {
+    if (request.method !== 'GET' || request.url !== '/models') {
+      response.writeHead(404).end()
+      return
+    }
+    requests += 1
+    if (request.headers.authorization !== 'Bearer e2e-deepseek-key') {
+      response.writeHead(401, { 'content-type': 'application/json' })
+      response.end('{"error":{"message":"invalid"}}')
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(
+      '{"object":"list","data":[{"id":"deepseek-chat","object":"model","name":"DeepSeek Chat"}]}',
+    )
+  })
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型模拟接口没有端口'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}`,
+        get requests() {
+          return requests
+        },
+        close: () =>
+          new Promise((done, fail) => server.close((error) => (error ? fail(error) : done()))),
+      })
+    })
+  })
+}
+
+test('没有默认模型时先配置，再招聘第一只猫咪，设置里可切换两种提供商', async () => {
+  await application.close()
+  await companion.stop()
+  const mock = await startDeepSeekMock()
+  try {
+    companion = await startCompanion(companionBinary, { env: { TOM_DEEPSEEK_BASE_URL: mock.url } })
+    await rm(profilePath, { recursive: true, force: true })
+    profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-model-init-'))
+    application = await launchApp(profilePath)
+    window = await application.firstWindow()
+    window.on('pageerror', (error) => browserErrors.push(error.message))
+    await submitServerAddress()
+    await window.getByLabel('初始化码').fill(companion.setupCode)
+    await window.getByLabel('密码', { exact: true }).fill(password)
+    await window.getByLabel('确认密码', { exact: true }).fill(password)
+    await window.getByRole('button', { name: '完成初始化' }).click()
+    await expect(window.getByRole('heading', { name: '配置默认模型' })).toBeVisible()
+    await expect(window.getByRole('combobox', { name: '提供商', exact: true })).toHaveText(
+      'DeepSeek',
+    )
+    await expect(window.getByRole('heading', { name: '招聘第一只猫咪' })).toHaveCount(0)
+    await expectSessionDrag()
+    await mkdir('/opt/cursor/artifacts', { recursive: true })
+    await window.screenshot({ path: '/opt/cursor/artifacts/model-init.png', scale: 'css' })
+    await window.getByLabel('API 密钥').fill('wrong-key')
+    await window.getByRole('button', { name: '拉取模型' }).click()
+    await expect(window.getByRole('alert')).toHaveText('API Key 验证失败，请检查后重试。')
+    await window.getByLabel('API 密钥').fill('e2e-deepseek-key')
+    await window.getByRole('button', { name: '拉取模型' }).click()
+    await window.getByRole('button', { name: '继续' }).click()
+    await expect(window.getByRole('heading', { name: '招聘第一只猫咪' })).toBeVisible()
+    await expect(window.getByText('e2e-deepseek-key')).toHaveCount(0)
+    await expectSessionDrag()
+    await window.screenshot({ path: '/opt/cursor/artifacts/first-cat.png', scale: 'css' })
+    await window.getByRole('textbox', { name: '助手名称' }).fill('阿花')
+    await window.getByRole('button', { name: '招聘猫咪' }).click()
+    await expect(window.getByRole('textbox', { name: '给阿花发消息' })).toBeVisible()
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await expect(window.getByRole('button', { name: '内置提供商' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    await expect(window.getByText('接口地址已内置在服务端')).toBeVisible()
+    await window.screenshot({
+      path: '/opt/cursor/artifacts/settings-models-builtin.png',
+      scale: 'css',
+    })
+    await window.getByRole('button', { name: '自定义提供商' }).click()
+    await window.getByLabel('提供商名称').fill('公司网关')
+    await window.getByLabel('API 地址').fill('http://127.0.0.1:9')
+    await window.getByLabel('API 密钥').fill('custom-secret')
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('手填模型')
+    await expect(window.getByText('custom-secret')).toHaveCount(0)
+    await window.screenshot({
+      path: '/opt/cursor/artifacts/settings-models-custom.png',
+      scale: 'css',
+    })
+    expect(mock.url.startsWith('http://127.0.0.1:')).toBe(true)
+    expect(mock.requests).toBeGreaterThan(0)
+  } finally {
+    await mock.close()
+  }
+})
 
 /** 按 OpenAI 兼容流式分两段返回。两段之间留出时间，方便截到进行中的回复。 */
 function startFixtureModel(

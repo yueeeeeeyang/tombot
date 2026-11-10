@@ -31,7 +31,6 @@ contextBridge.exposeInMainWorld(
       login: (password: string) => invoke('desktop:login', password),
       loadWorkspace: () => invoke('desktop:load-workspace'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
-      importWorkspace: (workspace: unknown) => invoke('desktop:import-workspace', workspace),
       deliverMessage: (
         agentId: string,
         messageId: string,
@@ -120,6 +119,9 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:reaction', { messageId, emoji }),
       ensureAgent: (agentId: string) => invoke('desktop:ensure-agent', agentId),
       loadSettings: () => invoke('desktop:load-settings'),
+      listBuiltinProviders: () => invoke('desktop:model-providers'),
+      listProviderModels: (providerId: string, apiKey: string) =>
+        invoke('desktop:provider-models', { providerId, apiKey }),
       saveSettings: (draft: unknown, apiKey: string) =>
         invoke('desktop:save-settings', { draft, apiKey }),
     }),

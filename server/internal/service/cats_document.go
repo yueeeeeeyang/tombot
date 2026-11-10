@@ -117,16 +117,13 @@ type Artifact struct {
 	Preview   string `json:"preview,omitempty"`
 }
 
-// ModelForm 是设置页里除主题以外的选项。密钥不在这份 JSON 里。
+// ModelForm 是设置页里除主题以外的选项。采样参数使用服务端默认值，密钥不在这份 JSON 里。
 type ModelForm struct {
-	Language        string  `json:"language"`
-	Provider        string  `json:"provider"`
-	BaseURL         string  `json:"baseUrl"`
-	ModelName       string  `json:"modelName"`
-	Temperature     float64 `json:"temperature"`
-	TopP            float64 `json:"topP"`
-	MaxOutputTokens string  `json:"maxOutputTokens"`
-	IsStreaming     bool    `json:"isStreaming"`
+	Language     string `json:"language"`
+	Provider     string `json:"provider"`
+	ProviderName string `json:"providerName"`
+	BaseURL      string `json:"baseUrl"`
+	ModelName    string `json:"modelName"`
 }
 
 // ModelFormView 是返回给界面的设置。hasApiKey 只说明是否保存过密钥。
@@ -159,16 +156,24 @@ func validateWorkspace(workspace *Workspace) error {
 	if workspace.Version != 5 {
 		return invalidWorkspace("工作空间版本无效")
 	}
+	if workspace.Agents == nil {
+		workspace.Agents = []Agent{}
+	}
+	if len(workspace.Agents) > maxAgents {
+		return invalidWorkspace("助手数量无效")
+	}
+	if len(workspace.Agents) == 0 {
+		if workspace.ActiveAgentID != "" {
+			return invalidWorkspace("工作空间的助手标识无效")
+		}
+		return nil
+	}
 	if utf16Len(workspace.ActiveAgentID) == 0 || utf16Len(workspace.ActiveAgentID) > maxIDLength {
 		return invalidWorkspace("工作空间的助手标识无效")
-	}
-	if len(workspace.Agents) < 1 || len(workspace.Agents) > maxAgents {
-		return invalidWorkspace("助手数量无效")
 	}
 	ids := make(map[string]struct{}, len(workspace.Agents))
 	messageIDs := make(map[string]struct{})
 	totalMessages := 0
-	hasAssistant := false
 	for index := range workspace.Agents {
 		agent := &workspace.Agents[index]
 		if err := validateAgent(agent, messageIDs); err != nil {
@@ -178,13 +183,7 @@ func validateWorkspace(workspace *Workspace) error {
 			return invalidWorkspace("工作空间的助手标识无效")
 		}
 		ids[agent.ID] = struct{}{}
-		if agent.ID == "assistant" {
-			hasAssistant = true
-		}
 		totalMessages += len(agent.Messages)
-	}
-	if !hasAssistant {
-		return invalidWorkspace("工作空间的助手标识无效")
 	}
 	if totalMessages > maxMessages {
 		return invalidWorkspace("本地消息数量已达上限")
@@ -337,7 +336,7 @@ func invalidWorkspace(message string) error {
 	return domain.NewError(400, "WORKSPACE_INVALID", message)
 }
 
-// SeedWorkspace 与桌面 createWorkspace 的八只预设猫咪一致，不写入虚构对话。
+// SeedWorkspace 是历史上的八只样例猫咪。新工作空间不再调用它；测试仍用它构造一份完整数据。
 func SeedWorkspace() Workspace {
 	type profile struct {
 		id, name, description, group, avatar string
@@ -366,8 +365,7 @@ func SeedWorkspace() Workspace {
 // DefaultModelForm 与桌面设置表单的初始值一致。
 func DefaultModelForm() ModelForm {
 	return ModelForm{
-		Language: "system", Provider: "openai", BaseURL: "", ModelName: "",
-		Temperature: 0.7, TopP: 1, MaxOutputTokens: "4096", IsStreaming: true,
+		Language: "system", Provider: "deepseek", ProviderName: "DeepSeek", BaseURL: "", ModelName: "",
 	}
 }
 
@@ -398,34 +396,17 @@ func validateModelForm(settings *ModelForm) error {
 	}
 	settings.BaseURL = strings.TrimSpace(settings.BaseURL)
 	settings.ModelName = strings.TrimSpace(settings.ModelName)
+	settings.ProviderName = strings.TrimSpace(settings.ProviderName)
+	if utf16Len(settings.ProviderName) > 40 {
+		return domain.NewError(400, "SETTINGS_INVALID", "提供商名称最多 40 个字")
+	}
 	if utf16Len(settings.BaseURL) > 500 || utf16Len(settings.ModelName) > 120 {
 		return domain.NewError(400, "SETTINGS_INVALID", "模型设置超过长度限制")
 	}
 	if settings.BaseURL != "" && !validComputerURL(settings.BaseURL) {
 		return domain.NewError(400, "SETTINGS_INVALID", "请输入不含登录凭据的 HTTP 或 HTTPS 地址。")
 	}
-	if settings.Temperature < 0 || settings.Temperature > 2 || settings.TopP < 0 || settings.TopP > 1 {
-		return domain.NewError(400, "SETTINGS_INVALID", "模型参数超出范围")
-	}
-	tokens, ok := parseTokenLimit(settings.MaxOutputTokens)
-	if !ok || tokens < 1 || tokens > 131072 {
-		return domain.NewError(400, "SETTINGS_INVALID", "请输入 1～131072 之间的整数。")
-	}
 	return nil
-}
-
-func parseTokenLimit(value string) (int, bool) {
-	if value == "" || len(value) > 6 {
-		return 0, false
-	}
-	number := 0
-	for _, char := range value {
-		if char < '0' || char > '9' {
-			return 0, false
-		}
-		number = number*10 + int(char-'0')
-	}
-	return number, true
 }
 
 func modelReady(settings ModelForm) bool {
