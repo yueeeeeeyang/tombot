@@ -123,21 +123,21 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  min-height: 240px;
-  max-height: min(520px, calc(100dvh - 80px));
+  height: 100%;
+  min-height: 0;
 }
 .dm-thread {
   flex: 1;
   min-height: 0;
-  max-height: min(280px, calc(100dvh - 180px));
   margin: 0;
   overflow-y: auto;
 }
+/* 顶部留白要盖过雾气层（顶栏 68px 再向下淡出约 40px），打开时第一条才不会被淡掉。 */
 .dm-thread-inner {
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 78px 28px 24px;
+  padding: 128px 40px 56px;
 }
 .dm-top {
   position: absolute;

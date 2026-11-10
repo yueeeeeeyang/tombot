@@ -1589,13 +1589,14 @@ test('猫咪主动发的私信出现在侧栏', async () => {
     await expect(dialog.locator('.dm-bubble')).toHaveCount(2)
     await expect(dialog.locator('.user-bubble, .dialog-heading')).toHaveCount(0)
     await expect(dialog.getByRole('textbox')).toHaveCount(0)
+    const viewportHeight = await window.evaluate(() => innerHeight)
+    const dialogBox = await dialog.boundingBox()
+    expect(dialogBox!.height).toBeGreaterThan(viewportHeight * 0.7)
+    const capsuleBox = await dialog.locator('.dm-capsule').boundingBox()
+    const firstName = await dialog.locator('.dm-name').first().boundingBox()
+    expect(firstName!.y).toBeGreaterThan(capsuleBox!.y + capsuleBox!.height + 16)
     const thread = dialog.locator('.dm-thread')
-    await expect
-      .poll(() => thread.evaluate((element) => element.scrollHeight - element.clientHeight))
-      .toBeGreaterThan(40)
-    await thread.evaluate((element) => {
-      element.scrollTop = 56
-    })
+    expect(await thread.evaluate((element) => element.scrollTop)).toBe(0)
     await window.screenshot({ path: `${artifacts}/cat-dm-open.png`, scale: 'css' })
   } finally {
     await model.close()
