@@ -16,14 +16,7 @@ func createAgentRoutine(t *testing.T, r *Runtime, input service.RoutineInput) (*
 	t.Helper()
 	ctx := context.Background()
 	routines := service.NewRoutines(r.deps.DB, r.deps.Events, r)
-	proposal, err := routines.Propose(ctx, "", input, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = service.NewApprovals(r.deps.DB, r.deps.Events).Decide(ctx, proposal.ApprovalID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	routine, err := routines.Get(ctx, proposal.RoutineID)
+	routine, err := routines.Commit(ctx, input, "user")
 	if err != nil {
 		t.Fatal(err)
 	}

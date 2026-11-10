@@ -291,10 +291,6 @@ func TestBotMessageSingleSlotReplyPrivacyAndInheritedCost(t *testing.T) {
 	if err != nil || child.Status != "succeeded" || child.CostMicro != 5 || child.HopDepth != 1 || child.ParentRunID == nil || *child.ParentRunID != run.ID {
 		t.Fatal("私信子执行归属错误", child, err)
 	}
-	var count int
-	if err = r.deps.DB.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&count); err != nil || count != 3 {
-		t.Fatal("费用事件重复", count, err)
-	}
 }
 
 func TestAsyncBotMessageReturnsBeforeReplyButDrainsBeforeFinish(t *testing.T) {

@@ -63,8 +63,8 @@ func TestSecretCiphertextRotationAuditAndMemoryClear(t *testing.T) {
 		t.Fatal(err)
 	}
 	var details string
-	if err = db.QueryRow("SELECT GROUP_CONCAT(detail_json) FROM audit_log").Scan(&details); err != nil || strings.Contains(details, plaintext) || strings.Contains(details, replacement) {
-		t.Fatal("审计泄漏明文")
+	if err = db.QueryRow("SELECT COALESCE(GROUP_CONCAT(payload_json),'') FROM events").Scan(&details); err != nil || strings.Contains(details, plaintext) || strings.Contains(details, replacement) {
+		t.Fatal("事件泄漏明文")
 	}
 	wrong, err := secure.Random(32)
 	if err != nil {

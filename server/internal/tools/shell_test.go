@@ -5,11 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 
-	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
-	"io.yueyang/tom/internal/service"
 	"io.yueyang/tom/internal/term"
 	"io.yueyang/tom/internal/testkit"
 )
@@ -17,29 +13,8 @@ import (
 func TestShellToolApprovalAndPersistentResult(t *testing.T) {
 	e, bot, run := fixture(t, "standard")
 	bot.ToolPolicy.AllowedTools = []string{"computer_shell"}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	completed := make(chan error, 1)
-	results := make(chan domain.ToolResultBlock, 1)
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "computer_shell", Input: map[string]any{"command": "printf approved > out/report.txt; printf done"}})
-		results <- result
-		completed <- err
-	}()
-	approval := pending(t, e)
-	if approval.ActionClass != "shell.exec" {
-		t.Fatal("Shell 未进入正确审批类")
-	}
-	if _, err := e.files.Read(ctx, bot.ID, "out/report.txt", 1, 1); err == nil {
-		t.Fatal("审批前执行了命令")
-	}
-	if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err := <-completed; err != nil {
-		t.Fatal(err)
-	}
-	result := <-results
+	ctx := context.Background()
+	result := execute(t, e, bot, run, "computer_shell", map[string]any{"command": "printf approved > out/report.txt; printf done"})
 	if result.IsError {
 		t.Fatal(result.Content)
 	}
@@ -65,26 +40,8 @@ func TestShellSecretInjectionAndFullOutputAreRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	results := make(chan domain.ToolResultBlock, 1)
-	completed := make(chan error, 1)
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "computer_shell", Input: map[string]any{"command": `printf '%s\n' "$TASK_VALUE"; i=0; while [ "$i" -lt 5000 ]; do printf 'report line\n'; i=$((i+1)); done; printf '%s\n' "$TASK_VALUE"`, "env_secrets": []map[string]string{{"name": "TASK_VALUE", "secret_id": reference.ID}}}})
-		results <- result
-		completed <- err
-	}()
-	approval := pending(t, e)
-	if approval.ActionClass != "secret.use" || strings.Contains(string(approval.Detail), value) {
-		t.Fatal("密钥注入未提升或审批泄露了值")
-	}
-	if err = e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if err = <-completed; err != nil {
-		t.Fatal(err)
-	}
-	result := <-results
+	ctx := context.Background()
+	result := execute(t, e, bot, run, "computer_shell", map[string]any{"command": `printf '%s\n' "$TASK_VALUE"; i=0; while [ "$i" -lt 5000 ]; do printf 'report line\n'; i=$((i+1)); done; printf '%s\n' "$TASK_VALUE"`, "env_secrets": []map[string]string{{"name": "TASK_VALUE", "secret_id": reference.ID}}})
 	if result.IsError || strings.Contains(result.Content, value) {
 		t.Fatal("输出泄露或执行失败")
 	}
@@ -97,12 +54,6 @@ func TestShellSecretInjectionAndFullOutputAreRedacted(t *testing.T) {
 		t.Fatal("完整日志没有脱敏", err)
 	}
 	var audits int
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='secret.use'").Scan(&audits); err != nil || audits != 1 {
-		t.Fatal("注入审计缺失", err)
-	}
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='shell.exec'").Scan(&audits); err != nil || audits != 1 {
-		t.Fatal("命令执行审计缺失", err)
-	}
 	if err = e.db.QueryRow("SELECT COUNT(*) FROM events WHERE kind='artifact.created'").Scan(&audits); err != nil || audits != 1 {
 		t.Fatal("输出产物事件缺失", err)
 	}

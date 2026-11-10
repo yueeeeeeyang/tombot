@@ -8,6 +8,25 @@ import (
 	"io.yueyang/tom/internal/infra/bus"
 )
 
+// BindReply 把回复指向同一会话里的另一条消息。空标识表示这条消息不是回复。
+func BindReply(ctx context.Context, tx *sql.Tx, messageID, replyToID, conversationID string) error {
+	if replyToID == "" {
+		return nil
+	}
+	if replyToID == messageID {
+		return domain.NewError(400, "MESSAGE_INVALID", "A message cannot reply to itself.")
+	}
+	var same int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM messages WHERE id=? AND conversation_id=?`, replyToID, conversationID).Scan(&same); err != nil {
+		return err
+	}
+	if same != 1 {
+		return domain.NewError(400, "MESSAGE_INVALID", "The reply target is not in this conversation.")
+	}
+	_, err := tx.ExecContext(ctx, `UPDATE messages SET reply_to_id=? WHERE id=?`, replyToID, messageID)
+	return err
+}
+
 // AppendMessage 在调用方事务内分配会话序号并保存消息与事件，失败时由调用方整体回滚。
 func AppendMessage(ctx context.Context, tx *sql.Tx, m *domain.Message) error {
 	encoded, err := json.Marshal(m.Blocks)

@@ -72,30 +72,6 @@ func (s *Server) configurationRoutes(r chi.Router) {
 	r.Get("/notifications/status", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
 		return s.Approvals.NotificationStatus(ctx)
 	}))
-	r.Get("/approvals", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
-		limit, err := pageLimit(r, 50)
-		if err != nil {
-			return nil, err
-		}
-		return s.Approvals.List(ctx, r.URL.Query().Get("status"), r.URL.Query().Get("cursor"), limit)
-	}))
-	r.Post("/approvals/{id}/decision", handleInput(s, 200, func(ctx context.Context, r *http.Request, input service.ApprovalDecision) (any, error) {
-		err := s.Approvals.Decide(ctx, chi.URLParam(r, "id"), input, actor(r))
-		return map[string]bool{"resolved": err == nil}, err
-	}))
-	r.Get("/policy-rules", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
-		limit, err := pageLimit(r, 50)
-		if err != nil {
-			return nil, err
-		}
-		return s.Approvals.Rules(ctx, r.URL.Query().Get("cursor"), limit)
-	}))
-	r.Post("/policy-rules", handleInput(s, 201, func(ctx context.Context, r *http.Request, input service.PolicyRule) (any, error) {
-		return s.Approvals.SaveRule(ctx, input, actor(r))
-	}))
-	r.Delete("/policy-rules/{id}", handleDelete(s, func(ctx context.Context, r *http.Request) error {
-		return s.Approvals.DeleteRule(ctx, chi.URLParam(r, "id"), actor(r))
-	}))
 	r.Get("/tools", handleRead(s, func(context.Context, *http.Request) (any, error) { return service.ToolNames(), nil }))
 	r.Get("/provider-presets", handleRead(s, func(context.Context, *http.Request) (any, error) { return service.ProviderPresets(), nil }))
 	r.Post("/providers/connect", handleInput(s, 200, func(ctx context.Context, r *http.Request, input service.ProviderConnectInput) (any, error) {
@@ -196,13 +172,6 @@ func (s *Server) configurationRoutes(r chi.Router) {
 	}))
 	r.Post("/bots/{id}/avatar", s.uploadAvatar)
 	r.Get("/bots/{id}/avatar", s.readAvatar)
-	r.Get("/conversations", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
-		limit, err := pageLimit(r, 20)
-		if err != nil {
-			return nil, err
-		}
-		return s.Conversations.List(ctx, r.URL.Query().Get("kind"), r.URL.Query().Get("cursor"), limit)
-	}))
 	type directInput struct {
 		Kind  string `json:"kind"`
 		BotID string `json:"bot_id"`
@@ -219,8 +188,6 @@ func (s *Server) configurationRoutes(r chi.Router) {
 	r.Patch("/conversations/{id}", handleInput(s, 200, func(ctx context.Context, r *http.Request, input service.ConversationPatch) (any, error) {
 		return s.Conversations.Update(ctx, chi.URLParam(r, "id"), input, actor(r))
 	}))
-	r.Get("/conversations/{id}/messages", handleRead(s, s.readConversationMessages))
-
 	type readInput struct {
 		Seq int64 `json:"seq"`
 	}

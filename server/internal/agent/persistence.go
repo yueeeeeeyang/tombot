@@ -94,9 +94,6 @@ func (r *Runtime) finish(ctx context.Context, run domain.Run, status, code strin
 		if _, err := tx.ExecContext(ctx, "UPDATE tool_calls SET status='canceled',error_code=?,duration_ms=MAX(0,?-created_at),finished_at=? WHERE run_id=? AND status IN('pending','running','awaiting_approval')", code, now.UnixMilli(), now.UnixMilli(), run.ID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE approvals SET status='expired',decided_at=? WHERE run_id=? AND status='pending'", now.UnixMilli(), run.ID); err != nil {
-			return err
-		}
 		if code != "" {
 			if err := resolveInterruptedTools(ctx, tx, run); err != nil {
 				return err

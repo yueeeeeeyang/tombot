@@ -165,19 +165,6 @@ func TestMemoryConcurrentEditAndAuditFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.Exec(`CREATE TRIGGER fail_memory_audit BEFORE INSERT ON audit_log WHEN NEW.action='memory.delete' BEGIN SELECT RAISE(ABORT,'test_memory_audit'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Delete(ctx, bot.ID, current.Path, current.SHA256, "user"); err == nil {
-		t.Fatal("审计失败未阻止删除")
-	}
-	retained, err := s.Read(ctx, bot.ID, current.Path)
-	if err != nil || retained.SHA256 != current.SHA256 {
-		t.Fatal("审计失败仍修改了文件", retained, err)
-	}
-	if _, err = s.db.Exec("DROP TRIGGER fail_memory_audit"); err != nil {
-		t.Fatal(err)
-	}
 	if err = s.Delete(ctx, bot.ID, current.Path, current.SHA256, "user"); err != nil {
 		t.Fatal(err)
 	}

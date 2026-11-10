@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/bus"
-	"io.yueyang/tom/internal/store"
 )
 
 type Querier interface {
@@ -71,12 +69,9 @@ func MonthBounds(now time.Time) (time.Time, time.Time) {
 	return from, from.AddDate(0, 1, 0)
 }
 
-const totalsSQL = `COUNT(*),COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0),COALESCE(SUM(cache_read_tokens),0),COALESCE(SUM(cost_micro),0),COALESCE(SUM(CASE WHEN is_estimated!=0 THEN 1 ELSE 0 END),0)`
-
-func Totals(ctx context.Context, q Querier, from, to time.Time) (domain.UsageTotals, error) {
-	var totals domain.UsageTotals
-	err := q.QueryRowContext(ctx, "SELECT "+totalsSQL+" FROM usage_events WHERE created_at>=? AND created_at<?", from.UnixMilli(), to.UnixMilli()).Scan(&totals.Calls, &totals.InputTokens, &totals.OutputTokens, &totals.CacheReadTokens, &totals.CostMicro, &totals.EstimatedCalls)
-	return totals, err
+// Totals 不再读取用量事件。账本已删除，汇总保持为零。
+func Totals(context.Context, Querier, time.Time, time.Time) (domain.UsageTotals, error) {
+	return domain.UsageTotals{}, nil
 }
 
 func Monthly(ctx context.Context, q Querier, now time.Time) (domain.MonthlyUsage, error) {
@@ -100,69 +95,12 @@ func Monthly(ctx context.Context, q Querier, now time.Time) (domain.MonthlyUsage
 	return monthly, err
 }
 
-// CheckMonthlyAdmission 必须在创建回合的同一写事务内执行；不预占未产生的费用。
-func CheckMonthlyAdmission(ctx context.Context, tx *sql.Tx, now time.Time) error {
-	budget, err := ReadMonthlyBudget(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if budget.LimitMicro == nil || budget.Action != "stop" {
-		return nil
-	}
-	from, to := MonthBounds(now)
-	totals, err := Totals(ctx, tx, from, to)
-	if err != nil {
-		return err
-	}
-	if totals.CostMicro >= *budget.LimitMicro {
-		return domain.NewError(409, "MONTHLY_BUDGET_EXCEEDED", "The UTC monthly budget has been reached. New turns are paused until next month or a budget change.")
-	}
+// CheckMonthlyAdmission 不再按月用量拦截新回合。
+func CheckMonthlyAdmission(context.Context, *sql.Tx, time.Time) error {
 	return nil
 }
 
-// NotifyMonthly 在费用或配置事务内去重并持久化通知，失败时整体回滚。
-func NotifyMonthly(ctx context.Context, tx *sql.Tx, now time.Time) error {
-	budget, err := ReadMonthlyBudget(ctx, tx)
-	if err != nil || budget.LimitMicro == nil {
-		return err
-	}
-	monthly, err := Monthly(ctx, tx, now)
-	if err != nil {
-		return err
-	}
-	levels := []string{}
-	if monthly.Status == "warning" || monthly.Status == "limit" {
-		levels = append(levels, "warning")
-	}
-	if monthly.Status == "limit" {
-		levels = append(levels, "limit")
-	}
-	for _, level := range levels {
-		result, err := tx.ExecContext(ctx, "INSERT INTO monthly_budget_alerts(month,level,created_at) VALUES(?,?,?) ON CONFLICT(month,level) DO NOTHING", monthly.Month, level, now.UnixMilli())
-		if err != nil {
-			return err
-		}
-		changed, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if changed == 0 {
-			continue
-		}
-		text := "本月模型费用已达到提醒阈值，请查看用量与预算。"
-		if level == "limit" {
-			text = "本月模型费用已达到预算上限，当前配置仅告警。"
-			if budget.Action == "stop" {
-				text = "本月模型费用已达到预算上限，已暂停接受新任务；已接受的任务继续执行。"
-			}
-		}
-		payload := map[string]any{"level": "warning", "text": text, "code": "MONTHLY_BUDGET", "month": monthly.Month, "stage": level, "cost_micro": monthly.CostMicro, "limit_micro": budget.LimitMicro}
-		if _, err = bus.Append(ctx, tx, "system.notice", "", payload); err != nil {
-			return err
-		}
-		if err = store.Audit(ctx, tx, "system", "usage.budget_alert", monthly.Month, payload); err != nil {
-			return err
-		}
-	}
+// NotifyMonthly 不再写用量提醒。
+func NotifyMonthly(context.Context, *sql.Tx, time.Time) error {
 	return nil
 }

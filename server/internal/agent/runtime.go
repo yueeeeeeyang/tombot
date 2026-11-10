@@ -121,6 +121,7 @@ type SendInput struct {
 	Content        string                   `json:"content"`
 	Mentions       []string                 `json:"mentions,omitempty"`
 	ReplyMode      string                   `json:"reply_mode,omitempty"`
+	ReplyToID      string                   `json:"reply_to_id,omitempty"`
 	RecipientBotID string                   `json:"recipient_bot_id,omitempty"`
 }
 type Submission struct {
@@ -234,6 +235,9 @@ func (r *Runtime) submit(ctx context.Context, conversationID string, input SendI
 		}
 		message := domain.Message{ID: submission.MessageID, ConversationID: conversationID, TurnID: &run.TurnID, SenderKind: "user", Blocks: blocks, Status: "complete", CreatedAt: now}
 		if err := service.AppendMessage(ctx, tx, &message); err != nil {
+			return err
+		}
+		if err := service.BindReply(ctx, tx, message.ID, input.ReplyToID, conversationID); err != nil {
 			return err
 		}
 		if _, err := bus.Append(ctx, tx, "run.status", conversationID, map[string]any{"run_id": run.ID, "status": "queued", "turn_id": run.TurnID, "bot_id": botID, "plan_role": "solo", "model_name": model.DisplayName, "queue_position": len(r.queue) + 1}); err != nil {

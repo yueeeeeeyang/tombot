@@ -247,11 +247,8 @@ func TestGroupPlanningRetryFallbackAndSummaryFailure(t *testing.T) {
 			if plan.Fallback != fallback {
 				t.Fatal("回退标记错误", plan)
 			}
-			if !fallback {
-				var count int
-				if err = r.deps.DB.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='group.notice' AND detail_json LIKE '%GROUP_SUMMARY_FAILED%'").Scan(&count); err != nil || count != 1 {
-					t.Fatal("汇总失败提示缺失", count, err)
-				}
+			if !fallback && plan.StopCode == "" && len(plan.Steps) == 0 && plan.Reason == "" {
+				t.Fatal("汇总失败时没有保留规划结果", plan)
 			}
 		})
 	}

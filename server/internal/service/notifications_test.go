@@ -5,11 +5,25 @@ import (
 	"testing"
 	"time"
 
+	"io.yueyang/tom/internal/domain"
+	"io.yueyang/tom/internal/infra/bus"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/testkit"
 )
 
+func notificationFixture(t *testing.T) (*Approvals, domain.Run) {
+	t.Helper()
+	db := testkit.Database(t)
+	events := bus.New(db)
+	bot, err := NewBots(db, events, t.TempDir()).Create(t.Context(), BotInput{Template: "researcher"}, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return NewApprovals(db, events), domain.Run{ConversationID: bot.ConversationID, BotID: bot.ID}
+}
+
 func TestNotificationSnapshotIncludesDefaultAssistantConversation(t *testing.T) {
-	s, _, _ := approvalFixture(t)
+	s, _ := notificationFixture(t)
 	ctx := t.Context()
 	bots := NewBots(s.db, s.events, t.TempDir())
 	if err := bots.EnsureDefault(ctx); err != nil {
@@ -32,7 +46,7 @@ func TestNotificationSnapshotIncludesDefaultAssistantConversation(t *testing.T) 
 }
 
 func TestNotificationSnapshotFiltersAndOrders(t *testing.T) {
-	s, run, _ := approvalFixture(t)
+	s, run := notificationFixture(t)
 	ctx := t.Context()
 	snapshot, err := s.NotificationStatus(ctx)
 	if err != nil || snapshot.PendingCount != 0 || snapshot.PendingApprovalID != nil || snapshot.CompletedTurn != nil {
@@ -49,24 +63,10 @@ func TestNotificationSnapshotFiltersAndOrders(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, item := range []struct {
-		id, status string
-		expiry     int64
-	}{
-		{"a", "pending", time.Now().Add(time.Hour).UnixMilli()}, {"b", "pending", 0}, {"c", "approved", time.Now().Add(time.Hour).UnixMilli()},
-	} {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO approvals(id,action_class,title,detail_json,risk_level,status,expires_at,created_at) VALUES(?,'routine.create','','{}','low',?,?,0)`, item.id, item.status, item.expiry); err != nil {
-			t.Fatal(err)
-		}
-	}
 	snapshot, err = s.NotificationStatus(ctx)
 	want := CompletedTurn{ID: "last", ConversationID: run.ConversationID, FinishedAt: 10}
-	if err != nil || snapshot.PendingCount != 1 || snapshot.PendingApprovalID == nil || *snapshot.PendingApprovalID != "a" || snapshot.CompletedTurn == nil || *snapshot.CompletedTurn != want {
-		t.Fatal("过期审批、子回合或排序异常", snapshot, err)
-	}
-	items, err := s.List(ctx, "pending", "", 50)
-	if err != nil || len(items) != 1 || items[0].ID != "a" {
-		t.Fatal("审批页应排除已过期的决定", items, err)
+	if err != nil || snapshot.PendingCount != 0 || snapshot.PendingApprovalID != nil || snapshot.CompletedTurn == nil || *snapshot.CompletedTurn != want {
+		t.Fatal("子回合或完成排序异常", snapshot, err)
 	}
 	rows, err := s.db.QueryContext(ctx, "EXPLAIN QUERY PLAN "+notificationSnapshot, 0)
 	if err != nil {
@@ -85,7 +85,7 @@ func TestNotificationSnapshotFiltersAndOrders(t *testing.T) {
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	for _, index := range []string{"idx_notification_pending", "idx_notification_completed"} {
+	for _, index := range []string{"idx_notification_completed"} {
 		if !strings.Contains(strings.Join(plan, "\n"), index) {
 			t.Fatal("通知查询未使用索引", plan)
 		}

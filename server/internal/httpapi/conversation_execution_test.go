@@ -42,9 +42,8 @@ func TestConversationHTTPQuestionSearchReadAndToolResults(t *testing.T) {
 		}
 		switch step {
 		case 2:
-			var answer domain.QuestionAnswer
-			if err := json.Unmarshal([]byte(last.Content), &answer); err != nil || answer.Choice != nil || answer.Text != "自定义格式" {
-				t.Error("自由回答错误", last.Content, err)
+			if !strings.Contains(last.Content, "USER_QUESTION_REMOVED") {
+				t.Error("提问未立即返回已移除", last.Content)
 			}
 			name, arguments = "conversation_search", map[string]any{"query": "公开核验"}
 		case 3:
@@ -116,39 +115,16 @@ func TestConversationHTTPQuestionSearchReadAndToolResults(t *testing.T) {
 	if err = json.Unmarshal(response.Body.Bytes(), &sent); err != nil {
 		t.Fatal(err)
 	}
-	answered := false
 	deadline := time.NewTimer(8 * time.Second)
 	defer deadline.Stop()
 	for {
 		wake := server.Bus.Wake()
-		response = request(t, handler, "GET", "/api/v1/approvals", nil, headers)
-		var questions []service.ApprovalSummary
-		if err = json.Unmarshal(response.Body.Bytes(), &questions); err != nil || response.Code != 200 {
-			t.Fatal(err, response.Code, response.Body.String())
-		}
-		for _, question := range questions {
-			if answered || question.ActionClass != "user.question" || question.TurnID != sent.TurnID || question.WaitingQuestions != 1 {
-				t.Fatal("提问元数据或待办数错误", question)
-			}
-			path := "/api/v1/approvals/" + question.ID + "/decision"
-			decision := service.ApprovalDecision{Decision: "approve", Note: "自定义格式", ApplyToTurn: true, QuestionIDs: []string{question.ID}}
-			if response = request(t, handler, "POST", path, decision, nil); response.Code != 401 {
-				t.Fatal("回答接口缺少鉴权")
-			}
-			if response = request(t, handler, "POST", path, decision, headers); response.Code != 200 {
-				t.Fatal(response.Code, response.Body.String())
-			}
-			if response = request(t, handler, "POST", path, decision, headers); response.Code != 409 {
-				t.Fatal("重复回答未拒绝", response.Code)
-			}
-			answered = true
-		}
 		run, err := server.Runtime.Run(ctx, sent.RunID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if run.Status == "succeeded" {
-			if !answered || calls.Load() != 4 || run.CostMicro != 40 {
+			if calls.Load() != 4 || run.CostMicro != 40 {
 				t.Fatal("工具循环或费用不完整", run, calls.Load())
 			}
 			break

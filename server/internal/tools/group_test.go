@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/service"
 )
 
@@ -70,33 +69,12 @@ func TestGroupToolsMembershipPostAndLoopRejection(t *testing.T) {
 
 func TestGroupPostApprovalAndAuditRollback(t *testing.T) {
 	e, bot, run, group := groupToolFixture(t, "strict")
-	finished := make(chan domain.ToolResultBlock, 1)
-	failed := make(chan error, 1)
-	go func() {
-		result, err := e.Execute(context.Background(), domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "post_to_group", Input: map[string]any{"group_id": group.ID, "message": "需要许可的发言"}})
-		finished <- result
-		failed <- err
-	}()
-	approval := pending(t, e)
-	if err := e.approvals.Decide(context.Background(), approval.ID, service.ApprovalDecision{Decision: "deny"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	if result := <-finished; !result.IsError || !strings.Contains(result.Content, "TOOL_DENIED") {
-		t.Fatal(result)
-	}
-	if err := <-failed; err != nil {
-		t.Fatal(err)
-	}
-	bot.ToolPolicy.Approval = "standard"
-	if _, err := e.db.Exec(`CREATE TRIGGER fail_group_post_audit BEFORE INSERT ON audit_log WHEN NEW.action='group.post' BEGIN SELECT RAISE(ABORT,'test_group_post_audit'); END`); err != nil {
-		t.Fatal(err)
-	}
-	_, err := e.Execute(context.Background(), domain.ToolInvocation{Run: run, Bot: bot, Step: 1}, domain.ToolUseBlock{ID: ids.New(), Name: "post_to_group", Input: map[string]any{"group_id": group.ID, "message": "审计失败必须回滚"}})
-	if err == nil {
-		t.Fatal("审计失败被吞掉")
+	result := execute(t, e, bot, run, "post_to_group", map[string]any{"group_id": group.ID, "message": "直接发布的发言"})
+	if result.IsError {
+		t.Fatal(result.Content)
 	}
 	var count int
-	if err = e.db.QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id=?", group.ConversationID).Scan(&count); err != nil || count != 0 {
-		t.Fatal("拒绝或审计失败后仍然发布消息", count, err)
+	if err := e.db.QueryRow("SELECT COUNT(*) FROM messages WHERE conversation_id=?", group.ConversationID).Scan(&count); err != nil || count != 1 {
+		t.Fatal("严格策略没有立即发布消息", count, err)
 	}
 }

@@ -537,9 +537,4 @@ func TestRestoreSetupCommittedBeforeFilePublication(t *testing.T) {
 	}
 	_, err = restored.Login(t.Context(), password, "验收", "linux", nil)
 	must(t, err)
-	var count int
-	must(t, db.QueryRow("SELECT count(*) FROM audit_log WHERE action='auth.setup'").Scan(&count))
-	if count != 1 {
-		t.Fatal("恢复时重复登记初始化审计")
-	}
 }

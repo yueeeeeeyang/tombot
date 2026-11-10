@@ -360,7 +360,7 @@ func (s *Groups) Delete(ctx context.Context, id string, revision int64, actor st
 			return err
 		}
 		conversations := `SELECT id FROM conversations WHERE group_id=?`
-		for _, statement := range []string{`DELETE FROM approvals WHERE run_id IN(SELECT id FROM runs WHERE conversation_id IN (` + conversations + `))`, `DELETE FROM tool_calls WHERE run_id IN(SELECT id FROM runs WHERE conversation_id IN (` + conversations + `))`, `DELETE FROM runs WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM messages WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM turns WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM conversations WHERE group_id=?`} {
+		for _, statement := range []string{`DELETE FROM tool_calls WHERE run_id IN(SELECT id FROM runs WHERE conversation_id IN (` + conversations + `))`, `DELETE FROM runs WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM messages WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM turns WHERE conversation_id IN (` + conversations + `)`, `DELETE FROM conversations WHERE group_id=?`} {
 			if _, err = tx.ExecContext(ctx, statement, id); err != nil {
 				return err
 			}

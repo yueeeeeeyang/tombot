@@ -16,17 +16,16 @@ import (
 
 func checkDefaultInitializationCounts(t *testing.T, db *sql.DB, created, pending int) {
 	t.Helper()
-	var bots, conversations, audits, events, seeds int
+	var bots, conversations, events, seeds int
 	if err := db.QueryRow(`SELECT
 (SELECT COUNT(*) FROM bots WHERE id='tom'),
 (SELECT COUNT(*) FROM conversations WHERE id='tom-direct' AND kind='direct' AND bot_id='tom'),
-(SELECT COUNT(*) FROM audit_log WHERE action='bot.create' AND target='tom'),
 (SELECT COUNT(*) FROM events WHERE kind='conversation.updated' AND conversation_id='tom-direct'),
-(SELECT COUNT(*) FROM system_state WHERE key='default_bot.pending')`).Scan(&bots, &conversations, &audits, &events, &seeds); err != nil {
+(SELECT COUNT(*) FROM system_state WHERE key='default_bot.pending')`).Scan(&bots, &conversations, &events, &seeds); err != nil {
 		t.Fatal(err)
 	}
-	if bots != created || conversations != created || audits != created || events != created || seeds != pending {
-		t.Fatal("默认助手创建、审计、事件和种子消费不同步", bots, conversations, audits, events, seeds)
+	if bots != created || conversations != created || events != created || seeds != pending {
+		t.Fatal("默认助手创建、事件和种子消费不同步", bots, conversations, events, seeds)
 	}
 }
 

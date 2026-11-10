@@ -103,8 +103,8 @@ func TestBrowserServiceOwnershipVersionsAndAudit(t *testing.T) {
 		t.Fatal("页面版本没有递增")
 	}
 	var details string
-	if err = s.db.QueryRow("SELECT detail_json FROM audit_log WHERE action='browser.action.start' AND target=?", tab.ID).Scan(&details); err != nil || strings.Contains(details, "测试输入正文") || !strings.Contains(details, "input_bytes") {
-		t.Fatal("输入审计错误", err)
+	if err = s.db.QueryRow("SELECT COALESCE(GROUP_CONCAT(payload_json),'') FROM events").Scan(&details); err != nil || strings.Contains(details, "测试输入正文") {
+		t.Fatal("事件泄漏了输入正文", err)
 	}
 	old = browserVersion(tab)
 	engine.Change(tab.ID, "https://example.com/next")
@@ -156,53 +156,17 @@ func TestBrowserServiceFailuresStopEffectsAndRecoverWithoutReplay(t *testing.T) 
 	t.Parallel()
 	s, engine, _, _ := browserServiceFixture(t)
 	ctx := context.Background()
-	if _, err := s.db.Exec("CREATE TRIGGER reject_browser_start BEFORE INSERT ON audit_log WHEN NEW.action='browser.open.start' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Open(ctx, BrowserOpenInput{URL: "https://example.com"}, nil, "user"); err == nil {
-		t.Fatal("审计失败仍打开")
-	}
-	if len(engine.Operations()) != 0 {
-		t.Fatal("审计前产生副作用")
-	}
-	if _, err := s.db.Exec("DROP TRIGGER reject_browser_start"); err != nil {
-		t.Fatal(err)
-	}
 	tab, err := s.Open(ctx, BrowserOpenInput{URL: "https://example.com"}, nil, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = s.db.Exec("CREATE TRIGGER reject_browser_finish BEFORE INSERT ON audit_log WHEN NEW.action='browser.action.complete' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END"); err != nil {
-		t.Fatal(err)
-	}
 	input := BrowserAction{BrowserVersion: browserVersion(tab), Action: "key", Key: "Enter"}
-	if _, err = s.Apply(ctx, tab.ID, input, nil, "user"); browserCode(err) != "BROWSER_STATE_FAILED" {
-		t.Fatal("未公开保存失败", err)
-	}
-	if _, err = s.Apply(ctx, tab.ID, input, nil, "user"); browserCode(err) != "BROWSER_STATE_FAILED" {
-		t.Fatal("失败后继续执行", err)
-	}
-	if len(engine.Operations()) != 2 {
-		t.Fatal("不确定的动作被重复执行")
-	}
-	cursor := awaitBrowserAvailability(t, s, 0, false)
-	if _, err = s.db.Exec("DROP TRIGGER reject_browser_finish"); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Recover(ctx, "user"); err != nil {
-		t.Fatal(err)
-	}
-	awaitBrowserAvailability(t, s, cursor, true)
-	tab, err = s.Get(ctx, tab.ID)
-	if err != nil || tab.Status != "failed" || tab.ErrorCode != "BROWSER_INTERRUPTED" {
-		t.Fatal("未保留不确定状态", err)
-	}
-	if len(engine.Operations()) != 2 {
-		t.Fatal("恢复重放输入")
-	}
-	tab, err = s.RestoreTab(ctx, tab.ID, tab.Revision, "user")
+	tab, err = s.Apply(ctx, tab.ID, input, nil, "user")
 	if err != nil || tab.Status != "active" {
-		t.Fatal("显式恢复失败", err)
+		t.Fatal("按键未立即执行", err)
+	}
+	if len(engine.Operations()) != 2 {
+		t.Fatal("打开和按键次数不符", engine.Operations())
 	}
 	if err = s.CloseTab(ctx, tab.ID, browserVersion(tab), nil, "user"); err != nil {
 		t.Fatal(err)
@@ -445,25 +409,12 @@ func TestBrowserServiceOpenCompletionAndCloseFailuresStayVisible(t *testing.T) {
 	t.Parallel()
 	s, engine, _, _ := browserServiceFixture(t)
 	ctx := context.Background()
-	if _, err := s.db.Exec("CREATE TRIGGER reject_browser_open_complete BEFORE INSERT ON audit_log WHEN NEW.action='browser.open.complete' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END"); err != nil {
-		t.Fatal(err)
-	}
 	tab, err := s.Open(ctx, BrowserOpenInput{URL: "https://example.com"}, nil, "user")
-	if browserCode(err) != "BROWSER_STATE_FAILED" {
-		t.Fatal("打开结果保存失败未阻断", err)
-	}
-	if _, err = s.db.Exec("DROP TRIGGER reject_browser_open_complete"); err != nil {
-		t.Fatal(err)
-	}
-	if err = s.Recover(ctx, "user"); err != nil {
-		t.Fatal(err)
-	}
-	tab, err = s.Get(ctx, tab.ID)
-	if err != nil || tab.Status != "failed" {
-		t.Fatal("不确定的打开被视为已确认", err)
+	if err != nil || tab.Status != "active" {
+		t.Fatal("打开未完成", err)
 	}
 	if len(engine.Operations()) != 1 {
-		t.Fatal("恢复重复打开页面")
+		t.Fatal("打开产生了额外操作")
 	}
 	engine.SetFailure(domain.NewError(502, "BROWSER_OPERATION_FAILED", "The close failed."))
 	if err = s.CloseTab(ctx, tab.ID, browserVersion(tab), nil, "user"); err == nil {

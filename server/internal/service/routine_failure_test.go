@@ -39,22 +39,13 @@ func TestRoutineDisableExpiresQueueAndKeepsManualRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	enabled := false
-	input.IsEnabled = &enabled
-	input.Revision = routine.Revision
-	proposal, err := routines.Propose(ctx, routine.ID, input, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	current, err := routines.Get(ctx, routine.ID)
+	current, err := routines.UpdateNow(ctx, routine.ID, RoutinePatch{Revision: routine.Revision, IsEnabled: Field[*bool]{Set: true, Value: &enabled}}, "user")
 	if err != nil || current.IsEnabled || current.NextRunAt != nil {
 		t.Fatal(current, err)
 	}
 	claim, err := routines.run(ctx, claimID)
-	if err != nil || claim.Status != "failed" || claim.ErrorCode != "ROUTINE_CHANGED" {
-		t.Fatal("配置变化后旧队列仍可执行", claim, err)
+	if err != nil || claim.Status != "pending" {
+		t.Fatal("已创建的手动触发被停用改写", claim, err)
 	}
 	manual, err := routines.RunNow(ctx, current.ID, current.Revision, "user")
 	if err != nil || manual.Status != "triggered" {
@@ -64,33 +55,23 @@ func TestRoutineDisableExpiresQueueAndKeepsManualRun(t *testing.T) {
 
 func TestRoutineInvalidApprovalExpiryAndDeletedTarget(t *testing.T) {
 	ctx := context.Background()
-	routines, approvals, bots, bot := routineFixture(t)
+	routines, _, bots, bot := routineFixture(t)
 	for _, input := range []RoutineInput{
 		{RoutineDefinition: domain.RoutineDefinition{Name: "空目标", Cron: "* * * * *", Prompt: "整理"}},
 		{RoutineDefinition: domain.RoutineDefinition{Name: "重复目标", Cron: "* * * * *", Prompt: "整理", Target: domain.RoutineTarget{BotID: bot.ID, GroupID: "group"}}},
 		{RoutineDefinition: domain.RoutineDefinition{Name: "无调度", Cron: "0 0 30 2 *", Prompt: "整理", Target: domain.RoutineTarget{BotID: bot.ID}}},
 		{RoutineDefinition: domain.RoutineDefinition{Name: "不支持策略", Cron: "* * * * *", Prompt: "整理", Target: domain.RoutineTarget{BotID: bot.ID}, OverlapPolicy: "parallel"}},
 	} {
-		if _, err := routines.Propose(ctx, "", input, "user"); err == nil {
+		if _, err := routines.Commit(ctx, input, "user"); err == nil {
 			t.Fatal("接受无效例程", input.Name)
 		}
 	}
-	proposal, err := routines.Propose(ctx, "", routineInput(bot), "user")
-	if err != nil {
+	if err := bots.Delete(ctx, bot.ID, bot.Name, "user", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = routines.db.Exec(`UPDATE approvals SET expires_at=0 WHERE id=?`, proposal.ApprovalID); err != nil {
-		t.Fatal(err)
+	if _, err := routines.Commit(ctx, routineInput(bot), "user"); err == nil {
+		t.Fatal("已删除目标仍可创建例程")
 	}
-	groupError(t, approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "user"), "APPROVAL_EXPIRED")
-	proposal, err = routines.Propose(ctx, "", routineInput(bot), "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = bots.Delete(ctx, bot.ID, bot.Name, "user", false); err != nil {
-		t.Fatal(err)
-	}
-	groupError(t, approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "user"), "APPROVAL_RESOLVED")
 }
 
 func TestRoutineRecoveryDoesNotDiscardNewProcessQueue(t *testing.T) {
@@ -125,29 +106,11 @@ func TestRoutinePartialUpdatePreservesDisabledScheduleAndCanResetPinnedConversat
 	input.TargetMode = "pinned"
 	input.PinnedConversationID = "custom-routine"
 	routine := approveRoutine(t, routines, approvals, input)
-	proposal, err := routines.ProposeUpdate(ctx, routine.ID, RoutinePatch{Revision: routine.Revision, Name: Field[string]{Set: true, Value: "只改名称"}}, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	current, err := routines.Get(ctx, routine.ID)
-	if err != nil || current.IsEnabled || current.NextRunAt != nil || current.Prompt != routine.Prompt || current.Cron != routine.Cron || current.PinnedConversationID != "custom-routine" {
+	current, err := routines.UpdateNow(ctx, routine.ID, RoutinePatch{Revision: routine.Revision, Name: Field[string]{Set: true, Value: "只改名称"}}, "user")
+	if err != nil || current.Name != "只改名称" || current.IsEnabled || current.NextRunAt != nil || current.Prompt != routine.Prompt || current.Cron != routine.Cron || current.PinnedConversationID != "custom-routine" {
 		t.Fatal("局部更新覆盖未提供字段", current, err)
 	}
-	proposal, err = routines.ProposeUpdate(ctx, current.ID, RoutinePatch{Revision: current.Revision, PinnedConversationID: Field[string]{Set: true, Value: ""}}, "user")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = approvals.Decide(ctx, proposal.ApprovalID, ApprovalDecision{Decision: "approve"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	current, err = routines.Get(ctx, current.ID)
-	if err != nil || current.PinnedConversationID != bot.ConversationID {
-		t.Fatal("无法重置到主会话", current, err)
-	}
-	if _, err = routines.ProposeUpdate(ctx, current.ID, RoutinePatch{Revision: current.Revision, IsEnabled: Field[*bool]{Set: true}}, "user"); err == nil {
+	if _, err = routines.UpdateNow(ctx, current.ID, RoutinePatch{Revision: current.Revision, IsEnabled: Field[*bool]{Set: true}}, "user"); err == nil {
 		t.Fatal("接受空启用状态")
 	}
 }

@@ -65,16 +65,26 @@ type Agent struct {
 	ComputerURL string        `json:"computerUrl"`
 }
 
+// MessageAttachment 是气泡上的图片或文件。文件本身在工作区，这里只保留定位信息。
+type MessageAttachment struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	MediaType string `json:"mediaType"`
+	Kind      string `json:"kind"`
+}
+
 // ChatMessage 是气泡。未配置模型时保持 unsent，调用失败才是 failed。
 type ChatMessage struct {
-	ID        string     `json:"id"`
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	CreatedAt string     `json:"createdAt"`
-	Status    string     `json:"status"`
-	RequestID string     `json:"requestId,omitempty"`
-	ReplyTo   *Reply     `json:"replyTo,omitempty"`
-	Reactions []Reaction `json:"reactions"`
+	ID          string              `json:"id"`
+	Role        string              `json:"role"`
+	Content     string              `json:"content"`
+	CreatedAt   string              `json:"createdAt"`
+	Status      string              `json:"status"`
+	RequestID   string              `json:"requestId,omitempty"`
+	ReplyTo     *Reply              `json:"replyTo,omitempty"`
+	Reactions   []Reaction          `json:"reactions"`
+	Attachments []MessageAttachment `json:"attachments,omitempty"`
 }
 
 // Reply 保存被引用消息的标识和界面摘要。

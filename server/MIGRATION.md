@@ -58,7 +58,8 @@
 - 电脑页增加「开始准备」。它调用原来的 `POST /api/v1/bootstrap/retry`，配套模式也可以在这时安装浏览器和字体并启动持久浏览器。端到端测试不会点击它，以免下载 Chrome。
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
-- 桌面猫咪仍使用 loose，系统提示和工具列表包含记忆与例程工具。高风险工具（终端写入、新网站、注入密钥）在 loose 下仍会进入原来的审批，这一批没有删掉审批表。记忆删除和例程工具是中风险，loose 下直接执行。
+- 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
+- 猫咪面板有群聊和私信。群聊走原来的群组与 `POST /conversations/{id}/messages`。私信是猫咪之间的 `bot_dm`，只查看。消息可以上传图片和文件，走原来的 `/api/v1/fs/upload` 和 `SendInput.Attachments`。导出草稿入口已去掉。
 
 私信在 tom 里是猫咪和猫咪之间的 `bot_dm` 会话，不是用户和一只猫咪的单聊。用户和一只猫咪的对话仍是 `direct`。这一批还没有桌面入口。
 

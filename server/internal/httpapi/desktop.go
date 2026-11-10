@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -19,6 +20,17 @@ func (s *Server) workspaceRoutes(router chi.Router) {
 		protected.Put("/workspace", s.desktopSaveWorkspace)
 		protected.Post("/workspace/import", s.desktopImportWorkspace)
 		protected.Post("/messages/stream", s.streamWorkspaceMessage)
+		protected.Get("/conversations", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
+			limit, err := pageLimit(r, 50)
+			if err != nil {
+				return nil, err
+			}
+			return s.Conversations.List(ctx, r.URL.Query().Get("kind"), r.URL.Query().Get("cursor"), limit)
+		}))
+		protected.Get("/conversations/{id}/messages", handleRead(s, s.readConversationMessages))
+		protected.Post("/conversations/{id}/messages", s.postConversationMessage)
+		protected.Put("/messages/{id}/reaction", s.setMessageReaction)
+		protected.Post("/workspace/agents/{id}/ready", s.ensureDesktopAgent)
 		protected.Post("/computer", s.openComputer)
 		protected.Get("/model-settings", s.desktopLoadSettings)
 		protected.Put("/model-settings", s.desktopSaveSettings)

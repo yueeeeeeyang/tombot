@@ -107,6 +107,9 @@ func (r *Runtime) submitGroupLocked(ctx context.Context, conversationID string, 
 		if err = service.AppendMessage(ctx, tx, &message); err != nil {
 			return err
 		}
+		if err = service.BindReply(ctx, tx, message.ID, input.ReplyToID, conversationID); err != nil {
+			return err
+		}
 		task.HistorySeq = message.Seq
 		if _, err = tx.ExecContext(ctx, "UPDATE turns SET history_upto_seq=? WHERE id=?", task.HistorySeq, task.TurnID); err != nil {
 			return err

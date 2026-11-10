@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/agent"
 	"io.yueyang/tom/internal/domain"
 )
@@ -44,7 +46,7 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 		s.fail(w, r, err)
 		return
 	}
-	submission, err := s.Runtime.Submit(r.Context(), dispatch.ConversationID, agent.SendInput{Content: dispatch.Content}, "desktop")
+	submission, err := s.Runtime.Submit(r.Context(), dispatch.ConversationID, agent.SendInput{Content: dispatch.Content, Attachments: dispatch.Attachments, ReplyToID: dispatch.ReplyToID}, "desktop")
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -91,6 +93,98 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 	if err = write("done", string(encoded)); err != nil && s.Logger != nil {
 		s.Logger.Info("桌面已断开，运行结果已保存", "agent_id", dispatch.AgentID, "message_id", dispatch.MessageID, "turn_id", submission.TurnID)
 	}
+}
+
+// postConversationMessage 接受原来的发送体。桌面用事件流看过程，其他调用仍拿到 202。
+func (s *Server) postConversationMessage(w http.ResponseWriter, r *http.Request) {
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		s.streamConversationMessage(w, r)
+		return
+	}
+	handleInput(s, 202, func(ctx context.Context, r *http.Request, input agent.SendInput) (any, error) {
+		return s.Runtime.Submit(ctx, chi.URLParam(r, "id"), input, actor(r))
+	})(w, r)
+}
+
+func (s *Server) streamConversationMessage(w http.ResponseWriter, r *http.Request) {
+	if s.Runtime == nil || s.Bus == nil {
+		s.fail(w, r, domain.NewError(500, "AGENT_UNAVAILABLE", "服务端 agent 还没有启动。"))
+		return
+	}
+	var input agent.SendInput
+	if err := decode(w, r, &input); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	cursor, err := s.eventCursor(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	submission, err := s.Runtime.Submit(r.Context(), chi.URLParam(r, "id"), input, actor(r))
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	controller := http.NewResponseController(w)
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("X-Accel-Buffering", "no")
+	write := func(event, payload string) error {
+		if err := controller.SetWriteDeadline(time.Now().Add(10 * time.Second)); err != nil && err != http.ErrNotSupported {
+			return err
+		}
+		if _, err := io.WriteString(w, "event: "+event+"\ndata: "+payload+"\n\n"); err != nil {
+			return err
+		}
+		return controller.Flush()
+	}
+	if err = write("accepted", fmt.Sprintf(`{"turnId":%q,"messageId":%q}`, submission.TurnID, submission.MessageID)); err != nil && s.Logger != nil {
+		s.Logger.Info("桌面连接已断开，群聊继续运行", "conversation_id", chi.URLParam(r, "id"), "turn_id", submission.TurnID)
+	}
+	runCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	reply, runErr := s.followRun(runCtx, chi.URLParam(r, "id"), submission.TurnID, cursor, write)
+	if runErr != nil {
+		code := "MODEL_FAILED"
+		var failure *domain.Error
+		if errors.As(runErr, &failure) && failure.Code != "" {
+			code = failure.Code
+		}
+		_ = write("error", fmt.Sprintf(`{"code":%q,"message":%q}`, code, runErr.Error()))
+		return
+	}
+	encoded, err := json.Marshal(map[string]string{"reply": reply, "messageId": submission.MessageID})
+	if err != nil {
+		return
+	}
+	_ = write("done", string(encoded))
+}
+
+func (s *Server) setMessageReaction(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Emoji string `json:"emoji"`
+	}
+	if err := decode(w, r, &input); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.Conversations.ToggleReaction(r.Context(), chi.URLParam(r, "id"), input.Emoji); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.respond(w, r, http.StatusOK, map[string]bool{"toggled": true})
+}
+
+func (s *Server) ensureDesktopAgent(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireDesktop(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if err := s.Workspace.EnsureAgent(r.Context(), chi.URLParam(r, "id")); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.respond(w, r, http.StatusOK, map[string]bool{"ready": true})
 }
 
 // eventCursor 停在当前最后一条事件。新的运行只消费这之后的增量，避免把上一轮回复再拼进来。

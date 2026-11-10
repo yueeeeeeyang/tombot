@@ -3,14 +3,9 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"fmt"
-	"time"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/infra/ids"
-	safelog "io.yueyang/tom/internal/infra/log"
 	"modernc.org/sqlite"
 )
 
@@ -34,22 +29,9 @@ func Transact(ctx context.Context, db *sql.DB, apply func(*sql.Tx) error) (resul
 	return tx.Commit()
 }
 
-// Audit 与业务操作共用事务；详情只允许业务标识、字段名及脱敏摘要。
-func Audit(ctx context.Context, tx *sql.Tx, actor, action, target string, details any) error {
-	actor, action, target = safelog.SafeText(actor), safelog.SafeText(action), safelog.SafeText(target)
-	if len(actor) > 256 || len(action) > 128 || len(target) > 4096 {
-		return fmt.Errorf("审计标识超出容量")
-	}
-	encoded, err := json.Marshal(details)
-	if err != nil {
-		return err
-	}
-	encoded, err = safelog.SafeDetails(encoded)
-	if err != nil {
-		return err
-	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO audit_log(id,actor,action,target,detail_json,created_at) VALUES(?,?,?,?,?,?)", ids.New(), actor, action, target, string(encoded), time.Now().UnixMilli())
-	return err
+// Audit 不再写入。审批、用量和审计已经从桌面和服务里去掉。
+func Audit(context.Context, *sql.Tx, string, string, string, any) error {
+	return nil
 }
 
 // ConstraintError 隐藏 SQLite 原始错误，避免响应暴露内部数据和表名。

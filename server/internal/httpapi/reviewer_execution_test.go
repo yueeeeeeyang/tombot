@@ -13,7 +13,6 @@ import (
 
 	"io.yueyang/tom/internal/agent"
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/policy"
 	"io.yueyang/tom/internal/service"
 	"io.yueyang/tom/internal/testkit"
 )
@@ -115,34 +114,6 @@ func TestHTTPIndependentReviewApprovalExecutionAndCost(t *testing.T) {
 	if err = json.Unmarshal(response.Body.Bytes(), &sent); err != nil {
 		t.Fatal(err)
 	}
-	var approval service.ApprovalSummary
-	for {
-		wake := server.Bus.Wake()
-		items, err := server.Approvals.List(ctx, "pending", "", 50)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(items) > 0 {
-			approval = items[0]
-			break
-		}
-		select {
-		case <-wake:
-		case <-ctx.Done():
-			t.Fatal("审查未进入审批")
-		}
-	}
-	var action policy.Action
-	if err = json.Unmarshal(approval.Detail, &action); err != nil || action.Review == nil || action.Review.ModelID != reviewer.ID || action.Review.SelfReview || approval.RiskLevel != "high" {
-		t.Fatal("独立审查未传入审批", err)
-	}
-	if _, err = server.Files.Read(ctx, bot.ID, "bot", "out/report.md"); err == nil {
-		t.Fatal("审批前已写入")
-	}
-	response = request(t, handler, "POST", "/api/v1/approvals/"+approval.ID+"/decision", service.ApprovalDecision{Decision: "approve"}, headers)
-	if response.Code != 200 {
-		t.Fatal("审批未生效", response.Code)
-	}
 	for {
 		wake := server.Bus.Wake()
 		run, err := server.Runtime.Run(ctx, sent.RunID)
@@ -150,8 +121,8 @@ func TestHTTPIndependentReviewApprovalExecutionAndCost(t *testing.T) {
 			t.Fatal(err)
 		}
 		if run.Status == "succeeded" {
-			if run.CostMicro != 18 {
-				t.Fatal("执行和审查费用未合并", run.CostMicro)
+			if run.CostMicro != 6 {
+				t.Fatal("执行费用不正确", run.CostMicro)
 			}
 			break
 		}
@@ -164,11 +135,14 @@ func TestHTTPIndependentReviewApprovalExecutionAndCost(t *testing.T) {
 			t.Fatal("审批后未完成")
 		}
 	}
-	if reviewCalls.Load() != 1 || executionCalls.Load() != 2 {
-		t.Fatal("审查调用次数不正确")
+	if reviewCalls.Load() != 0 || executionCalls.Load() != 2 {
+		t.Fatal("工具执行仍调用了审查模型", reviewCalls.Load(), executionCalls.Load())
 	}
 	file, err := server.Files.Read(ctx, bot.ID, "bot", "out/report.md")
 	if err != nil || !strings.Contains(file.Content, "报告内容") {
-		t.Fatal("批准后未生成文件", err)
+		t.Fatal("工具未立即生成文件", err)
+	}
+	if reviewer.ID == "" {
+		t.Fatal("审查模型未创建")
 	}
 }

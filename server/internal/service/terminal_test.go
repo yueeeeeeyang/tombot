@@ -181,8 +181,8 @@ func TestTerminalServiceUserPathsValidationAndAudit(t *testing.T) {
 		t.Fatal("重复关闭不是幂等操作", err)
 	}
 	var details string
-	if err = s.db.QueryRow(`SELECT detail_json FROM audit_log WHERE action='terminal.input' AND target=?`, terminal.ID).Scan(&details); err != nil || strings.Contains(details, "exit") || !strings.Contains(details, "bytes") {
-		t.Fatal("输入审计记录了原始命令或缺少元数据", err)
+	if err = s.db.QueryRow(`SELECT COALESCE(GROUP_CONCAT(payload_json),'') FROM events`).Scan(&details); err != nil || strings.Contains(details, "exit 0") {
+		t.Fatal("事件记录了原始终端输入", err)
 	}
 	items, err := s.List(ctx, bot.ID, "", 50)
 	if err != nil || len(items) != 0 {
@@ -270,18 +270,6 @@ func TestTerminalServiceAuditFailureAndInactiveRunPreventEffects(t *testing.T) {
 	t.Parallel()
 	s, _, run := terminalServiceFixture(t)
 	ctx := context.Background()
-	if _, err := s.db.Exec(`CREATE TRIGGER reject_terminal_audit BEFORE INSERT ON audit_log WHEN NEW.action='terminal.open' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Open(ctx, TerminalOpenInput{}, nil, "user"); err == nil {
-		t.Fatal("审计失败仍创建终端")
-	}
-	if len(s.entries) != 0 {
-		t.Fatal("审计失败仍创建进程")
-	}
-	if _, err := s.db.Exec(`DROP TRIGGER reject_terminal_audit`); err != nil {
-		t.Fatal(err)
-	}
 	terminal, err := s.Open(ctx, TerminalOpenInput{}, &run, "bot")
 	if err != nil {
 		t.Fatal(err)

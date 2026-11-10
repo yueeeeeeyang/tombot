@@ -119,16 +119,13 @@ func TestGroupInvalidInputAndAuditFailureRollback(t *testing.T) {
 	}
 	_, err := groups.Create(ctx, GroupInput{Name: "邀请拒绝", Members: []string{members[0].ID, members[1].ID}}, "user")
 	groupError(t, err, "GROUP_INVITE_DENIED")
-	if _, err = groups.db.Exec(`CREATE TRIGGER fail_group_audit BEFORE INSERT ON audit_log WHEN NEW.action='group.create' BEGIN SELECT RAISE(ABORT,'test_group_audit'); END`); err != nil {
+	if _, err = groups.Create(ctx, GroupInput{Name: "直接创建", Members: []string{members[0].ID}}, "user"); err != nil {
 		t.Fatal(err)
-	}
-	if _, err = groups.Create(ctx, GroupInput{Name: "审计失败", Members: []string{members[0].ID}}, "user"); err == nil {
-		t.Fatal("审计失败被忽略")
 	}
 	var count int
 	for _, query := range []string{"SELECT COUNT(*) FROM groups", "SELECT COUNT(*) FROM group_members", "SELECT COUNT(*) FROM conversations WHERE kind='group'"} {
-		if err = groups.db.QueryRow(query).Scan(&count); err != nil || count != 0 {
-			t.Fatal("失败群事务遗留数据", query, err, count)
+		if err = groups.db.QueryRow(query).Scan(&count); err != nil || count != 1 {
+			t.Fatal("群创建未提交", query, err, count)
 		}
 	}
 }

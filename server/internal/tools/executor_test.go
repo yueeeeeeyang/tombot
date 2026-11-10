@@ -9,8 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,27 +99,6 @@ func execute(t *testing.T, e *Executor, bot domain.Bot, run domain.Run, name str
 	}
 	return result
 }
-func pending(t *testing.T, e *Executor) service.ApprovalSummary {
-	t.Helper()
-	timer := time.NewTimer(3 * time.Second)
-	defer timer.Stop()
-	for {
-		wake := e.events.Wake()
-		items, err := e.approvals.List(context.Background(), "pending", "", 50)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(items) > 0 {
-			return items[0]
-		}
-		select {
-		case <-wake:
-		case <-timer.C:
-			t.Fatal("未创建审批")
-		}
-	}
-}
-
 func TestFilesExecuteAuditAndTruncation(t *testing.T) {
 	e, bot, run := fixture(t, "standard")
 	result := execute(t, e, bot, run, "file_write", map[string]any{"path": "out/report.md", "content": "Original report"})
@@ -139,10 +116,6 @@ func TestFilesExecuteAuditAndTruncation(t *testing.T) {
 	var saved string
 	if err := e.db.QueryRow("SELECT input_json FROM tool_calls WHERE tool_name='file_write'").Scan(&saved); err != nil || strings.Contains(saved, "Original report") {
 		t.Fatal("调用摘要泄露正文", err)
-	}
-	var audits int
-	if err := e.db.QueryRow("SELECT COUNT(*) FROM audit_log WHERE action='fs.write'").Scan(&audits); err != nil || audits != 2 {
-		t.Fatal("文件审计缺失", err)
 	}
 	result = execute(t, e, bot, run, "file_write", map[string]any{"path": "out/large.md", "content": strings.Repeat("long line\n", 10000)})
 	if result.IsError {
@@ -175,96 +148,36 @@ func TestFilesExecuteAuditAndTruncation(t *testing.T) {
 
 func TestApprovalDecisionRememberAndConflicts(t *testing.T) {
 	e, bot, run := fixture(t, "standard")
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	done := make(chan domain.ToolResultBlock, 1)
-	failures := make(chan error, 1)
-	call := domain.ToolUseBlock{ID: ids.New(), Name: "file_write", Input: map[string]any{"path": "notes/report.md", "content": "approved content", "create_dirs": true}}
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, call)
-		done <- result
-		failures <- err
-	}()
-	approval := pending(t, e)
-	if _, err := e.files.Read(context.Background(), bot.ID, "notes/report.md", 1, 1); err == nil {
-		t.Fatal("未审批就发生写入")
-	}
-	var status string
-	if err := e.db.QueryRow("SELECT status FROM runs WHERE id=?", run.ID).Scan(&status); err != nil || status != "waiting_approval" {
-		t.Fatal("等待状态未持久化", err)
-	}
-	var successes atomic.Int32
-	var workers sync.WaitGroup
-	for range 8 {
-		workers.Go(func() {
-			err := e.approvals.Decide(context.Background(), approval.ID, service.ApprovalDecision{Decision: "approve", Remember: &service.RememberDecision{Scope: "bot"}}, "user")
-			if err == nil {
-				successes.Add(1)
-			}
-		})
-	}
-	workers.Wait()
-	if successes.Load() != 1 {
-		t.Fatal("审批重复决策成功")
-	}
-	if err := <-failures; err != nil {
-		t.Fatal(err)
-	}
-	if result := <-done; result.IsError {
+	result := execute(t, e, bot, run, "file_write", map[string]any{"path": "notes/report.md", "content": "approved content", "create_dirs": true})
+	if result.IsError {
 		t.Fatal(result.Content)
 	}
-	decision, err := e.approvals.PolicyDecision(context.Background(), bot.ID, policy.Action{Class: "fs.write_outside_out", Pattern: "notes/report.md"})
-	if err != nil || decision != "allow" {
-		t.Fatal("审批与规则未同时保存", err)
+	file, err := e.files.Read(context.Background(), bot.ID, "notes/report.md", 1, 1)
+	if err != nil || !strings.Contains(file.Content, "approved content") {
+		t.Fatal("写入未立即执行", err)
 	}
+	var status string
 	if err = e.db.QueryRow("SELECT status FROM runs WHERE id=?", run.ID).Scan(&status); err != nil || status != "running" {
-		t.Fatal("审批后未恢复执行", err)
+		t.Fatal("执行把运行标成等待审批", status, err)
 	}
-	result := execute(t, e, bot, run, "file_write", map[string]any{"path": "notes/report.md", "content": "second write"})
-	if result.IsError {
-		t.Fatal("记忆规则未生效", result.Content)
+	decision, err := e.approvals.PolicyDecision(context.Background(), bot.ID, policy.Action{Class: "fs.write_outside_out", Pattern: "notes/report.md"})
+	if err != nil || decision != "" {
+		t.Fatal("策略仍返回拒绝或放行规则", decision, err)
 	}
 }
 
 func TestApprovalDenialCancellationAndWhitelist(t *testing.T) {
-	for _, mode := range []string{"deny", "cancel"} {
-		t.Run(mode, func(t *testing.T) {
-			e, bot, run := fixture(t, "strict")
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			done := make(chan error, 1)
-			results := make(chan domain.ToolResultBlock, 1)
-			go func() {
-				result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "file_write", Input: map[string]any{"path": "out/report", "content": "should not exist"}})
-				results <- result
-				done <- err
-			}()
-			approval := pending(t, e)
-			if mode == "deny" {
-				if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "deny"}, "user"); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				cancel()
-			}
-			err := <-done
-			result := <-results
-			if mode == "deny" && (err != nil || !result.IsError || !strings.Contains(result.Content, "TOOL_DENIED")) {
-				t.Fatal("拒绝没有回灌", err, result)
-			}
-			if mode == "cancel" && err == nil {
-				t.Fatal("取消未传播")
-			}
-			if _, err = e.files.Read(context.Background(), bot.ID, "out/report", 1, 1); err == nil {
-				t.Fatal("拒绝或取消仍发生副作用")
-			}
-			pending, err := e.approvals.List(context.Background(), "pending", "", 50)
-			if err != nil || len(pending) != 0 {
-				t.Fatal("残留待办", err)
-			}
-		})
+	e, bot, run := fixture(t, "strict")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "file_write", Input: map[string]any{"path": "out/report", "content": "should not exist"}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("取消未传播", err)
 	}
-	e, bot, run := fixture(t, "standard")
+	if _, err = e.files.Read(context.Background(), bot.ID, "out/report", 1, 1); err == nil {
+		t.Fatal("取消仍发生副作用")
+	}
+	e, bot, run = fixture(t, "standard")
 	bot.ToolPolicy.AllowedTools = nil
 	result := execute(t, e, bot, run, "file_write", map[string]any{"path": "out/report", "content": "blocked"})
 	if !result.IsError || !strings.Contains(result.Content, "TOOL_NOT_ALLOWED") {
@@ -279,54 +192,29 @@ func TestApprovalDenialCancellationAndWhitelist(t *testing.T) {
 
 func TestPolicyPrecedence(t *testing.T) {
 	e, bot, _ := fixture(t, "standard")
-	ctx := context.Background()
-	target := "notes/report"
-	for _, rule := range []service.PolicyRule{{BotID: "*", ActionClass: "fs.write_outside_out", Pattern: &target, Decision: "deny"}, {BotID: bot.ID, ActionClass: "fs.write_outside_out", Decision: "allow"}} {
-		if _, err := e.approvals.SaveRule(ctx, rule, "user"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	decision, err := e.approvals.PolicyDecision(ctx, bot.ID, policy.Action{Class: "fs.write_outside_out", Pattern: target})
-	if err != nil || decision != "allow" {
-		t.Fatal("Bot 规则没有优先", err)
-	}
-	if _, err = e.approvals.SaveRule(ctx, service.PolicyRule{BotID: bot.ID, ActionClass: "fs.write_outside_out", Pattern: &target, Decision: "deny"}, "user"); err != nil {
-		t.Fatal(err)
-	}
-	decision, err = e.approvals.PolicyDecision(ctx, bot.ID, policy.Action{Class: "fs.write_outside_out", Pattern: target})
-	if err != nil || decision != "deny" {
-		t.Fatal("精确规则没有优先", err)
+	decision, err := e.approvals.PolicyDecision(context.Background(), bot.ID, policy.Action{Class: "fs.write_outside_out", Pattern: "notes/report"})
+	if err != nil || decision != "" {
+		t.Fatal("策略仍返回拒绝规则", decision, err)
 	}
 }
 
 func TestApprovalCannotAuthorizeChangedOutputPathRisk(t *testing.T) {
 	root := t.TempDir()
 	e, bot, run := fixtureAt(t, "strict", root)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	results := make(chan domain.ToolResultBlock, 1)
-	go func() {
-		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot, Step: 0}, domain.ToolUseBlock{ID: ids.New(), Name: "file_write", Input: map[string]any{"path": "out/link/report.md", "content": "should not be written", "create_dirs": true}})
-		results <- result
-		done <- err
-	}()
-	approval := pending(t, e)
-	if err := os.Symlink("../notes", filepath.Join(root, bot.WorkspaceDir, "out/link")); err != nil {
+	linkParent := filepath.Join(root, bot.WorkspaceDir, "out")
+	if err := os.MkdirAll(linkParent, 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.approvals.Decide(ctx, approval.ID, service.ApprovalDecision{Decision: "approve"}, "user"); err != nil {
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(linkParent, "link")); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	result := execute(t, e, bot, run, "file_write", map[string]any{"path": "out/link/report.md", "content": "should not be written", "create_dirs": true})
+	if !result.IsError {
+		t.Fatal("符号链接逃逸被接受", result.Content)
 	}
-	result := <-results
-	if !result.IsError || !strings.Contains(result.Content, "TOOL_TARGET_CHANGED") {
-		t.Fatal("审批后目标变化仍获准", result)
-	}
-	if _, err := e.files.Read(ctx, bot.ID, "notes/report.md", 1, 1); err == nil {
-		t.Fatal("变化后的路径被写入")
+	if _, err := os.Stat(filepath.Join(outside, "report.md")); err == nil {
+		t.Fatal("工作区外被写入")
 	}
 }
 

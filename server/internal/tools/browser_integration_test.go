@@ -86,7 +86,7 @@ func TestRealBrowserToolApprovalAndBlockedRedirect(t *testing.T) {
 		}
 	}))
 	defer host.Close()
-	result := approveBrowserTool(t, e, bot, run, map[string]any{"action": "open", "url": host.URL}, nil)
+	result := execute(t, e, bot, run, "browser", map[string]any{"action": "open", "url": host.URL})
 	var tab service.BrowserTab
 	if err = json.Unmarshal([]byte(result.Content), &tab); err != nil || result.IsError {
 		t.Fatal("工具打开失败", err, result.Content)
@@ -100,11 +100,11 @@ func TestRealBrowserToolApprovalAndBlockedRedirect(t *testing.T) {
 	if len(ref) != 2 {
 		t.Fatal("缺少输入框引用")
 	}
-	result = approveBrowserTool(t, e, bot, run, map[string]any{"action": "type", "id": tab.ID, "ref": ref[1], "text": "真实工具输入"}, nil)
+	result = execute(t, e, bot, run, "browser", map[string]any{"action": "type", "id": tab.ID, "ref": ref[1], "text": "真实工具输入"})
 	if result.IsError {
 		t.Fatal(result.Content)
 	}
-	result = approveBrowserTool(t, e, bot, run, map[string]any{"action": "key", "id": tab.ID, "key": "Enter"}, nil)
+	result = execute(t, e, bot, run, "browser", map[string]any{"action": "key", "id": tab.ID, "key": "Enter"})
 	if result.IsError {
 		t.Fatal(result.Content)
 	}
@@ -123,11 +123,7 @@ func TestRealBrowserToolApprovalAndBlockedRedirect(t *testing.T) {
 	if result.IsError || !strings.Contains(result.Content, ".jpg") {
 		t.Fatal("截图未保存为产物", result.Content)
 	}
-	result = approveBrowserTool(t, e, bot, run, map[string]any{"action": "download", "id": tab.ID, "url": host.URL + "/file"}, func(a service.ApprovalSummary) {
-		if downloads.Load() != 0 || a.ActionClass != "browser.interact" {
-			t.Fatal("下载在审批前发出请求或没有逐次确认")
-		}
-	})
+	result = execute(t, e, bot, run, "browser", map[string]any{"action": "download", "id": tab.ID, "url": host.URL + "/file"})
 	var downloaded service.BrowserDownload
 	if err = json.Unmarshal([]byte(result.Content), &downloaded); err != nil || result.IsError || downloads.Load() != 1 {
 		t.Fatal("真实下载工具未完成或重放", err, result.Content)
@@ -158,11 +154,7 @@ func TestRealBrowserToolApprovalAndBlockedRedirect(t *testing.T) {
 		time.Sleep(backoff)
 		backoff = min(backoff*2, 200*time.Millisecond)
 	}
-	result = approveBrowserTool(t, e, bot, run, map[string]any{"action": "open", "id": tab.ID, "url": other.URL + "/landing"}, func(a service.ApprovalSummary) {
-		if hits.Load() != 0 {
-			t.Fatal("新源审批前产生请求")
-		}
-	})
+	result = execute(t, e, bot, run, "browser", map[string]any{"action": "open", "id": tab.ID, "url": other.URL + "/landing"})
 	if result.IsError || landings.Load() != 1 || submissions.Load() != 1 {
 		t.Fatal("批准后没有单次导航或重放了提交", result.Content, landings.Load(), submissions.Load())
 	}

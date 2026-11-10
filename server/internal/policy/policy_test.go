@@ -6,7 +6,7 @@ func TestApprovalThresholds(t *testing.T) {
 	for _, test := range []struct {
 		strictness, risk string
 		ask              bool
-	}{{"loose", "low", false}, {"loose", "medium", false}, {"loose", "high", true}, {"standard", "low", false}, {"standard", "medium", true}, {"standard", "high", true}, {"strict", "low", true}, {"strict", "medium", true}, {"strict", "high", true}} {
+	}{{"loose", "low", false}, {"loose", "medium", false}, {"loose", "high", false}, {"standard", "low", false}, {"standard", "medium", false}, {"standard", "high", false}, {"strict", "low", false}, {"strict", "medium", false}, {"strict", "high", false}} {
 		ask, err := NeedsApproval(test.strictness, test.risk)
 		if err != nil || ask != test.ask {
 			t.Fatalf("阈值错误 %+v %v", test, err)

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -81,51 +79,30 @@ func TestUploadProtectsBotDeletionAndPublishesArtifact(t *testing.T) {
 }
 
 func TestUploadAuditFailureAndCompletionFailure(t *testing.T) {
-	for _, phase := range []string{"start", "complete"} {
-		t.Run(phase, func(t *testing.T) {
-			ctx := context.Background()
-			db := testkit.Database(t)
-			events := bus.New(db)
-			directory := t.TempDir()
-			bots := NewBots(db, events, directory)
-			bot, err := bots.Create(ctx, BotInput{Template: "writer"}, "user")
-			if err != nil {
-				t.Fatal(err)
-			}
-			storage, err := workspace.Open(directory)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() {
-				if err := storage.Close(); err != nil {
-					t.Error(err)
-				}
-			})
-			if _, err = db.Exec(`CREATE TRIGGER reject_upload_audit BEFORE INSERT ON audit_log WHEN NEW.action='fs.upload.` + phase + `' BEGIN SELECT RAISE(ABORT,'audit unavailable'); END`); err != nil {
-				t.Fatal(err)
-			}
-			files := NewFiles(db, bots, storage, events, NewMemories(db, bots, storage, events))
-			result, err := files.Upload(ctx, bot.ID, "report.txt", strings.NewReader("报告"), "user")
-			if err == nil {
-				t.Fatal("审计失败未返回")
-			}
-			if phase == "start" {
-				entries, readErr := os.ReadDir(filepath.Join(directory, "bots", bot.ID, "inbox"))
-				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
-					t.Fatal(readErr)
-				}
-				if len(entries) != 0 {
-					t.Fatal("审计失败仍写入文件")
-				}
-			} else {
-				var public *domain.Error
-				if !errors.As(err, &public) || public.Code != "FILE_SAVED_EVENT_FAILED" || result.Path == "" {
-					t.Fatal("完成记录失败未说明已保存", err)
-				}
-				if _, err = files.Read(ctx, bot.ID, "bot", result.Path); err != nil {
-					t.Fatal("已保存文件丢失", err)
-				}
-			}
-		})
+	ctx := context.Background()
+	db := testkit.Database(t)
+	events := bus.New(db)
+	directory := t.TempDir()
+	bots := NewBots(db, events, directory)
+	bot, err := bots.Create(ctx, BotInput{Template: "writer"}, "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	storage, err := workspace.Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := storage.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	files := NewFiles(db, bots, storage, events, NewMemories(db, bots, storage, events))
+	result, err := files.Upload(ctx, bot.ID, "report.txt", strings.NewReader("报告"), "user")
+	if err != nil || result.Path == "" {
+		t.Fatal("上传失败", err)
+	}
+	if _, err = files.Read(ctx, bot.ID, "bot", result.Path); err != nil {
+		t.Fatal("已保存文件丢失", err)
 	}
 }
