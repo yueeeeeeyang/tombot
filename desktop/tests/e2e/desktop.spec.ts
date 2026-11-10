@@ -187,9 +187,6 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
   expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(true)
   expect(new Set(sources).size).toBe(8)
-  const workspaceCat = window.getByRole('button', { name: '我的工作空间' }).locator('.avatar')
-  await expect(workspaceCat).toHaveAttribute('data-avatar', 'chinese-pastoral')
-  expect(presets).not.toContain('chinese-pastoral')
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
     await window
@@ -215,7 +212,6 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
       expect(
         await image.evaluate((node: HTMLImageElement) => node.complete && node.naturalWidth > 0),
       ).toBe(true)
-      expect(preset).not.toBe('chinese-pastoral')
     }
     await window.screenshot({
       path: test.info().outputPath(`cat-presets-${theme}.png`),
@@ -450,7 +446,7 @@ test('参考图设置页和搜索框的布局与交互', async () => {
 async function expectFooterControlsAligned(): Promise<void> {
   const settings = window.getByRole('button', { name: '打开设置' })
   const metrics = await window.locator('.sidebar-footer').evaluate((footer) => {
-    const avatar = footer.querySelector('.profile-button .avatar')!.getBoundingClientRect()
+    const avatar = footer.querySelector('.profile-avatar')!.getBoundingClientRect()
     const button = footer.querySelector('.settings-button')!.getBoundingClientRect()
     const icon = footer.querySelector('.settings-button svg')!.getBoundingClientRect()
     return {
@@ -869,58 +865,23 @@ for (const modal of [
   })
 }
 
-test('工作空间头像会眨眼和悬停，减弱动效时停在睁眼', async () => {
-  await window.emulateMedia({ reducedMotion: 'no-preference' })
-  const avatar = window.getByRole('button', { name: '我的工作空间' }).locator('.avatar')
-  await expect(avatar).toHaveAttribute('data-avatar', 'chinese-pastoral')
-  await expect(avatar).toHaveAttribute('data-frames', 'ready')
-  await expect(avatar).toHaveAttribute('data-pose', 'idle')
-  await expect
-    .poll(() =>
-      avatar.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
-    )
-    .toBe('cat-idle')
-  const blinked = await avatar.evaluate(
-    (element) =>
-      new Promise<string>((resolve) => {
-        const started = performance.now()
-        const tick = () => {
-          const eye = element.getAttribute('data-eye')
-          if (eye && eye !== 'open') resolve(eye)
-          else if (performance.now() - started > 9_000) resolve('timeout')
-          else requestAnimationFrame(tick)
-        }
-        requestAnimationFrame(tick)
-      }),
-  )
-  expect(['half', 'closed']).toContain(blinked)
-
-  const box = await avatar.boundingBox()
-  await window.mouse.move(box!.x + 2, box!.y + box!.height / 2)
-  await expect(avatar).toHaveAttribute('data-pose', 'hover')
-  await expect(avatar).toHaveAttribute('data-ear', 'perk')
+test('工作空间头像是静止图片，悬停不播放猫咪动画', async () => {
+  const button = window.getByRole('button', { name: '我的工作空间' })
+  const image = button.locator('.profile-avatar')
+  await expect(button.locator('.avatar')).toHaveCount(0)
+  await expect(image).toHaveAttribute('src', /workspace-cat/)
   expect(
-    Number(
-      await avatar.evaluate((element) => getComputedStyle(element).getPropertyValue('--look-x')),
-    ),
-  ).toBeLessThan(0)
-  await window.mouse.down()
-  await expect(avatar).toHaveAttribute('data-pressed', 'true')
-  await window.mouse.up()
-  await expect(avatar).toHaveAttribute('data-pressed', 'false')
-
-  await window.emulateMedia({ reducedMotion: 'reduce' })
-  await expect(avatar).toHaveAttribute('data-pose', 'idle')
-  await expect(avatar).toHaveAttribute('data-eye', 'open')
-  await expect(avatar).toHaveAttribute('data-ear', 'rest')
-  await expect
-    .poll(() =>
-      avatar.locator('.cat-motion').evaluate((element) => getComputedStyle(element).animationName),
-    )
-    .toBe('none')
-  const portrait = await avatar.locator('.cat-portrait').getAttribute('src')
-  expect(portrait).toContain('chinese-pastoral')
-  expect(portrait).not.toMatch(/ears-|eyes-/)
+    await image.evaluate((element) => {
+      const portrait = element as HTMLImageElement
+      return portrait.complete && portrait.naturalWidth === 256 && portrait.naturalHeight === 256
+    }),
+  ).toBe(true)
+  expect(await image.evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
+  const box = await image.boundingBox()
+  await window.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+  await expect(button.locator('.avatar')).toHaveCount(0)
+  expect(await image.evaluate((element) => getComputedStyle(element).transform)).toBe('none')
+  expect(await image.evaluate((element) => getComputedStyle(element).animationName)).toBe('none')
 })
 
 test('猫咪静息、悬停与工作中姿态', async () => {
@@ -976,9 +937,9 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   await expect(window.locator('.sidebar .avatar[data-pose="working"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .avatar[data-ear="perk"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
-  await expect(
-    window.getByRole('button', { name: '我的工作空间' }).locator('.avatar'),
-  ).toHaveAttribute('data-pose', 'idle')
+  await expect(window.getByRole('button', { name: '我的工作空间' }).locator('.avatar')).toHaveCount(
+    0,
+  )
   await expect(header).toHaveAttribute('data-pose', 'working')
   await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   expect(await window.locator('.assistant-bubble').count()).toBe(repliesBefore)

@@ -60,12 +60,11 @@ describe('客户端交互', () => {
     expect(
       screen.getByRole('button', { name: /^游戏程序/ }).querySelector('.avatar'),
     ).toHaveAttribute('data-pose', 'idle')
-    const workspaceCat = screen
-      .getByRole('button', { name: '我的工作空间' })
-      .querySelector('.avatar')
-    expect(workspaceCat).toHaveAttribute('data-avatar', 'chinese-pastoral')
-    expect(workspaceCat).toHaveAttribute('data-pose', 'idle')
-    expect(workspaceCat?.querySelector('.cat-work-mark')).toBeNull()
+    const workspaceButton = screen.getByRole('button', { name: '我的工作空间' })
+    const workspaceCat = workspaceButton.querySelector('.profile-avatar')
+    expect(workspaceCat?.tagName).toBe('IMG')
+    expect(workspaceCat).toHaveAttribute('src', expect.stringContaining('workspace-cat'))
+    expect(workspaceButton.querySelector('.avatar')).toBeNull()
     expect(screen.getByRole('log').textContent).toBe(log)
   })
 

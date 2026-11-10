@@ -1,4 +1,4 @@
-import { CAT_AVATAR_IDS, WORKSPACE_AVATAR, type AvatarPresetId } from './presets'
+import { CAT_AVATAR_IDS, type CatAvatarId } from './presets'
 import type { EyeFrame } from './blink'
 import type { EarFrame } from './ears'
 
@@ -7,10 +7,8 @@ const frameModules = import.meta.glob('../../assets/cats/frames/*.png', {
   import: 'default',
 }) as Record<string, string>
 
-/** 运行时只用 256 像素帧。22/34/36/56 即使按 3 倍屏也落在 256 以内，不再打包 1254 原图。 */
+/** 运行时只用 256 像素帧。22/34/56 即使按 3 倍屏也落在 256 以内，不再打包 1254 原图。 */
 export const CAT_FRAME_SIZE = 256
-
-const FRAME_PRESETS: readonly AvatarPresetId[] = [...CAT_AVATAR_IDS, WORKSPACE_AVATAR.id]
 
 const FRAME_SUFFIXES = [
   'eyes-half-overlay',
@@ -21,7 +19,7 @@ const FRAME_SUFFIXES = [
   'ear-right-twitch',
 ] as const
 
-function frameFile(preset: AvatarPresetId, suffix?: (typeof FRAME_SUFFIXES)[number]): string {
+function frameFile(preset: CatAvatarId, suffix?: (typeof FRAME_SUFFIXES)[number]): string {
   return suffix ? `${preset}-${suffix}.png` : `${preset}.png`
 }
 
@@ -34,7 +32,7 @@ function requireFrame(fileName: string): string {
 }
 
 const sources = new Map<string, string>()
-for (const preset of FRAME_PRESETS) {
+for (const preset of CAT_AVATAR_IDS) {
   sources.set(frameFile(preset), requireFrame(frameFile(preset)))
   for (const suffix of FRAME_SUFFIXES) {
     sources.set(frameFile(preset, suffix), requireFrame(frameFile(preset, suffix)))
@@ -45,7 +43,7 @@ export function listCatFrameSources(): string[] {
   return [...sources.values()]
 }
 
-export function catPortraitSource(preset: AvatarPresetId, ear: EarFrame): string {
+export function catPortraitSource(preset: CatAvatarId, ear: EarFrame): string {
   if (!sources.has(frameFile(preset))) throw new Error('未知的猫咪预设')
   const suffix =
     ear === 'perk-half'
@@ -63,7 +61,7 @@ export function catPortraitSource(preset: AvatarPresetId, ear: EarFrame): string
 }
 
 /** 睁眼不叠图层。半闭和闭合只盖眼部，底下可以是静息或耳朵帧。 */
-export function catEyeOverlaySource(preset: AvatarPresetId, eye: EyeFrame): string | null {
+export function catEyeOverlaySource(preset: CatAvatarId, eye: EyeFrame): string | null {
   if (eye === 'open') return null
   const suffix = eye === 'half' ? 'eyes-half-overlay' : 'eyes-closed-overlay'
   const source = sources.get(frameFile(preset, suffix))
@@ -71,6 +69,6 @@ export function catEyeOverlaySource(preset: AvatarPresetId, eye: EyeFrame): stri
   return source
 }
 
-export function getCatAvatarImage(preset: AvatarPresetId): string {
+export function getCatAvatarImage(preset: CatAvatarId): string {
   return catPortraitSource(preset, 'rest')
 }

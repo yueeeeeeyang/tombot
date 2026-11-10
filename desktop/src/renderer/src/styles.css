@@ -292,9 +292,13 @@ button:disabled {
   padding: 0;
   text-align: left;
 }
-.profile-button > .avatar {
+.profile-avatar {
+  display: block;
   width: var(--footer-control-size);
   height: var(--footer-control-size);
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .profile-copy {
   display: flex;

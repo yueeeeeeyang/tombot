@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { WORKSPACE_AVATAR } from '../avatars/presets'
 import {
   addAgent,
   createWorkspace,
@@ -47,7 +46,7 @@ describe('工作空间领域规则', () => {
   })
 
   it('拒绝未知头像和远程头像地址', () => {
-    for (const avatar of ['', 'black', 'https://example.test/avatar.png', WORKSPACE_AVATAR.id]) {
+    for (const avatar of ['', 'black', 'https://example.test/avatar.png', 'workspace-cat']) {
       const workspace = createWorkspace()
       expect(
         currentWorkspaceSchema.safeParse({
