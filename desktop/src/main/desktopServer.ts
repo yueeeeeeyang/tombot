@@ -169,29 +169,6 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:memories', (_event, agentId: string) =>
     handle(() => call('GET', `/bots/${encodeURIComponent(agentId)}/memory`)),
   )
-  ipcMain.handle(
-    'desktop:memory-create',
-    (_event, input: { agentId: string; title: string; content: string }) =>
-      handle(() =>
-        call('POST', `/bots/${encodeURIComponent(input.agentId)}/memory`, {
-          title: input.title,
-          content: input.content,
-          summary: input.content.slice(0, 80),
-          tags: [],
-          importance: 1,
-        }),
-      ),
-  )
-  ipcMain.handle(
-    'desktop:memory-delete',
-    (_event, input: { agentId: string; path: string; sha256: string }) =>
-      handle(() =>
-        call(
-          'DELETE',
-          `/memory/${encodeURIComponent(input.agentId)}?path=${encodeURIComponent(input.path)}&expected_sha256=${encodeURIComponent(input.sha256)}`,
-        ),
-      ),
-  )
   ipcMain.handle('desktop:routines', (_event, agentId: string) =>
     handle(async () => {
       const rows = (await call('GET', `/routines?bot_id=${encodeURIComponent(agentId)}`)) as Array<{
@@ -203,20 +180,8 @@ export function registerDesktopIpc(): void {
         revision: number
         target?: { bot_id?: string }
       }>
-      return rows.filter((item) => item.target?.bot_id === agentId)
+      return (Array.isArray(rows) ? rows : []).filter((item) => item.target?.bot_id === agentId)
     }),
-  )
-  ipcMain.handle(
-    'desktop:routine-create',
-    (_event, input: { agentId: string; name: string; prompt: string }) =>
-      handle(() =>
-        call('POST', '/routines', {
-          name: input.name,
-          prompt: input.prompt,
-          cron: '0 8 * * *',
-          target: { bot_id: input.agentId },
-        }),
-      ),
   )
   ipcMain.handle(
     'desktop:routine-enabled',

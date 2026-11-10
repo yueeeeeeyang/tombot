@@ -25,7 +25,7 @@ func memoryDefinitions() map[string]definition {
 	return map[string]definition{
 		"memory_search": {"Search only this bot's private long-term memories. English uses stemming; CJK uses trigrams with a literal short-query fallback. Results include paths, summaries, snippets, SHA-256 and too_long. Use file_read on a returned path to expand it. Default limit: 5; maximum: 50.", map[string]any{"query": text, "limit": integer}, []string{"query"}, false},
 		"memory_write":  {"Create an intentional private memory, never automatically copy a group or bot transcript. title and content are required; importance defaults to 3 (1 to 5), tags is a string array. summary, if supplied, becomes the first paragraph of the Markdown body. For updates supply path and the current expected_sha256 obtained from memory_search or file_read. Existing unknown front matter is preserved.", map[string]any{"title": text, "summary": text, "content": text, "tags": map[string]any{"type": "array", "items": text}, "importance": integer, "path": text, "expected_sha256": text}, []string{"title", "content"}, true},
-		"memory_delete": {"Delete one of this bot's private memories after approval. Requires a path directly under .tom/memory/. Optional expected_sha256 must match the current file. The exact file version is bound to approval and rechecked before deletion.", map[string]any{"path": text, "expected_sha256": text}, []string{"path"}, true},
+		"memory_delete": {"Delete one of this bot's private memories. Requires a path directly under .tom/memory/. Optional expected_sha256 must match the current file and is rechecked immediately before deletion.", map[string]any{"path": text, "expected_sha256": text}, []string{"path"}, true},
 	}
 }
 
@@ -67,7 +67,8 @@ func (e *Executor) prepareMemory(ctx context.Context, bot domain.Bot, name strin
 	if name == "memory_delete" {
 		input.ExpectedSHA256 = binding
 		action.Class = "fs.delete"
-		action.Risk = "high"
+		// 中风险：宽松策略的桌面猫咪可以在对话里直接忘掉，标准策略仍然要审批。
+		action.Risk = "medium"
 		action.Title = "删除私有记忆"
 	} else {
 		if readErr == nil {

@@ -172,22 +172,12 @@ export function CatSidePanel({
         <MemoryPane
           agentId={agent.id}
           onLoad={(id) => window.desktop?.backend.listMemories?.(id) ?? Promise.resolve([])}
-          onCreate={(id, title, content) =>
-            window.desktop?.backend.createMemory?.(id, title, content) ?? Promise.resolve()
-          }
-          onDelete={(id, memory) =>
-            window.desktop?.backend.deleteMemory?.(id, memory.path, memory.sha256) ??
-            Promise.resolve()
-          }
         />
       )}
       {tab === 'routine' && (
         <RoutinePane
           agentId={agent.id}
           onLoad={(id) => window.desktop?.backend.listRoutines?.(id) ?? Promise.resolve([])}
-          onCreate={(id, name, prompt) =>
-            window.desktop?.backend.createRoutine?.(id, name, prompt) ?? Promise.resolve()
-          }
           onToggle={(routine) =>
             window.desktop?.backend.setRoutineEnabled?.(
               routine.id,

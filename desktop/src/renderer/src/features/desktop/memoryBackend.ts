@@ -70,14 +70,6 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve([])
   }
 
-  createMemory(): Promise<void> {
-    return Promise.resolve()
-  }
-
-  deleteMemory(): Promise<void> {
-    return Promise.resolve()
-  }
-
   listRoutines(): Promise<
     Array<{
       id: string
@@ -89,10 +81,6 @@ export class MemoryBackend implements DesktopBackend {
     }>
   > {
     return Promise.resolve([])
-  }
-
-  createRoutine(): Promise<void> {
-    return Promise.resolve()
   }
 
   setRoutineEnabled(): Promise<void> {

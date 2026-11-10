@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"io.yueyang/tom/internal/domain"
@@ -14,6 +15,22 @@ import (
 
 // estimateTokens 用 UTF-8 字节给出保守预算，避免中文按字符除以四造成明显低估。
 func estimateTokens(text string) int { return (len(text)+2)/3 + 8 }
+
+// toolDuties 告诉模型：记忆和例程由它自己在对话里改，不要把用户支去面板。
+func toolDuties(tools []provider.ToolSchema) string {
+	has := map[string]bool{}
+	for _, tool := range tools {
+		has[tool.Name] = true
+	}
+	var text strings.Builder
+	if has["memory_write"] || has["memory_delete"] {
+		text.WriteString("\n\nMemory\nWhen the user asks you to remember or forget something, or you judge a durable preference or fact, call memory_write, memory_search, or memory_delete yourself. Do not ask the user to edit a memory page.")
+	}
+	if has["routine_upsert"] || has["routine_delete"] {
+		text.WriteString("\n\nSchedules\nWhen the user asks for a reminder or a recurring task, or asks to change or cancel one, call routine_list, routine_upsert, or routine_delete yourself. Cron uses five fields and the default timezone is Asia/Shanghai. These tools apply immediately. Do not ask the user to fill a schedule form.")
+	}
+	return text.String()
+}
 
 func (r *Runtime) context(ctx context.Context, j *job) (provider.Request, error) {
 	if j.mode == "summary" {
@@ -24,6 +41,7 @@ func (r *Runtime) context(ctx context.Context, j *job) (provider.Request, error)
 	if r.deps.Tools != nil && j.model.SupportsTools {
 		req.Tools = r.deps.Tools.Schemas(j.bot)
 	}
+	req.System += toolDuties(req.Tools)
 	index, err := r.deps.Memories.PromptIndex(ctx, j.bot.ID)
 	if err != nil {
 		return req, err

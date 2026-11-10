@@ -1,4 +1,5 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 export interface CatRoutine {
   id: string
@@ -9,30 +10,34 @@ export interface CatRoutine {
   revision: number
 }
 
-/** 管理这只猫咪的定时任务。到点由服务端 agent 执行，结果写回对话。 */
+type RoutineMenuAnchor = {
+  routine: CatRoutine
+  x: number
+  y: number
+  trigger: HTMLElement
+}
+
+/** 定时任务只保留启用开关和与猫咪菜单一致的右键删除。创建和改期由 agent 在对话里完成。 */
 export function RoutinePane({
   agentId,
   onLoad,
-  onCreate,
   onToggle,
   onDelete,
 }: {
   agentId: string
   onLoad: (agentId: string) => Promise<CatRoutine[]>
-  onCreate: (agentId: string, name: string, prompt: string) => Promise<void>
   onToggle: (routine: CatRoutine) => Promise<void>
   onDelete: (routine: CatRoutine) => Promise<void>
 }) {
   const [items, setItems] = useState<CatRoutine[]>([])
-  const [name, setName] = useState('')
-  const [prompt, setPrompt] = useState('')
   const [error, setError] = useState('')
+  const [menu, setMenu] = useState<RoutineMenuAnchor | null>(null)
 
   useEffect(() => {
     let cancelled = false
     void onLoad(agentId).then(
       (next) => {
-        if (!cancelled) setItems(next)
+        if (!cancelled) setItems(Array.isArray(next) ? next : [])
       },
       (failure: Error) => {
         if (!cancelled) setError(failure.message)
@@ -44,21 +49,11 @@ export function RoutinePane({
   }, [agentId, onLoad])
 
   async function refresh(): Promise<void> {
-    setItems(await onLoad(agentId))
+    const next = await onLoad(agentId)
+    setItems(Array.isArray(next) ? next : [])
   }
 
-  async function submit(event: FormEvent): Promise<void> {
-    event.preventDefault()
-    try {
-      await onCreate(agentId, name.trim(), prompt.trim())
-      setName('')
-      setPrompt('')
-      await refresh()
-      setError('')
-    } catch (failure) {
-      setError((failure as Error).message)
-    }
-  }
+  const closeMenu = useCallback(() => setMenu(null), [])
 
   return (
     <div
@@ -70,55 +65,112 @@ export function RoutinePane({
       {items.length === 0 ? <p role="status">还没有定时任务</p> : null}
       <ul className="routine-list">
         {items.map((item) => (
-          <li key={item.id}>
-            <strong>{item.name}</strong>
-            <p>{item.is_enabled ? '每天 8:00' : '已暂停'}</p>
-            <button
-              type="button"
-              onClick={() =>
-                void onToggle(item)
-                  .then(refresh)
-                  .catch((failure: Error) => setError(failure.message))
-              }
-            >
-              {item.is_enabled ? '暂停' : '恢复'}
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                void onDelete(item)
-                  .then(refresh)
-                  .catch((failure: Error) => setError(failure.message))
-              }
-            >
-              删除
-            </button>
+          <li
+            key={item.id}
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenu({
+                routine: item,
+                x: event.clientX,
+                y: event.clientY,
+                trigger: event.currentTarget,
+              })
+            }}
+          >
+            <div className="routine-row">
+              <div>
+                <strong>{item.name}</strong>
+                <p>{item.prompt}</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                className="setting-switch"
+                aria-checked={item.is_enabled}
+                aria-label={item.is_enabled ? `暂停${item.name}` : `启用${item.name}`}
+                onClick={() => {
+                  void onToggle(item)
+                    .then(refresh)
+                    .then(() => setError(''))
+                    .catch((failure: Error) => setError(failure.message))
+                }}
+              >
+                <span />
+              </button>
+            </div>
           </li>
         ))}
       </ul>
-      <form onSubmit={(event) => void submit(event)}>
-        <label>
-          名称
-          <input
-            value={name}
-            maxLength={80}
-            onChange={(event) => setName(event.target.value)}
-            required
-          />
-        </label>
-        <label>
-          到点要做的事
-          <textarea
-            value={prompt}
-            maxLength={2000}
-            rows={3}
-            onChange={(event) => setPrompt(event.target.value)}
-            required
-          />
-        </label>
-        <button type="submit">添加定时任务</button>
-      </form>
+      {menu ? (
+        <RoutineMenu
+          anchor={menu}
+          onClose={closeMenu}
+          onDelete={() => {
+            const routine = menu.routine
+            closeMenu()
+            void onDelete(routine)
+              .then(refresh)
+              .then(() => setError(''))
+              .catch((failure: Error) => setError(failure.message))
+          }}
+        />
+      ) : null}
       {error ? <p role="alert">{error}</p> : null}
+    </div>
+  )
+}
+
+function RoutineMenu({
+  anchor,
+  onDelete,
+  onClose,
+}: {
+  anchor: RoutineMenuAnchor
+  onDelete: () => void
+  onClose: () => void
+}) {
+  const menu = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    if (menu.current == null) return
+    const element: HTMLDivElement = menu.current
+    if (typeof element.showPopover === 'function') element.showPopover()
+    const bounds = element.getBoundingClientRect()
+    element.style.left = `${Math.max(8, Math.min(anchor.x, innerWidth - bounds.width - 8))}px`
+    element.style.top = `${Math.max(8, Math.min(anchor.y, innerHeight - bounds.height - 8))}px`
+    element.querySelector<HTMLButtonElement>('button')?.focus({ preventScroll: true })
+    function closeOutside(event: PointerEvent): void {
+      if (event.target instanceof Node && !element.contains(event.target)) onClose()
+    }
+    document.addEventListener('pointerdown', closeOutside, true)
+    window.addEventListener('resize', onClose)
+    window.addEventListener('blur', onClose)
+    return () => {
+      if (typeof element.hidePopover === 'function') element.hidePopover()
+      document.removeEventListener('pointerdown', closeOutside, true)
+      window.removeEventListener('resize', onClose)
+      window.removeEventListener('blur', onClose)
+      if (anchor.trigger.isConnected) anchor.trigger.focus({ preventScroll: true })
+    }
+  }, [anchor, onClose])
+
+  return (
+    <div
+      ref={menu}
+      className="cat-context-menu"
+      popover="manual"
+      role="menu"
+      aria-label="定时任务"
+      onKeyDown={(event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          onClose()
+        }
+      }}
+    >
+      <button type="button" role="menuitem" className="is-danger" onClick={onDelete}>
+        <Trash2 size={16} />
+        <span>删除</span>
+      </button>
     </div>
   )
 }

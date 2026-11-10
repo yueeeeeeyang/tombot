@@ -44,6 +44,9 @@ func (e *Executor) prepare(ctx context.Context, bot domain.Bot, name string, raw
 	if name == "memory_search" || name == "memory_write" || name == "memory_delete" {
 		return e.prepareMemory(ctx, bot, name, raw)
 	}
+	if name == "routine_list" || name == "routine_upsert" || name == "routine_delete" {
+		return e.prepareRoutine(ctx, bot, name, raw)
+	}
 	if name == "computer_shell" {
 		var input term.ShellInput
 		decoder := json.NewDecoder(bytes.NewReader(raw))

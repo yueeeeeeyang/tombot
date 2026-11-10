@@ -94,6 +94,32 @@
   padding: 0;
   list-style: none;
 }
+.memory-list li,
+.routine-row {
+  padding: 8px 0;
+}
+.memory-list p,
+.routine-list p {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.routine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.routine-row > div {
+  min-width: 0;
+}
+.routine-row strong,
+.memory-list strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cat-panel-body form {
   display: flex;
   flex-direction: column;
