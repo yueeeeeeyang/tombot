@@ -44,6 +44,25 @@ export interface DesktopBackend {
     onEvent?: (event: { type: string; text: string }) => void,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
+  listMemories?: (
+    agentId: string,
+  ) => Promise<Array<{ path: string; title: string; summary: string; sha256: string }>>
+  createMemory?: (agentId: string, title: string, content: string) => Promise<void>
+  deleteMemory?: (agentId: string, path: string, sha256: string) => Promise<void>
+  listRoutines?: (agentId: string) => Promise<
+    Array<{
+      id: string
+      name: string
+      cron: string
+      prompt: string
+      is_enabled: boolean
+      revision: number
+    }>
+  >
+  createRoutine?: (agentId: string, name: string, prompt: string) => Promise<void>
+  setRoutineEnabled?: (id: string, revision: number, enabled: boolean) => Promise<void>
+  deleteRoutine?: (id: string, revision: number) => Promise<void>
+  startBootstrap?: () => Promise<void>
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>
   saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>

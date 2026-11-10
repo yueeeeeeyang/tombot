@@ -421,6 +421,11 @@ function WorkspaceApp() {
                 commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
               })
             }
+            onPrepareComputer={() => {
+              const start = window.desktop?.backend.startBootstrap
+              if (!start) return
+              void start().catch((failure: Error) => setNotice(failure.message))
+            }}
             onConnectComputer={() => {
               const open = window.desktop?.backend.openComputer
               if (!open) return

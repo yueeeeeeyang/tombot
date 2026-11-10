@@ -380,6 +380,115 @@ func (s *Routines) Delete(ctx context.Context, id string, revision int64, actor 
 	return err
 }
 
+// Commit 直接创建例程。桌面不再经过审批。
+func (s *Routines) Commit(ctx context.Context, input RoutineInput, actor string) (domain.Routine, error) {
+	now := s.now().UTC()
+	definition, err := normalizeRoutine(input, now)
+	if err != nil {
+		return domain.Routine{}, err
+	}
+	if input.Revision != 0 {
+		return domain.Routine{}, badInput("A new routine cannot specify a revision.")
+	}
+	id := ids.New()
+	err = store.Transact(ctx, s.db, func(tx *sql.Tx) error {
+		if err := validateRoutineTarget(ctx, tx, &definition); err != nil {
+			return err
+		}
+		var count int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM routines").Scan(&count); err != nil {
+			return err
+		}
+		if count >= 1000 {
+			return domain.NewError(429, "ROUTINE_CAPACITY", "At most 1000 routines are supported.")
+		}
+		next, err := scheduler.Next(definition.Cron, definition.Timezone, now)
+		if err != nil {
+			return err
+		}
+		var nextValue any
+		if definition.IsEnabled {
+			nextValue = next.UnixMilli()
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO routines(id,name,bot_id,group_id,cron,timezone,prompt,overlap_policy,catch_up,target_mode,pinned_conversation_id,is_enabled,next_run_at,created_at,updated_at) VALUES(?,?,NULLIF(?,''),NULLIF(?,''),?,?,?,?,?,?,NULLIF(?,''),?,?,?,?)`, id, definition.Name, definition.Target.BotID, definition.Target.GroupID, definition.Cron, definition.Timezone, definition.Prompt, definition.OverlapPolicy, definition.CatchUp, definition.TargetMode, definition.PinnedConversationID, definition.IsEnabled, nextValue, now.UnixMilli(), now.UnixMilli()); err != nil {
+			return store.ConstraintError(err)
+		}
+		if err = store.Audit(ctx, tx, actor, "routine.create", id, map[string]string{"name": definition.Name}); err != nil {
+			return err
+		}
+		_, err = bus.Append(ctx, tx, "routine.updated", "", map[string]any{"routine_id": id, "revision": 1})
+		return err
+	})
+	if err != nil {
+		return domain.Routine{}, err
+	}
+	s.events.Notify()
+	return s.Get(ctx, id)
+}
+
+// UpdateNow 直接修改已生效的例程，用于改名、暂停和恢复。
+func (s *Routines) UpdateNow(ctx context.Context, id string, patch RoutinePatch, actor string) (domain.Routine, error) {
+	current, err := s.Get(ctx, id)
+	if err != nil {
+		return domain.Routine{}, err
+	}
+	if current.Revision != patch.Revision {
+		return domain.Routine{}, routineChanged()
+	}
+	definition := current.RoutineDefinition
+	if patch.Name.Set {
+		definition.Name = patch.Name.Value
+	}
+	if patch.Cron.Set {
+		definition.Cron = patch.Cron.Value
+	}
+	if patch.Prompt.Set {
+		definition.Prompt = patch.Prompt.Value
+	}
+	if patch.IsEnabled.Set {
+		if patch.IsEnabled.Value == nil {
+			return domain.Routine{}, badInput("Routine enabled must be a boolean.")
+		}
+		definition.IsEnabled = *patch.IsEnabled.Value
+	}
+	input := RoutineInput{RoutineDefinition: definition, IsEnabled: &definition.IsEnabled, Revision: patch.Revision}
+	now := s.now().UTC()
+	normalized, err := normalizeRoutine(input, now)
+	if err != nil {
+		return domain.Routine{}, err
+	}
+	err = store.Transact(ctx, s.db, func(tx *sql.Tx) error {
+		fresh, err := scanRoutine(tx.QueryRowContext(ctx, "SELECT "+routineColumns+" FROM routines WHERE id=?", id))
+		if err != nil {
+			return err
+		}
+		if fresh.Revision != patch.Revision {
+			return routineChanged()
+		}
+		next, err := scheduler.Next(normalized.Cron, normalized.Timezone, now)
+		if err != nil {
+			return err
+		}
+		var nextValue any
+		if normalized.IsEnabled {
+			nextValue = next.UnixMilli()
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE routines SET name=?,cron=?,prompt=?,is_enabled=?,next_run_at=?,revision=revision+1,updated_at=? WHERE id=? AND revision=?`, normalized.Name, normalized.Cron, normalized.Prompt, normalized.IsEnabled, nextValue, now.UnixMilli(), id, patch.Revision); err != nil {
+			return err
+		}
+		if err = store.Audit(ctx, tx, actor, "routine.update", id, map[string]int64{"revision": patch.Revision + 1}); err != nil {
+			return err
+		}
+		_, err = bus.Append(ctx, tx, "routine.updated", "", map[string]any{"routine_id": id, "revision": patch.Revision + 1})
+		return err
+	})
+	if err != nil {
+		return domain.Routine{}, err
+	}
+	s.events.Notify()
+	return s.Get(ctx, id)
+}
+
 func routinePublicCode(err error) string {
 	var public *domain.Error
 	if errors.As(err, &public) {

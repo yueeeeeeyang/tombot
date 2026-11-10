@@ -66,6 +66,47 @@ export class MemoryBackend implements DesktopBackend {
     return workspace
   }
 
+  listMemories(): Promise<Array<{ path: string; title: string; summary: string; sha256: string }>> {
+    return Promise.resolve([])
+  }
+
+  createMemory(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  deleteMemory(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  listRoutines(): Promise<
+    Array<{
+      id: string
+      name: string
+      cron: string
+      prompt: string
+      is_enabled: boolean
+      revision: number
+    }>
+  > {
+    return Promise.resolve([])
+  }
+
+  createRoutine(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  setRoutineEnabled(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  deleteRoutine(): Promise<void> {
+    return Promise.resolve()
+  }
+
+  startBootstrap(): Promise<void> {
+    return Promise.resolve()
+  }
+
   openComputer(): Promise<string> {
     return Promise.resolve('http://127.0.0.1:9/api/v1/computer/view?agent=memory&ticket=memory')
   }

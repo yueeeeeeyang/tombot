@@ -6,8 +6,10 @@ import { catModelOptions } from '../models/catalog'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'
 import { ComputerPane } from './ComputerPane'
+import { MemoryPane } from './MemoryPane'
+import { RoutinePane } from './RoutinePane'
 
-const PANEL_TABS = ['details', 'library', 'computer'] as const
+const PANEL_TABS = ['details', 'library', 'computer', 'memory', 'routine'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
 function modelOptions(modelId: string): readonly SelectOption[] {
   const catalog = catModelOptions()
@@ -19,6 +21,8 @@ const TAB_LABELS: Record<PanelTab, string> = {
   details: '详情',
   library: '资料库',
   computer: '电脑',
+  memory: '记忆',
+  routine: '定时',
 }
 
 /** 会话右侧的猫咪面板；Esc 关闭，但下拉菜单或弹窗先处理自己的 Esc。 */
@@ -28,6 +32,7 @@ export function CatSidePanel({
   onModelChange,
   onComputerUrl,
   onConnectComputer,
+  onPrepareComputer,
   onExport,
   now,
 }: {
@@ -36,6 +41,7 @@ export function CatSidePanel({
   onModelChange: (modelId: string) => void
   onComputerUrl: (computerUrl: string) => void
   onConnectComputer?: () => void
+  onPrepareComputer?: () => void
   onExport: () => void
   now?: Date
 }) {
@@ -158,8 +164,42 @@ export function CatSidePanel({
             computerUrl={agent.computerUrl}
             onSave={onComputerUrl}
             onConnect={onConnectComputer}
+            onPrepare={onPrepareComputer}
           />
         </div>
+      )}
+      {tab === 'memory' && (
+        <MemoryPane
+          agentId={agent.id}
+          onLoad={(id) => window.desktop?.backend.listMemories?.(id) ?? Promise.resolve([])}
+          onCreate={(id, title, content) =>
+            window.desktop?.backend.createMemory?.(id, title, content) ?? Promise.resolve()
+          }
+          onDelete={(id, memory) =>
+            window.desktop?.backend.deleteMemory?.(id, memory.path, memory.sha256) ??
+            Promise.resolve()
+          }
+        />
+      )}
+      {tab === 'routine' && (
+        <RoutinePane
+          agentId={agent.id}
+          onLoad={(id) => window.desktop?.backend.listRoutines?.(id) ?? Promise.resolve([])}
+          onCreate={(id, name, prompt) =>
+            window.desktop?.backend.createRoutine?.(id, name, prompt) ?? Promise.resolve()
+          }
+          onToggle={(routine) =>
+            window.desktop?.backend.setRoutineEnabled?.(
+              routine.id,
+              routine.revision,
+              !routine.is_enabled,
+            ) ?? Promise.resolve()
+          }
+          onDelete={(routine) =>
+            window.desktop?.backend.deleteRoutine?.(routine.id, routine.revision) ??
+            Promise.resolve()
+          }
+        />
       )}
     </aside>
   )

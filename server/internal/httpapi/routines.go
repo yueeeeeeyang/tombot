@@ -19,14 +19,14 @@ func (s *Server) routineRoutes(r chi.Router) {
 		}
 		return s.Routines.List(ctx, r.URL.Query().Get("bot_id"), r.URL.Query().Get("group_id"), r.URL.Query().Get("cursor"), limit)
 	}))
-	r.Post("/routines", handleInput(s, 202, func(ctx context.Context, r *http.Request, input service.RoutineInput) (any, error) {
-		return s.Routines.Propose(ctx, "", input, actor(r))
+	r.Post("/routines", handleInput(s, 201, func(ctx context.Context, r *http.Request, input service.RoutineInput) (any, error) {
+		return s.Routines.Commit(ctx, input, actor(r))
 	}))
 	r.Get("/routines/{id}", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
 		return s.Routines.Get(ctx, chi.URLParam(r, "id"))
 	}))
-	r.Patch("/routines/{id}", handleInput(s, 202, func(ctx context.Context, r *http.Request, input service.RoutinePatch) (any, error) {
-		return s.Routines.ProposeUpdate(ctx, chi.URLParam(r, "id"), input, actor(r))
+	r.Patch("/routines/{id}", handleInput(s, 200, func(ctx context.Context, r *http.Request, input service.RoutinePatch) (any, error) {
+		return s.Routines.UpdateNow(ctx, chi.URLParam(r, "id"), input, actor(r))
 	}))
 	r.Delete("/routines/{id}", handleDelete(s, func(ctx context.Context, r *http.Request) error {
 		revision, err := integerQuery(r, "revision", 0)
