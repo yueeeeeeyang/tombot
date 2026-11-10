@@ -1,25 +1,21 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import {
-  ArrowUp,
-  AudioLines,
-  Check,
-  ChevronDown,
-  Copy,
-  FileText,
-  Mic,
-  Plus,
-  Trash2,
-} from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { ArrowUp, AudioLines, ChevronDown, Mic, Plus, X, FileText } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
-import { MAX_MESSAGE_LENGTH, type Agent } from '../workspace/model'
+import { MAX_MESSAGE_LENGTH, replyExcerpt, type Agent } from '../workspace/model'
+import { ChatMessage } from './ChatMessage'
+import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
+import { messageTimeSeparator } from './messageTime'
 
 type ChatPanelProps = {
   agent: Agent
   isBlocked: boolean
   onDraft: (draft: string) => void
-  onSave: () => void
+  onSave: (replyToId?: string) => boolean
   onDelete: (messageId: string) => void
+  onReact: (messageId: string, emoji: string) => void
+  onRetry: (messageId: string) => void
   onDetails: () => void
+  onNotice: (message: string) => void
   onError: (message: string) => void
 }
 
@@ -30,15 +26,27 @@ export function ChatPanel({
   onDraft,
   onSave,
   onDelete,
+  onReact,
+  onRetry,
   onDetails,
+  onNotice,
   onError,
 }: ChatPanelProps) {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
-  const [copiedId, setCopiedId] = useState('')
-  const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  useEffect(() => () => clearTimeout(copyTimer.current), [])
+  const [menu, setMenu] = useState<MessageMenuAnchor>()
+  const [replyToId, setReplyToId] = useState<string>()
+  const [highlightedId, setHighlightedId] = useState('')
+  const closeMenu = useCallback(() => setMenu(undefined), [])
+  const replyMessage = agent.messages.find((message) => message.id === replyToId)
+  const menuMessage = menu
+    ? agent.messages.find((message) => message.id === menu.messageId)
+    : undefined
+  const now = new Date()
+
+  useEffect(() => () => clearTimeout(highlightTimer.current), [])
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
   }, [agent.id, agent.messages.length])
@@ -49,23 +57,44 @@ export function ChatPanel({
     }
   }, [agent.draft])
 
-  async function copyMessage(content: string, id: string): Promise<void> {
+  function openMenu(messageId: string, x: number, y: number, trigger: HTMLElement): void {
+    setMenu({ messageId, x, y, trigger })
+  }
+  function startReply(messageId: string): void {
+    setReplyToId(messageId)
+    closeMenu()
+    composer.current?.focus()
+  }
+  function revealMessage(messageId: string): void {
+    const element = document.getElementById(`message-${messageId}`)
+    if (!element) {
+      onError('原消息已不在当前会话中。')
+      return
+    }
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    element.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'center' })
+    setHighlightedId(messageId)
+    clearTimeout(highlightTimer.current)
+    highlightTimer.current = setTimeout(() => setHighlightedId(''), 1600)
+  }
+  async function copyText(value: string, success: string): Promise<void> {
     try {
-      await navigator.clipboard.writeText(content)
-      setCopiedId(id)
-      clearTimeout(copyTimer.current)
-      copyTimer.current = setTimeout(() => setCopiedId(''), 1800)
+      await navigator.clipboard.writeText(value)
+      onNotice(success)
     } catch {
       onError('复制失败，请检查剪贴板权限后重试。')
     }
   }
-
-  function handleSubmit(event: FormEvent): void {
-    event.preventDefault()
-    if (agent.draft.trim() && !isBlocked) {
-      onSave()
+  function submitDraft(): void {
+    if (!agent.draft.trim() || isBlocked) return
+    if (onSave(replyMessage?.id)) {
+      setReplyToId(undefined)
       composer.current?.focus()
     }
+  }
+  function handleSubmit(event: FormEvent): void {
+    event.preventDefault()
+    submitDraft()
   }
 
   return (
@@ -130,40 +159,48 @@ export function ChatPanel({
             </div>
           </div>
           <div className="saved-messages" role="log" aria-label="本地消息" aria-live="polite">
-            {agent.messages.map((message) => (
-              <div className="message-row user-row" key={message.id}>
-                <div className="user-message-content">
-                  <div className="message-bubble user-bubble">{message.content}</div>
-                  <div className="message-meta">
-                    <span>
-                      {new Date(message.createdAt).toLocaleTimeString('zh-CN', {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}{' '}
-                      · 未发送
-                    </span>
-                    <button
-                      className="message-action"
-                      onClick={() => void copyMessage(message.content, message.id)}
-                      aria-label="复制消息"
-                    >
-                      {copiedId === message.id ? <Check size={12} /> : <Copy size={12} />}
-                    </button>
-                    <button
-                      className="message-action"
-                      onClick={() => onDelete(message.id)}
-                      aria-label="删除草稿消息"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
+            {agent.messages.map((message, index) => {
+              const label = messageTimeSeparator(
+                message.createdAt,
+                agent.messages[index - 1]?.createdAt,
+                now,
+              )
+              return (
+                <div className="message-entry" key={message.id}>
+                  {label && (
+                    <div className="time-separator">
+                      <time dateTime={message.createdAt}>{label}</time>
+                    </div>
+                  )}
+                  <ChatMessage
+                    message={message}
+                    isHighlighted={highlightedId === message.id}
+                    onOpenMenu={openMenu}
+                    onReply={startReply}
+                    onRetry={onRetry}
+                    onReact={onReact}
+                    onReveal={revealMessage}
+                  />
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
           <div ref={messagesEnd} />
         </div>
       </section>
+      {menu && menuMessage && (
+        <MessageMenu
+          anchor={menu}
+          message={menuMessage}
+          onReact={(emoji) => onReact(menuMessage.id, emoji)}
+          onReply={() => startReply(menuMessage.id)}
+          onCopy={() => void copyText(menuMessage.content, '已复制')}
+          onCopyRequestId={() => void copyText(menuMessage.requestId ?? '', '已复制请求 ID')}
+          onRetry={() => onRetry(menuMessage.id)}
+          onDelete={() => onDelete(menuMessage.id)}
+          onClose={closeMenu}
+        />
+      )}
       <div className="composer-area">
         {isAttachmentOpen && (
           <div className="attachment-popover">
@@ -174,6 +211,17 @@ export function ChatPanel({
             </div>
             <button className="text-button" onClick={() => setAttachmentOpen(false)}>
               知道了
+            </button>
+          </div>
+        )}
+        {replyMessage && (
+          <div className="composer-reply">
+            <div>
+              <strong>回复</strong>
+              <p>{replyExcerpt(replyMessage.content)}</p>
+            </div>
+            <button type="button" aria-label="取消回复" onClick={() => setReplyToId(undefined)}>
+              <X size={14} />
             </button>
           </div>
         )}
@@ -204,7 +252,7 @@ export function ChatPanel({
                 event.keyCode !== 229
               ) {
                 event.preventDefault()
-                if (agent.draft.trim() && !isBlocked) onSave()
+                submitDraft()
               }
             }}
           />

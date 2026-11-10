@@ -4,7 +4,12 @@ import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { Select, type SelectOption } from '../../components/Select'
 import { CAT_AVATARS } from '../avatars/presets'
-import { exportConversation, type Agent, type NewAgent, type Workspace } from './model'
+import {
+  exportConversation,
+  type Agent,
+  type NewAgent,
+  type CurrentWorkspace as Workspace,
+} from './model'
 
 /** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
 export function RecruitCatDialog({

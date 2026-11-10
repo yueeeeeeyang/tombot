@@ -1,4 +1,4 @@
-import { agentSchema, groupNameSchema, type Workspace } from './model'
+import { agentSchema, groupNameSchema, type CurrentWorkspace as Workspace } from './model'
 
 /** 校验猫咪存在后重命名；禁止空白、超长和重复名称，消息与标识保持不变。 */
 export function renameAgent(workspace: Workspace, id: string, name: string): Workspace {
