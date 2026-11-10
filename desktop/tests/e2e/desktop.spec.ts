@@ -5,7 +5,7 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -123,7 +123,7 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   await input.fill('把想法变成一篇好故事。')
   await input.press('Enter')
   await expect(window.getByRole('log')).toContainText('把想法变成一篇好故事。')
-  await expect(window.getByRole('log')).toContainText('未发送')
+  await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   await input.fill('第二个尚未完成的想法')
   await window.reload()
   await expect(input).toHaveValue('第二个尚未完成的想法')
@@ -169,9 +169,7 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
   const sources = await sidebarAvatars
     .locator('img')
     .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
-  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(
-    true,
-  )
+  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(true)
   expect(new Set(sources).size).toBe(8)
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
@@ -828,7 +826,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   const input = window.getByRole('textbox', { name: '给小黑发消息' })
   await input.fill('只是本地草稿')
   await input.press('Enter')
-  await expect(window.getByRole('log')).toContainText('未发送')
+  await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   await expect(pinned).toHaveAttribute('data-pose', 'idle')
 
   await window.evaluate(() => {
@@ -861,7 +859,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   await expect(window.locator('.sidebar .avatar[data-ear="perk"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
   await expect(header).toHaveAttribute('data-pose', 'working')
-  await expect(window.getByRole('log')).toContainText('未发送')
+  await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   expect(await window.locator('.assistant-bubble').count()).toBe(repliesBefore)
   await window.mouse.move(700, 420)
   const pinnedBox = await pinned.boundingBox()
@@ -961,4 +959,126 @@ test('猫咪静息、悬停与工作中姿态', async () => {
       getComputedStyle(element).getPropertyValue('--look-x').trim(),
     ),
   ).toBe('0')
+})
+
+function boxesOverlap(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number },
+): boolean {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  )
+}
+
+test('消息菜单、悬停按钮、回复、表情和时间分隔', async () => {
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const input = window.getByRole('textbox', { name: '给小黑发消息' })
+  await input.fill('原来的想法')
+  await input.press('Enter')
+  await expect(window.getByRole('log')).toContainText('原来的想法')
+  await window.evaluate(() => {
+    const workspace = JSON.parse(localStorage.getItem('tombot.workspace.v3')!)
+    const agent = workspace.agents.find(
+      (item: { id: string }) => item.id === workspace.activeAgentId,
+    )
+    const saved = agent.messages.at(-1)
+    const sentAt = new Date(saved.createdAt).getTime()
+    saved.createdAt = new Date(sentAt - 20 * 60 * 1000).toISOString()
+    agent.messages.unshift({
+      id: 'assistant-message',
+      role: 'assistant',
+      content: '助手已经看到这句。',
+      createdAt: new Date(sentAt - 30 * 60 * 1000).toISOString(),
+      status: 'sent',
+      requestId: 'req-e2e',
+      reactions: [{ emoji: '👍', count: 2 }],
+    })
+    localStorage.setItem('tombot.workspace.v3', JSON.stringify(workspace))
+  })
+  await window.reload()
+  await expect(input).toBeVisible()
+  await expect(window.getByText('助手已经看到这句。')).toBeVisible()
+  await expect(window.locator('.time-separator')).toHaveCount(2)
+  await expect(window.getByRole('log')).not.toContainText('· 未发送')
+  await window.locator('.messages-scroll').evaluate((element) => {
+    element.scrollTop = element.scrollHeight
+  })
+  const viewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))
+  await window.screenshot({
+    path: `${artifacts}/message-time-separators.png`,
+    scale: 'css',
+  })
+
+  const botRow = window.locator('.message-row.assistant-row', { hasText: '助手已经看到这句。' })
+  const botBubble = botRow.locator('.message-bubble')
+  await botBubble.hover()
+  const botActions = botRow.locator('.message-actions')
+  await expect(botActions).toBeVisible()
+  const botBubbleBox = (await botBubble.boundingBox())!
+  const botActionBox = (await botActions.boundingBox())!
+  expect(botActionBox.x).toBeGreaterThanOrEqual(botBubbleBox.x + botBubbleBox.width - 1)
+  expect(botActionBox.x + botActionBox.width).toBeLessThanOrEqual(viewport.width - 8)
+  expect(boxesOverlap(botActionBox, botBubbleBox)).toBe(false)
+  await window.screenshot({ path: `${artifacts}/message-hover-buttons.png`, scale: 'css' })
+
+  const userRow = window.locator('.message-row.user-row', { hasText: '原来的想法' })
+  const userBubble = userRow.locator('.message-bubble')
+  await userBubble.hover()
+  const userActionBox = (await userRow.locator('.message-actions').boundingBox())!
+  const userBubbleBox = (await userBubble.boundingBox())!
+  expect(userActionBox.x + userActionBox.width).toBeLessThanOrEqual(userBubbleBox.x + 1)
+  expect(userActionBox.x).toBeGreaterThanOrEqual(8)
+  expect(boxesOverlap(userActionBox, userBubbleBox)).toBe(false)
+
+  await botBubble.click({ button: 'right' })
+  const menu = window.getByRole('menu', { name: '消息操作' })
+  await expect(menu).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '回复', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '复制', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '复制请求 ID', exact: true })).toBeVisible()
+  await expect(menu.getByRole('menuitem', { name: '重试' })).toHaveCount(0)
+  const menuBounds = (await menu.boundingBox())!
+  expect(menuBounds.x).toBeGreaterThanOrEqual(8)
+  expect(menuBounds.y).toBeGreaterThanOrEqual(8)
+  expect(menuBounds.x + menuBounds.width).toBeLessThanOrEqual(viewport.width - 8)
+  expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(viewport.height - 8)
+  await window.screenshot({ path: `${artifacts}/message-context-menu.png`, scale: 'css' })
+  await menu.getByRole('button', { name: '更多表情' }).click()
+  const expanded = (await menu.boundingBox())!
+  expect(expanded.x).toBeGreaterThanOrEqual(8)
+  expect(expanded.y).toBeGreaterThanOrEqual(8)
+  expect(expanded.x + expanded.width).toBeLessThanOrEqual(viewport.width - 8)
+  expect(expanded.y + expanded.height).toBeLessThanOrEqual(viewport.height - 8)
+  await window.keyboard.press('Escape')
+  await expect(menu).toHaveCount(0)
+
+  await botBubble.click({ button: 'right' })
+  await window.getByRole('button', { name: '回应❤️' }).click()
+  await expect(window.getByRole('button', { name: '❤️，点击取消' })).toBeVisible()
+  await expect(window.getByRole('button', { name: '👍 2，点击取消' })).toBeVisible()
+  await window.screenshot({ path: `${artifacts}/message-reactions.png`, scale: 'css' })
+
+  await userBubble.hover()
+  await userRow.getByRole('button', { name: '回复' }).click()
+  await expect(window.locator('.composer-reply')).toContainText('原来的想法')
+  await window.screenshot({ path: `${artifacts}/message-reply-preview.png`, scale: 'css' })
+  await input.fill('接着说')
+  await input.press('Enter')
+  const quote = window.getByRole('button', { name: '查看原消息：原来的想法' })
+  await expect(quote).toBeVisible()
+  await window.screenshot({ path: `${artifacts}/message-reply-quote.png`, scale: 'css' })
+  await quote.click()
+  const original = (await window.locator('.message-text', { hasText: '原来的想法' }).boundingBox())!
+  expect(original.y).toBeGreaterThanOrEqual(0)
+  expect(original.y).toBeLessThan(viewport.height)
+
+  await window.getByRole('button', { name: '未发送，点击重试' }).first().click()
+  await expect(window.getByRole('alert')).toContainText('服务端尚未接入')
+  await window.reload()
+  await expect(window.getByRole('button', { name: '❤️，点击取消' })).toBeVisible()
+  await expect(quote).toBeVisible()
 })

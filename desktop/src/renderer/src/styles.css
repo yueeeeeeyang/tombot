@@ -6,6 +6,7 @@
 @import url('./styles/select.css');
 @import url('./styles/cat-menu.css');
 @import url('./styles/avatar.css');
+@import url('./styles/message-menu.css');
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -521,14 +522,15 @@ button:disabled {
 }
 .user-row {
   justify-content: flex-end;
-  margin-top: 16px;
-  margin-bottom: 6px;
 }
-.user-message-content {
-  max-width: 76%;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
+.saved-messages {
+  margin-top: 8px;
+}
+.saved-messages .message-row {
+  margin-bottom: 0;
+}
+.message-entry + .message-entry {
+  margin-top: 12px;
 }
 .user-bubble {
   max-width: 100%;
@@ -536,30 +538,9 @@ button:disabled {
   color: var(--user-text);
   padding: 8px 13px;
   border-radius: 19px;
+}
+.message-text {
   white-space: pre-wrap;
-}
-.message-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 10px;
-  margin-top: 5px;
-  padding-right: 5px;
-}
-.message-action {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  padding: 4px;
-  border-radius: 5px;
-}
-.message-action:hover {
-  color: var(--text);
-  background: var(--border);
 }
 .composer-area {
   padding: 8px 16px 16px;

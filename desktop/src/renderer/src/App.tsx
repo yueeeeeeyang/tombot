@@ -5,7 +5,13 @@ import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { ChatPanel } from './features/chat/ChatPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
-import { addAgent, saveMessage, updateDraft, type NewAgent } from './features/workspace/model'
+import {
+  addAgent,
+  saveMessage,
+  toggleReaction,
+  updateDraft,
+  type NewAgent,
+} from './features/workspace/model'
 import {
   AgentDetailsDialog,
   RecruitCatDialog,
@@ -299,13 +305,23 @@ export default function App() {
             commit((previous) => updateDraft(previous, agent.id, draft))
           })
         }
-        onSave={() =>
-          runAction(() => {
+        onSave={(replyToId) => {
+          try {
             commit((previous) =>
-              saveMessage(previous, agent.id, crypto.randomUUID(), new Date().toISOString()),
+              saveMessage(
+                previous,
+                agent.id,
+                crypto.randomUUID(),
+                new Date().toISOString(),
+                replyToId,
+              ),
             )
-          })
-        }
+            return true
+          } catch (failure) {
+            setNotice((failure as Error).message)
+            return false
+          }
+        }}
         onDelete={(messageId) =>
           runAction(() => {
             commit((previous) => ({
@@ -321,7 +337,14 @@ export default function App() {
             }))
           })
         }
+        onReact={(messageId, emoji) =>
+          runAction(() => {
+            commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
+          })
+        }
+        onRetry={() => setNotice('服务端尚未接入，暂时无法重新发送。')}
         onDetails={() => setOpenDialog('details')}
+        onNotice={setNotice}
         onError={setNotice}
       />
       {menuAnchor && menuAgent && (

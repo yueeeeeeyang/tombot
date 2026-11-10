@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { DEFAULT_AGENT_AVATARS } from '../../avatars/presets'
 import { createWorkspace, saveMessage, updateDraft } from '../model'
 import { loadWorkspace, persistWorkspace, STORAGE_KEY } from '../storage'
-import { PREVIOUS_STORAGE_KEY } from './v2-cat-avatars'
+import { migrateCatAvatars, PREVIOUS_STORAGE_KEY } from './v2-cat-avatars'
 
 /** 构造包含未发送消息、编辑草稿和自建助手的历史格式，不依赖迁移映射生成期望值。 */
 function createPreviousWorkspace() {
@@ -46,10 +46,22 @@ function createPreviousWorkspace() {
 describe('猫咪头像前向迁移', () => {
   it('只替换头像格式，保留所有助手、消息、草稿和当前会话；原文保留作备份', () => {
     const previous = createPreviousWorkspace()
+    expect(migrateCatAvatars(previous).version).toBe(2)
+    expect(migrateCatAvatars(previous).agents[0]?.messages[0]).toEqual({
+      id: 'message-one',
+      content: '保留这条消息',
+      createdAt: '2026-11-09T07:00:00.000Z',
+    })
     const serialized = JSON.stringify(previous)
     localStorage.setItem(PREVIOUS_STORAGE_KEY, serialized)
     const migrated = loadWorkspace(localStorage)
-    expect(migrated.version).toBe(2)
+    expect(migrated.version).toBe(3)
+    expect(migrated.agents[0]?.messages[0]).toMatchObject({
+      role: 'user',
+      status: 'unsent',
+      reactions: [],
+      content: '保留这条消息',
+    })
     expect(migrated.activeAgentId).toBe('writer')
     expect(migrated.agents).toHaveLength(9)
     previous.agents.forEach((agent, index) => {

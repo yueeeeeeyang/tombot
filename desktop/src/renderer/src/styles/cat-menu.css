@@ -87,7 +87,9 @@
   background: #b22f2f;
 }
 .app-shell:has(.cat-context-menu) .sidebar-toolbar,
-.app-shell:has(.cat-context-menu) .chat-header {
+.app-shell:has(.cat-context-menu) .chat-header,
+.app-shell:has(.message-menu) .sidebar-toolbar,
+.app-shell:has(.message-menu) .chat-header {
   -webkit-app-region: no-drag;
 }
 .agent-button,

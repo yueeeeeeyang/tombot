@@ -1,21 +1,95 @@
 import { z } from 'zod'
 import { CAT_AVATAR_IDS, DEFAULT_AGENT_AVATARS } from '../avatars/presets'
+import { isReactionEmoji, REACTION_EMOJIS, type ReactionEmoji } from './reactions'
 
 export const MAX_MESSAGE_LENGTH = 10_000
 export const MAX_MESSAGES = 500
 export const MAX_AGENTS = 64
-
-const messageSchema = z.object({
-  id: z.string().min(1),
-  content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
-  createdAt: z.string().datetime(),
-})
+export const REPLY_EXCERPT_LENGTH = 80
 
 export const groupNameSchema = z
   .string()
   .trim()
   .min(1, '请输入分组名称')
   .max(24, '分组名称最多 24 个字')
+
+const legacyMessageSchema = z.object({
+  id: z.string().min(1),
+  content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+  createdAt: z.string().datetime(),
+})
+
+const legacyAgentSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(1, '请输入助手名称').max(24, '助手名称最多 24 个字'),
+  description: z.string().trim().max(120, '助手介绍最多 120 个字'),
+  group: groupNameSchema,
+  avatar: z.enum(CAT_AVATAR_IDS, { error: '请选择预设猫咪头像' }),
+  messages: z.array(legacyMessageSchema).max(MAX_MESSAGES),
+  draft: z.string().max(MAX_MESSAGE_LENGTH),
+})
+
+function refineWorkspace(
+  workspace: { activeAgentId: string; agents: { id: string; messages: readonly unknown[] }[] },
+  context: { addIssue: (issue: { code: 'custom'; message: string }) => void },
+): void {
+  const ids = workspace.agents.map((agent) => agent.id)
+  if (
+    new Set(ids).size !== ids.length ||
+    !ids.includes(workspace.activeAgentId) ||
+    !ids.includes('assistant')
+  ) {
+    context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
+  }
+  if (workspace.agents.reduce((count, agent) => count + agent.messages.length, 0) > MAX_MESSAGES) {
+    context.addIssue({ code: 'custom', message: '本地消息数量已达上限' })
+  }
+}
+
+/**
+ * 冻结的 v2 工作空间。历史迁移脚本直接用它校验 v1 升级结果，字段不能再改。
+ * 当前读写走 currentWorkspaceSchema。
+ */
+export const workspaceSchema = z
+  .object({
+    version: z.literal(2),
+    activeAgentId: z.string().min(1),
+    agents: z.array(legacyAgentSchema).min(1).max(MAX_AGENTS),
+  })
+  .superRefine(refineWorkspace)
+
+export type Workspace = z.infer<typeof workspaceSchema>
+
+const replySchema = z.object({
+  messageId: z.string().min(1),
+  excerpt: z.string().trim().min(1).max(REPLY_EXCERPT_LENGTH),
+})
+
+const reactionSchema = z.object({
+  emoji: z.enum(REACTION_EMOJIS),
+  count: z.number().int().min(1).max(999),
+})
+
+const messageSchema = z
+  .object({
+    id: z.string().min(1),
+    role: z.enum(['user', 'assistant']),
+    content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+    createdAt: z.string().datetime(),
+    status: z.enum(['unsent', 'failed', 'sent']),
+    requestId: z.string().trim().min(1).max(128).optional(),
+    replyTo: replySchema.optional(),
+    reactions: z.array(reactionSchema).max(REACTION_EMOJIS.length),
+  })
+  .superRefine((message, context) => {
+    const emojis = message.reactions.map((reaction) => reaction.emoji)
+    if (new Set(emojis).size !== emojis.length) {
+      context.addIssue({ code: 'custom', message: '同一条消息不能重复记录同一个表情' })
+    }
+    if (message.replyTo?.messageId === message.id) {
+      context.addIssue({ code: 'custom', message: '消息不能回复自己' })
+    }
+  })
 
 export const agentSchema = z.object({
   id: z.string().min(1),
@@ -27,34 +101,22 @@ export const agentSchema = z.object({
   draft: z.string().max(MAX_MESSAGE_LENGTH),
 })
 
-export const workspaceSchema = z
+export const currentWorkspaceSchema = z
   .object({
-    version: z.literal(2),
+    version: z.literal(3),
     activeAgentId: z.string().min(1),
     agents: z.array(agentSchema).min(1).max(MAX_AGENTS),
   })
-  .superRefine((workspace, context) => {
-    const ids = workspace.agents.map((agent) => agent.id)
-    if (
-      new Set(ids).size !== ids.length ||
-      !ids.includes(workspace.activeAgentId) ||
-      !ids.includes('assistant')
-    ) {
-      context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
-    }
-    if (
-      workspace.agents.reduce((count, agent) => count + agent.messages.length, 0) > MAX_MESSAGES
-    ) {
-      context.addIssue({ code: 'custom', message: '本地消息数量已达上限' })
-    }
-  })
+  .superRefine(refineWorkspace)
 
 export type Agent = z.infer<typeof agentSchema>
-export type Workspace = z.infer<typeof workspaceSchema>
+export type ChatMessage = z.infer<typeof messageSchema>
+export type CurrentWorkspace = z.infer<typeof currentWorkspaceSchema>
 export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
+export type ModelTurn = { role: 'user' | 'assistant'; content: string }
 
 /** 创建首次使用的工作空间；预设助手没有伪造会话或模型回复。 */
-export function createWorkspace(): Workspace {
+export function createWorkspace(): CurrentWorkspace {
   const profiles: Array<[keyof typeof DEFAULT_AGENT_AVATARS, string, string, string]> = [
     ['assistant', '小黑', '你的日常搭档，陪你把想法变成现实。', '我的助手'],
     ['developer', '游戏程序', '代码、逻辑和实现，交给我一起想。', '游戏开发'],
@@ -66,7 +128,7 @@ export function createWorkspace(): Workspace {
     ['organizer', '整理助手', '少一点杂乱，多一点井井有条。', '未分组'],
   ]
   return {
-    version: 2,
+    version: 3,
     activeAgentId: 'assistant',
     agents: profiles.map(([id, name, description, group]) => ({
       id,
@@ -81,7 +143,11 @@ export function createWorkspace(): Workspace {
 }
 
 /** 校验名称及容量后添加助手；冲突或输入无效时抛出中文错误。 */
-export function addAgent(workspace: Workspace, profile: NewAgent, id: string): Workspace {
+export function addAgent(
+  workspace: CurrentWorkspace,
+  profile: NewAgent,
+  id: string,
+): CurrentWorkspace {
   if (workspace.agents.length >= MAX_AGENTS) throw new Error(`最多创建 ${MAX_AGENTS} 个助手`)
   const result = agentSchema.safeParse({ ...profile, id, messages: [], draft: '' })
   if (!result.success) throw new Error(result.error.issues[0]?.message ?? '请检查助手资料')
@@ -98,7 +164,11 @@ export function addAgent(workspace: Workspace, profile: NewAgent, id: string): W
 }
 
 /** 更新指定助手的输入草稿，不改变其他会话；超长输入或助手不存在时抛出错误。 */
-export function updateDraft(workspace: Workspace, agentId: string, draft: string): Workspace {
+export function updateDraft(
+  workspace: CurrentWorkspace,
+  agentId: string,
+  draft: string,
+): CurrentWorkspace {
   if (draft.length > MAX_MESSAGE_LENGTH) throw new Error(`消息最多 ${MAX_MESSAGE_LENGTH} 个字`)
   if (!workspace.agents.some((agent) => agent.id === agentId)) throw new Error('助手不存在')
   return {
@@ -107,16 +177,39 @@ export function updateDraft(workspace: Workspace, agentId: string, draft: string
   }
 }
 
-/** 将输入存为明确的未发送消息；空白、容量及重复标识错误不会改变原工作空间。 */
+/** 把被回复原文收成单行摘要；按码点截断，避免把表情切成半个。 */
+export function replyExcerpt(content: string): string {
+  const singleLine = content.replace(/\s+/g, ' ').trim()
+  const characters = [...singleLine]
+  if (characters.length <= REPLY_EXCERPT_LENGTH) return singleLine
+  return `${characters.slice(0, REPLY_EXCERPT_LENGTH - 1).join('')}…`
+}
+
+/** 将输入存为明确的未发送消息；空白、容量、重复标识或失效回复都不会改变原工作空间。 */
 export function saveMessage(
-  workspace: Workspace,
+  workspace: CurrentWorkspace,
   agentId: string,
   id: string,
   createdAt: string,
-): Workspace {
+  replyToId?: string,
+): CurrentWorkspace {
   const agent = workspace.agents.find((candidate) => candidate.id === agentId)
   if (!agent) throw new Error('助手不存在')
-  const result = messageSchema.safeParse({ id, content: agent.draft, createdAt })
+  const replyTarget = replyToId
+    ? agent.messages.find((message) => message.id === replyToId)
+    : undefined
+  if (replyToId && !replyTarget) throw new Error('回复的消息不存在')
+  const result = messageSchema.safeParse({
+    id,
+    role: 'user',
+    content: agent.draft,
+    createdAt,
+    status: 'unsent',
+    reactions: [],
+    ...(replyTarget
+      ? { replyTo: { messageId: replyTarget.id, excerpt: replyExcerpt(replyTarget.content) } }
+      : {}),
+  })
   if (!result.success) throw new Error('请输入有效内容，消息最多 10000 个字')
   if (workspace.agents.reduce((count, item) => count + item.messages.length, 0) >= MAX_MESSAGES) {
     throw new Error('本地消息已达 500 条上限，请先导出并删除不需要的草稿')
@@ -134,6 +227,74 @@ export function saveMessage(
   }
 }
 
+/**
+ * 切换当前用户对某条消息的表情。
+ * 再次点同一个表情会整颗取消，而不是累加；数量大于 1 只用于展示已经存在的计数。
+ */
+export function toggleReaction(
+  workspace: CurrentWorkspace,
+  agentId: string,
+  messageId: string,
+  emoji: string,
+): CurrentWorkspace {
+  if (!isReactionEmoji(emoji)) throw new Error('不支持这个表情')
+  const agent = workspace.agents.find((item) => item.id === agentId)
+  if (!agent) throw new Error('助手不存在')
+  if (!agent.messages.some((message) => message.id === messageId)) throw new Error('消息不存在')
+  return {
+    ...workspace,
+    agents: workspace.agents.map((item) =>
+      item.id === agentId
+        ? {
+            ...item,
+            messages: item.messages.map((message) =>
+              message.id === messageId
+                ? { ...message, reactions: nextReactions(message, emoji) }
+                : message,
+            ),
+          }
+        : item,
+    ),
+  }
+}
+
+function nextReactions(message: ChatMessage, emoji: ReactionEmoji): ChatMessage['reactions'] {
+  if (message.reactions.some((reaction) => reaction.emoji === emoji)) {
+    return message.reactions.filter((reaction) => reaction.emoji !== emoji)
+  }
+  return [...message.reactions, { emoji, count: 1 }]
+}
+
+/**
+ * 组装交给模型的对话。回复会附上被引用的原文，避免模型只看到孤立的新句子。
+ * 原文还在时用全文，已被删除时退回保存下来的摘要。说明文字用英文，因为这是模型上下文。
+ */
+export function toModelTranscript(messages: ChatMessage[]): ModelTurn[] {
+  const byId = new Map(messages.map((message) => [message.id, message]))
+  return messages.map((message) => ({
+    role: message.role,
+    content: contentForModel(
+      message,
+      message.replyTo ? byId.get(message.replyTo.messageId) : undefined,
+    ),
+  }))
+}
+
+function contentForModel(message: ChatMessage, quoted: ChatMessage | undefined): string {
+  if (!message.replyTo) return message.content
+  const lead =
+    message.role === 'user'
+      ? 'The user is replying to an earlier message.'
+      : 'This assistant message replies to an earlier message.'
+  return [
+    lead,
+    'Quoted message:',
+    quoted?.content ?? message.replyTo.excerpt,
+    'Reply:',
+    message.content,
+  ].join('\n')
+}
+
 /** 按助手资料和已保存消息进行本地检索；空查询返回全部助手。 */
 export function searchAgents(agents: Agent[], query: string): Agent[] {
   const normalized = query.trim().toLocaleLowerCase()
@@ -149,10 +310,19 @@ export function searchAgents(agents: Agent[], query: string): Agent[] {
 
 /** 导出用户创建的本地内容，明确标注尚未发送；不包含界面的使用指南。 */
 export function exportConversation(agent: Agent): string {
-  const messages = agent.messages.map(
-    (message) =>
-      `### ${new Date(message.createdAt).toLocaleString('zh-CN')} · 未发送\n\n${message.content}`,
-  )
+  const messages = agent.messages.map((message) => {
+    const status =
+      message.status === 'failed' ? '发送失败' : message.status === 'sent' ? '已发送' : '未发送'
+    const speaker = message.role === 'assistant' ? '助手' : '我'
+    const quote = message.replyTo ? `> ${message.replyTo.excerpt}\n\n` : ''
+    const reactionLabel = message.reactions
+      .map((reaction) =>
+        reaction.count > 1 ? `${reaction.emoji}×${reaction.count}` : reaction.emoji,
+      )
+      .join(' ')
+    const reactions = reactionLabel ? `\n\n表情：${reactionLabel}` : ''
+    return `### ${new Date(message.createdAt).toLocaleString('zh-CN')} · ${speaker} · ${status}\n\n${quote}${message.content}${reactions}`
+  })
   return [
     `# ${agent.name}\n\nTomBot 本地草稿 · 尚未发送至服务端`,
     ...messages,

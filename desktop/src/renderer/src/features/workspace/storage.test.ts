@@ -48,8 +48,11 @@ describe('本地存储', () => {
     const workspace = createWorkspace()
     workspace.agents[0]!.messages = Array.from({ length: 200 }, (_, index) => ({
       id: `message-${index}`,
+      role: 'user' as const,
       content: '字'.repeat(10000),
       createdAt: '2026-11-09T07:00:00.000Z',
+      status: 'unsent' as const,
+      reactions: [],
     }))
     const storage = { getItem: vi.fn(), setItem: vi.fn() }
     expect(() => persistWorkspace(storage, workspace)).toThrow('空间已满')
