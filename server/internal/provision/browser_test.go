@@ -173,9 +173,47 @@ func TestLFSPointerWithoutObjectDoesNotFailChecksum(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = EnsureBrowser(context.Background(), filepath.Join(repo, "data"), "")
-	if err == nil || !strings.Contains(err.Error(), "指针") || strings.Contains(err.Error(), "SHA-256") {
+	if err == nil || !strings.Contains(err.Error(), "指针") || strings.Contains(err.Error(), "SHA-256") || !lfsHintExplainsInstall(err.Error()) {
 		t.Fatal("缺少对象时被当成摘要错误", err)
 	}
+}
+
+func TestPointerErrorWhenGitLFSCommandMissing(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err = os.Symlink(gitPath, filepath.Join(bin, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	repo := t.TempDir()
+	if err = exec.Command(gitPath, "init", repo).Run(); err != nil {
+		t.Fatal(err)
+	}
+	pointer := filepath.Join(repo, "browser", "chrome-"+release.Platform+".zip")
+	if err = os.MkdirAll(filepath.Dir(pointer), 0700); err != nil {
+		t.Fatal(err)
+	}
+	text := "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 4\n"
+	if err = os.WriteFile(pointer, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = EnsureBrowser(context.Background(), filepath.Join(repo, "data"), "")
+	if err == nil || !strings.Contains(err.Error(), "没有 git-lfs") || !lfsHintExplainsInstall(err.Error()) {
+		t.Fatal("未说明系统没有 git-lfs", err)
+	}
+}
+
+func lfsHintExplainsInstall(message string) bool {
+	install := strings.Index(message, "安装 Git LFS")
+	pull := strings.Index(message, "git lfs pull")
+	return install >= 0 && pull > install && strings.Contains(message, "brew install git-lfs") && strings.Contains(message, "git lfs install") && strings.Contains(message, "apt-get install git-lfs")
 }
 
 func writeLFSFixture(repo, pointer string, content []byte) error {

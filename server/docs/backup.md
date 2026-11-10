@@ -58,7 +58,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now tomd
 ```
 
-上例二进制适用于 arm64，amd64 主机改用对应的发布文件，并把复制来源换成仓库里的 `browser/chrome-linux64.zip`。这些包已在仓库 `browser/`，由 Git LFS 提供。安装前确认文件是完整 zip；若只有指针文本，先在仓库根目录执行 `git lfs pull`。服务不会自己下载浏览器。跨平台恢复时，若归档里的浏览器包与本机架构不符，同样从仓库 `browser/` 复制当前平台的包。服务仅监听 `127.0.0.1:8787`。持久状态位于 `/var/lib/tom`，可选环境文件为 `/etc/tom/tom.env`，由管理员以 0600 权限保管。在服务器本机通过私有文件 `/run/tom/console` 取得一次性初始化码，服务诊断写入 journal。配置 `TOM_MASTER_KEY` 的部署必须让停机备份命令也从同一安全渠道获得该值。初始化、备份、还原和代理验证过程均无需在命令行参数中传递密钥。
+上例二进制适用于 arm64，amd64 主机改用对应的发布文件，并把复制来源换成仓库里的 `browser/chrome-linux64.zip`。这些包已在仓库 `browser/`，由 Git LFS 提供。使用前先安装 Git LFS（macOS 为 `brew install git-lfs`），再在仓库根目录执行 `git lfs install` 和 `git lfs pull`。安装前确认文件是完整 zip，而不是指针文本。服务不会自己下载浏览器。跨平台恢复时，若归档里的浏览器包与本机架构不符，同样从仓库 `browser/` 复制当前平台的包。服务仅监听 `127.0.0.1:8787`。持久状态位于 `/var/lib/tom`，可选环境文件为 `/etc/tom/tom.env`，由管理员以 0600 权限保管。在服务器本机通过私有文件 `/run/tom/console` 取得一次性初始化码，服务诊断写入 journal。配置 `TOM_MASTER_KEY` 的部署必须让停机备份命令也从同一安全渠道获得该值。初始化、备份、还原和代理验证过程均无需在命令行参数中传递密钥。
 
 安装 Caddy 2 后，复制示例到 Caddy 的活动配置路径，在 **Caddy 进程**的环境中设置 `TOM_PUBLIC_HOST` 为自己的域名。让域名指向该主机，并确保签发证书所需的网络条件满足。先在相同环境下运行 `caddy validate --config /etc/caddy/Caddyfile`，再重载 Caddy。变更服务的环回端口时同步更新代理上游。代理使用默认的 SSE 刷新与 WebSocket 升级行为。[Caddy 反向代理文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)
 
