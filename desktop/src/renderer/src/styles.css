@@ -291,16 +291,9 @@ button:disabled {
   padding: 0;
   text-align: left;
 }
-.profile-avatar {
-  border-radius: 50%;
-  background: var(--border);
-  color: var(--text-secondary);
+.profile-button > .avatar {
   width: var(--footer-control-size);
   height: var(--footer-control-size);
-  border: 1px solid var(--border-strong);
-  display: grid;
-  place-items: center;
-  font-size: 15px;
 }
 .profile-copy {
   display: flex;

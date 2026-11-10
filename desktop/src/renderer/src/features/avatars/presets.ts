@@ -12,6 +12,11 @@ export const CAT_AVATARS = [
 export type CatAvatarId = (typeof CAT_AVATARS)[number]['id']
 export const CAT_AVATAR_IDS = CAT_AVATARS.map((preset) => preset.id)
 
+/** 工作空间自己的猫。不进入招聘选择器，也不能写成助手头像。 */
+export const WORKSPACE_AVATAR = { id: 'chinese-pastoral', name: '中华田园猫' } as const
+export type WorkspaceAvatarId = (typeof WORKSPACE_AVATAR)['id']
+export type AvatarPresetId = CatAvatarId | WorkspaceAvatarId
+
 export const DEFAULT_AGENT_AVATARS = {
   assistant: 'bombay',
   developer: 'orange-tabby',

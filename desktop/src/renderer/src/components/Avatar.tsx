@@ -16,7 +16,7 @@ import {
 } from '../features/avatars/ears'
 import { catEyeOverlaySource, catPortraitSource } from '../features/avatars/frames'
 import { resolveAvatarPresentation } from '../features/avatars/pose'
-import type { CatAvatarId } from '../features/avatars/presets'
+import type { AvatarPresetId } from '../features/avatars/presets'
 import { useAvatarPointer } from '../features/avatars/useAvatarPointer'
 import { useLookTilt } from '../features/avatars/useLookTilt'
 import { usePrefersReducedMotion } from '../features/avatars/usePrefersReducedMotion'
@@ -32,7 +32,7 @@ export function Avatar({
   agentId,
   tracksPointer = false,
 }: {
-  preset: CatAvatarId
+  preset: AvatarPresetId
   size?: 'small' | 'medium' | 'large'
   starred?: boolean
   agentId?: string

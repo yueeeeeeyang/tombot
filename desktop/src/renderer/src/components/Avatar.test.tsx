@@ -7,7 +7,7 @@ import {
 } from '../features/avatars/activity'
 import { preloadCatFrames } from '../features/avatars/catMotion'
 import { getCatAvatarImage } from '../features/avatars/images'
-import { CAT_AVATAR_IDS } from '../features/avatars/presets'
+import { CAT_AVATAR_IDS, WORKSPACE_AVATAR } from '../features/avatars/presets'
 import { REDUCED_MOTION_QUERY } from '../features/avatars/usePrefersReducedMotion'
 import { Avatar } from './Avatar'
 
@@ -96,6 +96,27 @@ describe('猫咪头像', () => {
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('头像尺寸无效'))
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('助手=developer'))
+  })
+
+  it('工作空间的猫使用自己的帧，悬停时先半竖耳', async () => {
+    await preloadCatFrames(async () => undefined)
+    const view = render(
+      <button>
+        <Avatar preset={WORKSPACE_AVATAR.id} tracksPointer />
+      </button>,
+    )
+    const avatar = view.container.querySelector('.avatar') as HTMLElement
+    expect(avatar).toHaveAttribute('data-avatar', WORKSPACE_AVATAR.id)
+    expect(avatar.querySelector('.cat-portrait')).toHaveAttribute(
+      'src',
+      getCatAvatarImage(WORKSPACE_AVATAR.id),
+    )
+    expect(avatar.querySelector('.cat-work-mark')).toBeNull()
+    mockBounds(avatar)
+    fireEvent.pointerEnter(view.container.querySelector('button')!, { clientX: 100, clientY: 217 })
+    expect(avatar).toHaveAttribute('data-pose', 'hover')
+    expect(avatar).toHaveAttribute('data-ear', 'perk-half')
+    expect(avatar.querySelector('.cat-portrait')?.getAttribute('src')).toContain('ears-perk-half')
   })
 
   it('帧就绪后从左侧进入先半竖左耳', async () => {

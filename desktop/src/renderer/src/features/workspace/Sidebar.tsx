@@ -2,6 +2,7 @@ import { Plus, Search, Settings } from 'lucide-react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
+import { WORKSPACE_AVATAR } from '../avatars/presets'
 import type { CatMenuAnchor } from './CatContextMenu'
 import type { Agent, Workspace } from './model'
 import type { SidebarPreferences } from './sidebarPreferences'
@@ -180,7 +181,7 @@ export function Sidebar({
           aria-label="我的工作空间"
           title="我的工作空间"
         >
-          <span className="profile-avatar">T</span>
+          <Avatar preset={WORKSPACE_AVATAR.id} tracksPointer />
           <span className="profile-copy">
             <span>我的工作空间</span>
             <small>
