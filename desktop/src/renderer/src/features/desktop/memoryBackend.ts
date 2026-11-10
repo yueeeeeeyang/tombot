@@ -1,9 +1,12 @@
 import { createSettingsDraft, type SettingsDraft } from '../settings/settings'
 import { createWorkspace, type AppWorkspace, type ChatMessage } from '../workspace/model'
+import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
+  BootstrapStatus,
   DeliveryResult,
   DesktopBackend,
   SessionPhase,
+  SessionSnapshot,
   SettingsView,
   WorkspaceSnapshot,
 } from './backend'
@@ -14,20 +17,73 @@ const modelNotReady = '尚未配置可用模型，请先在设置中填写 API �
 export class MemoryBackend implements DesktopBackend {
   readonly savesSynchronously = true
   phase: SessionPhase = 'ready'
+  serverUrl = ''
+  connectError: string | null = null
   setupCode = 'memory-setup-code'
   password = ''
   failSave: Error | null = null
+  sessionError: Error | null = null
+  /** 为 true 时，下一次重试仍失败，用来验证失败不会进入工作空间。 */
+  failNextBootstrap = false
+  bootstrap: BootstrapStatus = { phase: 'ready', steps: [], cursor: 0 }
+  private listeners = new Set<(status: BootstrapStatus) => void>()
   private workspace = createWorkspace()
   private pristine = true
   private settings: SettingsDraft = createSettingsDraft()
   private apiKey = ''
 
-  trySessionSync(): SessionPhase {
-    return this.phase
+  /** 地址、初始化和密码优先于引导。已验证且引导未完成时才停在进度页。 */
+  private gatePhase(): SessionPhase {
+    if (
+      this.phase === 'address' ||
+      this.phase === 'offline' ||
+      this.phase === 'setup' ||
+      this.phase === 'login' ||
+      this.phase === 'loading'
+    ) {
+      return this.phase
+    }
+    if (this.bootstrap.phase !== 'ready') return 'bootstrap'
+    return 'ready'
   }
 
-  session(): Promise<{ phase: SessionPhase }> {
-    return Promise.resolve({ phase: this.phase })
+  trySessionSync(): SessionSnapshot {
+    const phase = this.gatePhase()
+    return {
+      phase,
+      serverUrl: this.serverUrl,
+      ...(phase === 'offline' && this.connectError ? { message: this.connectError } : {}),
+      ...(phase === 'bootstrap' ? { bootstrap: this.bootstrap } : {}),
+    }
+  }
+
+  session(): Promise<SessionSnapshot> {
+    if (this.sessionError) return Promise.reject(this.sessionError)
+    return Promise.resolve(this.trySessionSync())
+  }
+
+  async connect(input: string): Promise<SessionSnapshot> {
+    const serverUrl = normalizeServerAddress(input)
+    this.serverUrl = serverUrl
+    if (this.connectError) {
+      this.phase = 'offline'
+      return { phase: 'offline', message: this.connectError, serverUrl }
+    }
+    if (this.phase === 'address' || this.phase === 'offline' || this.phase === 'loading') {
+      this.phase = this.password ? 'login' : 'setup'
+    }
+    return this.trySessionSync()
+  }
+
+  watchBootstrap(onStatus: (status: BootstrapStatus) => void): () => void {
+    this.listeners.add(onStatus)
+    return () => this.listeners.delete(onStatus)
+  }
+
+  publishBootstrap(status: BootstrapStatus): void {
+    this.bootstrap = status
+    if (status.phase === 'ready') this.phase = 'ready'
+    for (const listener of this.listeners) listener(status)
   }
 
   async setup(input: { setupCode: string; password: string }): Promise<void> {
@@ -92,6 +148,21 @@ export class MemoryBackend implements DesktopBackend {
   }
 
   startBootstrap(): Promise<void> {
+    if (this.bootstrap.phase !== 'failed') return Promise.resolve()
+    if (this.failNextBootstrap) {
+      this.failNextBootstrap = false
+      this.publishBootstrap({
+        ...this.bootstrap,
+        cursor: this.bootstrap.cursor + 1,
+        error: this.bootstrap.error ?? '准备失败',
+      })
+      return Promise.resolve()
+    }
+    this.publishBootstrap({
+      phase: 'ready',
+      cursor: this.bootstrap.cursor + 1,
+      steps: this.bootstrap.steps.map((step) => ({ ...step, status: 'ok', detail: undefined })),
+    })
     return Promise.resolve()
   }
 
@@ -162,8 +233,14 @@ export class MemoryBackend implements DesktopBackend {
 
   reset(): void {
     this.phase = 'ready'
+    this.serverUrl = ''
+    this.connectError = null
     this.password = ''
     this.failSave = null
+    this.sessionError = null
+    this.failNextBootstrap = false
+    this.bootstrap = { phase: 'ready', steps: [], cursor: 0 }
+    this.listeners.clear()
     this.workspace = createWorkspace()
     this.pristine = true
     this.settings = createSettingsDraft()

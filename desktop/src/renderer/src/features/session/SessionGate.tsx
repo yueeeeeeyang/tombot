@@ -1,47 +1,168 @@
-import { FormEvent, useState } from 'react'
+import { FormEvent, useState, type ReactNode } from 'react'
 import { Avatar } from '../../components/Avatar'
+import type { BootstrapStep } from '../desktop/backend'
 import type { useSession } from './useSession'
 
 type Session = ReturnType<typeof useSession>
 
-/** 初始化、密码验证和连接失败。布局沿用现有表单和主按钮，不改工作空间界面。 */
+/**
+ * macOS 的 hiddenInset 把红绿灯画在内容区左上角。
+ * 门禁页整页可拖，这块和表单必须关掉拖动，否则窗口按钮和输入框都点不到。
+ */
+export function SessionFrame({ children }: { children: ReactNode }) {
+  return (
+    <main className="session-gate">
+      <div className="session-traffic-lights" aria-hidden="true" />
+      {children}
+    </main>
+  )
+}
+
+/** 填写服务地址、初始化、密码验证、连接失败和引导进度。布局沿用现有表单和主按钮。 */
 export function SessionGate({ session }: { session: Session }) {
   if (session.phase === 'loading') {
     return (
-      <main className="session-gate">
+      <SessionFrame>
         <section className="session-card" aria-busy="true">
           <h1>正在连接服务</h1>
           <p role="status">正在确认这台服务是否已经初始化。</p>
         </section>
-      </main>
+      </SessionFrame>
     )
   }
-  if (session.phase === 'offline') {
-    return (
-      <main className="session-gate">
-        <section className="session-card">
-          <Avatar preset="bombay" size="large" />
-          <h1>无法连接服务</h1>
-          <p>TomBot 需要本机服务才能打开工作空间。</p>
-          {session.message && (
-            <p className="form-error" role="alert">
-              {session.message}
-            </p>
-          )}
+  if (session.phase === 'address' || session.phase === 'offline') {
+    return <ServerForm session={session} />
+  }
+  if (session.phase === 'login') return <LoginForm session={session} />
+  if (session.phase === 'bootstrap') return <BootstrapView session={session} />
+  return <SetupForm session={session} />
+}
+
+function ServerForm({ session }: { session: Session }) {
+  const [serverUrl, setServerUrl] = useState(session.serverUrl)
+  const isOffline = session.phase === 'offline'
+
+  function submit(event: FormEvent): void {
+    event.preventDefault()
+    void session.connect(serverUrl)
+  }
+
+  return (
+    <SessionFrame>
+      <form className="session-card" onSubmit={submit}>
+        <Avatar preset="bombay" size="large" />
+        <h1>{isOffline ? '无法连接服务' : '连接服务'}</h1>
+        <p>
+          {isOffline
+            ? '没有连上这台服务。可以修改地址后再试。'
+            : '桌面客户端只转发消息。请填写远端服务地址，例如 https://tom.example.com。'}
+        </p>
+        <label>
+          服务地址
+          <input
+            value={serverUrl}
+            autoFocus
+            autoComplete="url"
+            spellCheck={false}
+            placeholder="https://tom.example.com"
+            onChange={(event) => setServerUrl(event.target.value)}
+          />
+        </label>
+        {session.message && (
+          <p className="form-error" role="alert">
+            {session.message}
+          </p>
+        )}
+        <button className="primary-button" type="submit" disabled={session.pending}>
+          {isOffline ? '重新连接' : '连接'}
+        </button>
+      </form>
+    </SessionFrame>
+  )
+}
+
+function BootstrapView({ session }: { session: Session }) {
+  const steps = session.bootstrap?.steps ?? []
+  const completed = steps.filter(
+    (step) => step.status === 'ok' || step.status === 'degraded',
+  ).length
+  const current = steps.find((step) => step.status === 'running')
+  const failed = session.bootstrap?.phase === 'failed'
+  const notice = session.message || session.bootstrap?.error
+  return (
+    <SessionFrame>
+      <section className="session-card" aria-busy={!failed}>
+        <Avatar preset="bombay" size="large" />
+        <h1>正在准备服务</h1>
+        <p>字体和浏览器还没准备好。完成后才会进入工作空间。</p>
+        <p role="status">{`当前阶段：${phaseLabel(session.bootstrap?.phase)}${current ? `，正在${current.title}` : ''}`}</p>
+        <progress
+          className="session-progress"
+          aria-label="引导进度"
+          max={Math.max(steps.length, 1)}
+          value={completed}
+        />
+        <p>{steps.length === 0 ? '正在读取步骤' : `已完成 ${completed} / ${steps.length}`}</p>
+        {steps.length > 0 && (
+          <ol className="session-steps" aria-label="引导步骤">
+            {steps.map((step) => (
+              <StepRow key={step.id} step={step} />
+            ))}
+          </ol>
+        )}
+        {notice && (
+          <p className="form-error" role="alert">
+            {notice}
+          </p>
+        )}
+        {failed && (
           <button
             className="primary-button"
             type="button"
             disabled={session.pending}
-            onClick={() => void session.retry()}
+            onClick={() => void session.retryBootstrap()}
           >
-            重新连接
+            重新准备
           </button>
-        </section>
-      </main>
-    )
+        )}
+      </section>
+    </SessionFrame>
+  )
+}
+
+function StepRow({ step }: { step: BootstrapStep }) {
+  return (
+    <li className="session-step">
+      <span className="session-step-row">
+        <span>{step.title}</span>
+        <span>{stepLabel(step.status)}</span>
+      </span>
+      {step.detail && <span className="session-step-detail">{step.detail}</span>}
+    </li>
+  )
+}
+
+function phaseLabel(phase: string | undefined): string {
+  const labels: Record<string, string> = {
+    pending: '等待启动',
+    detecting: '检测环境',
+    preparing: '准备依赖',
+    selfcheck: '自检中',
+    ready: '已就绪',
+    failed: '引导失败',
   }
-  if (session.phase === 'login') return <LoginForm session={session} />
-  return <SetupForm session={session} />
+  if (!phase) return '正在读取'
+  return labels[phase] ?? '进行中'
+}
+
+function stepLabel(status: string): string {
+  const labels: Record<string, string> = {
+    running: '进行中',
+    ok: '已完成',
+    failed: '失败',
+    degraded: '需关注',
+  }
+  return labels[status] ?? status
 }
 
 function SetupForm({ session }: { session: Session }) {
@@ -69,7 +190,7 @@ function SetupForm({ session }: { session: Session }) {
   }
 
   return (
-    <main className="session-gate">
+    <SessionFrame>
       <form className="session-card" onSubmit={submit}>
         <Avatar preset="bombay" size="large" />
         <h1>初始化 TomBot</h1>
@@ -110,7 +231,7 @@ function SetupForm({ session }: { session: Session }) {
           完成初始化
         </button>
       </form>
-    </main>
+    </SessionFrame>
   )
 }
 
@@ -129,7 +250,7 @@ function LoginForm({ session }: { session: Session }) {
   }
 
   return (
-    <main className="session-gate">
+    <SessionFrame>
       <form className="session-card" onSubmit={submit}>
         <Avatar preset="bombay" size="large" />
         <h1>验证密码</h1>
@@ -152,6 +273,6 @@ function LoginForm({ session }: { session: Session }) {
           进入工作空间
         </button>
       </form>
-    </main>
+    </SessionFrame>
   )
 }
