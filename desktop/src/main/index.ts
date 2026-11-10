@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, session } from 'electron'
 import { join } from 'node:path'
+import { registerDesktopIpc } from './desktopServer'
 
 /** 创建隔离的本地客户端窗口；加载失败时报告错误并退出，避免留下空白窗口。 */
 async function createWindow(): Promise<void> {
@@ -28,7 +29,7 @@ async function createWindow(): Promise<void> {
     const choice = dialog.showMessageBoxSync(window, {
       type: 'warning',
       title: '还有未保存的内容',
-      message: '本地草稿尚未成功保存，退出将丢失本次未保存的修改。',
+      message: '修改尚未成功保存到服务，退出将丢失本次未保存的内容。',
       buttons: ['继续编辑', '放弃修改并退出'],
       defaultId: 0,
       cancelId: 0,
@@ -38,7 +39,7 @@ async function createWindow(): Promise<void> {
   window.once('ready-to-show', () => window.show())
   window.webContents.on('render-process-gone', (_event, details) => {
     console.error(`客户端渲染进程退出，窗口 ID=${window.id}，原因=${details.reason}`)
-    dialog.showErrorBox('客户端意外退出', '请重新打开 TomBot。已保存的本地草稿会保留。')
+    dialog.showErrorBox('客户端意外退出', '请重新打开 TomBot。已保存到服务的内容会保留。')
     app.quit()
   })
 
@@ -80,6 +81,7 @@ if (!hasInstanceLock) {
         callback(false)
       })
       session.defaultSession.setPermissionCheckHandler(() => false)
+      registerDesktopIpc()
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
           ...(process.platform === 'darwin'

@@ -5,14 +5,26 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test'
+import { randomBytes } from 'node:crypto'
+import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { buildCompanion, startCompanion, type Companion } from './companionServer'
 
 let application: ElectronApplication
 let window: Page
 let profilePath: string
 let browserErrors: string[]
+let companionBinary = ''
+let companion: Companion
+let password = ''
+let setupShot = false
+
+test.beforeAll(async () => {
+  test.setTimeout(180_000)
+  companionBinary = await buildCompanion()
+})
 
 /**
  * 把页面设成指定尺寸。Linux 标题栏在窗口外侧，setSize 会让页面少掉这一截，
@@ -43,11 +55,11 @@ async function configureModel(): Promise<void> {
 
 test.beforeEach(async () => {
   browserErrors = []
+  password = randomBytes(18).toString('base64url')
+  companion = await startCompanion(companionBinary)
   profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-test-'))
   // 虚拟显示器的设备像素比会略偏离 1，窗口和布局是按 CSS 像素断言的。
-  application = await electron.launch({
-    args: ['.', `--user-data-dir=${profilePath}`, '--force-device-scale-factor=1'],
-  })
+  application = await launchApp(profilePath)
   window = await application.firstWindow()
   // 等待原生窗口就绪，避免首次拖动被窗口显示过程打断。
   await expect
@@ -59,6 +71,7 @@ test.beforeEach(async () => {
   // Playwright 默认模拟浅色；取消覆盖后才能验证 Electron 的原生主题变化。
   await window.emulateMedia({ colorScheme: null })
   window.on('pageerror', (error) => browserErrors.push(error.message))
+  await unlock()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   await expect
     .poll(() =>
@@ -77,8 +90,117 @@ test.beforeEach(async () => {
 
 test.afterEach(async () => {
   await application?.close()
+  await companion?.stop()
   await rm(profilePath, { recursive: true, force: true })
   expect(browserErrors).toEqual([])
+})
+
+function launchApp(profile: string): Promise<ElectronApplication> {
+  return electron.launch({
+    args: ['.', `--user-data-dir=${profile}`, '--force-device-scale-factor=1'],
+    env: { ...process.env, TOMBOT_SERVER_URL: companion.url },
+  })
+}
+
+/** 每个测试都有自己的新服务，所以这里走初始化。初始化码和密码只填进表单。 */
+async function unlock(): Promise<void> {
+  const setupHeading = window.getByRole('heading', { name: '初始化 TomBot' })
+  await expect(setupHeading).toBeVisible()
+  if (!setupShot) {
+    await mkdir('/opt/cursor/artifacts', { recursive: true })
+    await window.screenshot({ path: '/opt/cursor/artifacts/session-setup.png', scale: 'css' })
+    setupShot = true
+  }
+  await window.getByLabel('初始化码').fill(companion.setupCode)
+  await window.getByLabel('密码', { exact: true }).fill(password)
+  await window.getByLabel('确认密码', { exact: true }).fill(password)
+  await window.getByRole('button', { name: '完成初始化' }).click()
+}
+
+/** 等服务确认保存后再重载，避免把还在传输的草稿看成丢失。 */
+async function reloadPersisted(): Promise<void> {
+  await expect
+    .poll(() => window.evaluate(() => document.documentElement.dataset.workspaceSave ?? 'saved'))
+    .toBe('saved')
+  await window.reload()
+  await expect(window.getByRole('textbox', { name: /发消息/ })).toBeVisible()
+}
+
+async function updateServerWorkspace(
+  mutate: (workspace: {
+    activeAgentId: string
+    agents: Array<{
+      id: string
+      draft: string
+      messages: Array<{
+        id?: string
+        role?: string
+        content?: string
+        createdAt: string
+        status?: string
+        requestId?: string
+        reactions?: unknown
+      }>
+      artifacts: unknown[]
+    }>
+  }) => void,
+): Promise<void> {
+  await expect
+    .poll(() => window.evaluate(() => document.documentElement.dataset.workspaceSave ?? 'saved'))
+    .toBe('saved')
+  const login = await fetch(`${companion.url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
+  })
+  if (!login.ok) throw new Error(`登录服务失败：${login.status}`)
+  const token = ((await login.json()) as { device_token: string }).device_token
+  const current = await fetch(`${companion.url}/api/v1/workspace`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!current.ok) throw new Error(`读取工作空间失败：${current.status}`)
+  const snapshot = (await current.json()) as {
+    workspace: {
+      activeAgentId: string
+      agents: Array<{
+        id: string
+        draft: string
+        messages: Array<{
+          id?: string
+          role?: string
+          content?: string
+          createdAt: string
+          status?: string
+          requestId?: string
+          reactions?: unknown
+        }>
+        artifacts: unknown[]
+      }>
+    }
+  }
+  mutate(snapshot.workspace)
+  const saved = await fetch(`${companion.url}/api/v1/workspace`, {
+    method: 'PUT',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify(snapshot.workspace),
+  })
+  if (!saved.ok) throw new Error(`写入工作空间失败：${saved.status}`)
+  await window.reload()
+  await expect(window.getByRole('textbox', { name: /发消息/ })).toBeVisible()
+}
+
+test('已初始化后要验证密码才能进入工作空间', async () => {
+  await application.close()
+  await rm(profilePath, { recursive: true, force: true })
+  profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-login-'))
+  application = await launchApp(profilePath)
+  window = await application.firstWindow()
+  window.on('pageerror', (error) => browserErrors.push(error.message))
+  await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
+  await window.screenshot({ path: '/opt/cursor/artifacts/session-login.png', scale: 'css' })
+  await window.getByLabel('密码', { exact: true }).fill(password)
+  await window.getByRole('button', { name: '进入工作空间' }).click()
+  await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
 })
 
 test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () => {
@@ -94,6 +216,7 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
       .evaluate((element) => element.scrollHeight <= element.clientHeight),
   ).toBe(true)
   await window.screenshot({ path: testInfo.outputPath('desktop-home.png'), scale: 'css' })
+  await window.screenshot({ path: '/opt/cursor/artifacts/desktop-home.png', scale: 'css' })
   const rendererProcesses = await application.evaluate(({ app }) =>
     app.getAppMetrics().filter((metric) => metric.type === 'Tab'),
   )
@@ -135,7 +258,7 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   const input = window.getByRole('textbox', { name: '给写作搭档发消息' })
   await window.getByRole('button', { name: '查看写作搭档资料' }).click()
   const catPanel = window.getByRole('complementary', { name: '写作搭档' })
-  await expect(catPanel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('GPT-4o')
+  await expect(catPanel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('项目模型')
   await window.keyboard.press('Escape')
   await expect(catPanel).toHaveCount(0)
   await input.fill('把想法变成一篇好故事。')
@@ -143,7 +266,7 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   await expect(window.getByRole('log')).toContainText('把想法变成一篇好故事。')
   await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   await input.fill('第二个尚未完成的想法')
-  await window.reload()
+  await reloadPersisted()
   await expect(input).toHaveValue('第二个尚未完成的想法')
   await expect(window.locator('.chat-header .avatar')).toHaveAttribute('data-avatar', 'ragdoll')
   await expect(
@@ -334,6 +457,10 @@ test('招聘仅列出已配置模型，空状态配置后返回并保留表单',
   await window.getByRole('option', { name: '团队模型', exact: true }).click()
   await recruit.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   await expect(window.getByRole('textbox', { name: '给我的猫咪发消息' })).toBeVisible()
+  await window.getByRole('button', { name: '查看我的猫咪资料', exact: true }).click()
+  const hired = window.getByRole('complementary', { name: '我的猫咪' })
+  await expect(hired.getByRole('combobox', { name: '模型' })).toHaveText('团队模型')
+  await window.screenshot({ path: '/opt/cursor/artifacts/recruit-model.png', scale: 'css' })
 })
 
 test('搜索键盘操作与最小窗口布局', async () => {
@@ -397,7 +524,10 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   await chooseOption('语言', '简体中文')
   await window.getByRole('button', { name: '模型设置', exact: true }).click()
   await chooseOption('模型供应商', 'Anthropic')
-  await expect(window.getByLabel('API 密钥')).toBeDisabled()
+  const apiKey = window.getByLabel('API 密钥')
+  await expect(apiKey).toBeEnabled()
+  await expect(apiKey).toHaveAttribute('type', 'password')
+  await apiKey.fill('layout-check-key')
   const outputLength = window.getByRole('spinbutton', { name: /最大输出长度/ })
   await outputLength.fill('0')
   await expect(window.getByRole('alert')).toContainText('之间的整数')
@@ -1091,12 +1221,10 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
   await input.fill('原来的想法')
   await input.press('Enter')
   await expect(window.getByRole('log')).toContainText('原来的想法')
-  await window.evaluate(() => {
-    const workspace = JSON.parse(localStorage.getItem('tombot.workspace.v5')!)
-    const agent = workspace.agents.find(
-      (item: { id: string }) => item.id === workspace.activeAgentId,
-    )
-    const saved = agent.messages.at(-1)
+  await updateServerWorkspace((workspace) => {
+    const agent = workspace.agents.find((item) => item.id === workspace.activeAgentId)
+    const saved = agent?.messages.at(-1)
+    if (!agent || !saved?.createdAt) throw new Error('服务端没有刚保存的消息')
     const sentAt = new Date(saved.createdAt).getTime()
     saved.createdAt = new Date(sentAt - 20 * 60 * 1000).toISOString()
     agent.messages.unshift({
@@ -1108,10 +1236,7 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
       requestId: 'req-e2e',
       reactions: [{ emoji: '👍', count: 2 }],
     })
-    localStorage.setItem('tombot.workspace.v5', JSON.stringify(workspace))
   })
-  await window.reload()
-  await expect(input).toBeVisible()
   await expect(window.getByText('助手已经看到这句。')).toBeVisible()
   await expect(window.locator('.time-separator')).toHaveCount(2)
   await expect(window.getByRole('log')).not.toContainText('· 未发送')
@@ -1204,8 +1329,8 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
   expect(original.y).toBeLessThan(viewport.height)
 
   await window.getByRole('button', { name: '未发送，点击重试' }).first().click()
-  await expect(window.getByRole('alert')).toContainText('服务端尚未接入')
-  await window.reload()
+  await expect(window.getByRole('alert')).toContainText('尚未配置可用模型')
+  await reloadPersisted()
   await expect(window.getByRole('button', { name: '❤️，点击取消' })).toBeVisible()
   await expect(quote).toBeVisible()
 })
@@ -1262,7 +1387,7 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   await trigger.click()
   await panel.getByRole('combobox', { name: '模型', exact: true }).click()
   await window.getByRole('option', { name: 'Claude Sonnet', exact: true }).click()
-  await window.reload()
+  await reloadPersisted()
   await trigger.click()
   await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveText(
     'Claude Sonnet',
@@ -1274,21 +1399,16 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
 test('资料库按时间分组展示产物，电脑在没有地址时保持未连接', async () => {
   const artifacts = '/opt/cursor/artifacts'
   await mkdir(artifacts, { recursive: true })
-  await window.getByRole('textbox', { name: '给小黑发消息' }).fill('暂存')
-  await expect
-    .poll(() => window.evaluate(() => localStorage.getItem('tombot.workspace.v5')))
-    .not.toBeNull()
-  await window.evaluate(() => {
-    const key = 'tombot.workspace.v5'
-    const workspace = JSON.parse(localStorage.getItem(key)!)
-    const agent = workspace.agents.find((item: { id: string }) => item.id === 'assistant')
+  const preview =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
+  await updateServerWorkspace((workspace) => {
+    const agent = workspace.agents.find((item) => item.id === 'assistant')
+    if (!agent) throw new Error('没有找到小黑')
     const now = new Date()
     const day = now.getDay()
     const mondayOffset = day === 0 ? 6 : day - 1
     const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset, 12)
     const older = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 10, 11)
-    const preview =
-      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
     agent.artifacts = [
       ...Array.from({ length: 6 }, (_, index) => ({
         id: `today-${index}`,
@@ -1297,23 +1417,11 @@ test('资料库按时间分组展示产物，电脑在没有地址时保持未�
         createdAt: new Date(now.getTime() - (6 - index) * 60_000).toISOString(),
         ...(index === 5 ? { preview } : {}),
       })),
-      {
-        id: 'week',
-        title: '本周录像',
-        kind: 'video',
-        createdAt: weekStart.toISOString(),
-      },
-      {
-        id: 'older',
-        title: '更早的草稿',
-        kind: 'file',
-        createdAt: older.toISOString(),
-      },
+      { id: 'week', title: '本周录像', kind: 'video', createdAt: weekStart.toISOString() },
+      { id: 'older', title: '更早的草稿', kind: 'file', createdAt: older.toISOString() },
     ]
     agent.draft = ''
-    localStorage.setItem(key, JSON.stringify(workspace))
   })
-  await window.reload()
   await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
   const panel = window.getByRole('complementary', { name: '小黑' })
   await panel.getByRole('tab', { name: '资料库', exact: true }).click()
@@ -1332,3 +1440,159 @@ test('资料库按时间分组展示产物，电脑在没有地址时保持未�
   await panel.getByRole('button', { name: '保存地址', exact: true }).click()
   await expect(panel.getByRole('alert')).toContainText('HTTP 或 HTTPS')
 })
+
+test('连接电脑使用这只猫咪的工作区，断开后回到未连接', async () => {
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
+  const panel = window.getByRole('complementary', { name: '小黑' })
+  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await panel.getByRole('button', { name: '连接电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('运行中')
+  await expect(panel.getByTitle('小黑的远端电脑')).toBeVisible()
+  const view = window.frameLocator('[title="小黑的远端电脑"]')
+  await expect(view.getByRole('heading', { name: '引导' })).toBeVisible()
+  await expect(view.getByText('尚未开始')).toBeVisible()
+  await expect(view.getByRole('heading', { name: '文件' })).toBeVisible()
+  await expect(view.getByRole('heading', { name: '终端' })).toBeVisible()
+  await view.locator('body').screenshot({ path: `${artifacts}/computer-view.png` })
+  await window.screenshot({ path: `${artifacts}/computer-connected.png`, scale: 'css' })
+  await panel.getByRole('button', { name: '全屏查看', exact: true }).click()
+  await expect(panel.getByRole('button', { name: '还原', exact: true })).toBeVisible()
+  await panel.getByRole('button', { name: '断开', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await window.screenshot({ path: `${artifacts}/computer-disconnected.png`, scale: 'css' })
+})
+
+test('流式开关打开时回复逐段出现，关闭时完成后一次出现', async () => {
+  test.setTimeout(120_000)
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const model = await startFixtureModel([
+    ['你', '好'],
+    ['甲', '乙'],
+  ])
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await expect(window.getByRole('switch', { name: /流式响应/ })).toBeChecked()
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', true)
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('打个招呼')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('你')
+    await window.screenshot({ path: `${artifacts}/stream-in-progress.png`, scale: 'css' })
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('你好')
+
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('switch', { name: /流式响应/ }).click()
+    await expect(window.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', false)
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('再来一次')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    const started = Date.now()
+    let sawPartial = false
+    while (Date.now() - started < 1_200) {
+      const texts = await window.locator('.message-text').allTextContents()
+      if (texts.some((text) => text.includes('甲') && !text.includes('甲乙'))) sawPartial = true
+      await window.waitForTimeout(100)
+    }
+    expect(sawPartial).toBe(false)
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
+      .toContain('甲乙')
+    await expect(window.getByRole('alert')).toHaveCount(0)
+  } finally {
+    await model.close()
+  }
+})
+
+/** 等设置写进服务。主进程的请求不会出现在页面网络记录里。 */
+async function waitForModel(modelName: string, isStreaming: boolean): Promise<void> {
+  const login = await fetch(`${companion.url}/api/v1/auth/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ password, deviceName: '端到端', platform: 'linux' }),
+  })
+  if (!login.ok) throw new Error(`登录服务失败：${login.status}`)
+  const token = ((await login.json()) as { device_token: string }).device_token
+  await expect
+    .poll(
+      async () => {
+        const response = await fetch(`${companion.url}/api/v1/model-settings`, {
+          headers: { authorization: `Bearer ${token}` },
+        })
+        if (!response.ok) return ''
+        const body = (await response.json()) as { modelName?: string; isStreaming?: boolean }
+        return body.modelName === modelName && body.isStreaming === isStreaming ? 'ready' : ''
+      },
+      { timeout: 15_000 },
+    )
+    .toBe('ready')
+}
+
+/** 按 OpenAI 兼容流式分两段返回。两段之间留出时间，方便截到进行中的回复。 */
+function startFixtureModel(
+  pairs: Array<[string, string]>,
+): Promise<{ url: string; close: () => Promise<void> }> {
+  let index = 0
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          request.on('end', () => resolve())
+          request.on('error', reject)
+          request.resume()
+        })
+        if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
+          response.writeHead(404).end()
+          return
+        }
+        const pair = pairs[Math.min(index, pairs.length - 1)] ?? ['', '']
+        index += 1
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        })
+        response.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: pair[0] } }] })}\n\n`,
+        )
+        await new Promise((resolve) => setTimeout(resolve, 1_600))
+        response.write(
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: pair[1] }, finish_reason: 'stop' }] })}\n\n`,
+        )
+        response.write('data: [DONE]\n\n')
+        response.end()
+      } catch {
+        response.destroy()
+      }
+    })()
+  })
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型端口没有打开'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+          new Promise((done, fail) => {
+            server.close((error) => (error ? fail(error) : done()))
+          }),
+      })
+    })
+    server.on('error', reject)
+  })
+}

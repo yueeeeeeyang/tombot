@@ -3,9 +3,13 @@ import { cleanup } from '@testing-library/react'
 import { afterEach, vi } from 'vitest'
 import { clearAgentActivities } from '../src/renderer/src/features/avatars/activity'
 import { clearCatMotion } from '../src/renderer/src/features/avatars/catMotion'
+import { memoryBackend } from '../src/renderer/src/features/desktop/memoryBackend'
+
+window.desktop = { platform: 'linux', backend: memoryBackend }
 
 afterEach(() => {
   cleanup()
+  memoryBackend.reset()
   localStorage.clear()
   // 活动表是进程内单例，清掉以免上一只猫的工作中状态漏到下一个用例。
   clearAgentActivities()

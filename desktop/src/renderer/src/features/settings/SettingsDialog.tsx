@@ -17,10 +17,13 @@ interface SettingsDialogProps {
   draft: SettingsDraft
   onSectionChange: (section: SettingsSection) => void
   onChange: (draft: SettingsDraft) => void
+  apiKey: string
+  hasApiKey: boolean
+  onApiKeyChange: (apiKey: string) => void
   onClose: () => void
 }
 
-/** 主题即时生效，语言和模型保留为预览表单；关闭和切换栏目不丢失当前输入。 */
+/** 主题即时生效并留在本机。语言和模型设置保存到服务，关闭或切换栏目不丢失当前输入。 */
 export function SettingsDialog({
   theme,
   themeError,
@@ -29,6 +32,9 @@ export function SettingsDialog({
   draft,
   onSectionChange,
   onChange,
+  apiKey,
+  hasApiKey,
+  onApiKeyChange,
   onClose,
 }: SettingsDialogProps) {
   return (
@@ -62,12 +68,18 @@ export function SettingsDialog({
               onThemeChange={onThemeChange}
             />
           ) : (
-            <ModelSettings draft={draft} onChange={onChange} />
+            <ModelSettings
+              draft={draft}
+              onChange={onChange}
+              apiKey={apiKey}
+              hasApiKey={hasApiKey}
+              onApiKeyChange={onApiKeyChange}
+            />
           )}
           <p className="settings-preview-note">
             {section === 'general'
-              ? '主题即时生效，语言暂仅预览'
-              : '模型设置暂仅预览，不会连接供应商'}
+              ? '主题即时生效。语言选择会保存，界面仍使用简体中文'
+              : '模型设置会保存到服务。填写 API 地址和模型名称后即可发送'}
           </p>
           {themeError && (
             <p className="form-error" role="alert">
@@ -125,8 +137,14 @@ function GeneralSettings({
   )
 }
 
-/** 渲染供应商与参数表单；范围错误即时呈现，凭据入口在接入服务前保持禁用。 */
-function ModelSettings({ draft, onChange }: Pick<SettingsDialogProps, 'draft' | 'onChange'>) {
+/** 渲染供应商与参数表单。密钥只提交给服务，不会留在本地存储。 */
+function ModelSettings({
+  draft,
+  onChange,
+  apiKey,
+  hasApiKey,
+  onApiKeyChange,
+}: Pick<SettingsDialogProps, 'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'>) {
   const errors = validateSettingsDraft(draft)
   return (
     <>
@@ -169,14 +187,16 @@ function ModelSettings({ draft, onChange }: Pick<SettingsDialogProps, 'draft' | 
               </p>
             )}
           </div>
-          <label className="setting-row">
+          <label className="setting-row" htmlFor="model-api-key">
             <span>API 密钥</span>
             <input
+              id="model-api-key"
               className="setting-text-input"
               type="password"
-              disabled
-              placeholder="服务端接入后可填写"
+              value={apiKey}
+              placeholder={hasApiKey ? '已保存，留空则不修改' : '输入 API 密钥'}
               autoComplete="off"
+              onChange={(event) => onApiKeyChange(event.target.value)}
             />
           </label>
           <label className="setting-row">
@@ -253,7 +273,7 @@ function ModelSettings({ draft, onChange }: Pick<SettingsDialogProps, 'draft' | 
           </div>
           <div className="setting-row">
             <span className="setting-label" id="streaming-label">
-              流式响应<small>逐步显示生成的内容</small>
+              流式响应<small>开启后逐段出现，关闭后在完成后一次出现</small>
             </span>
             <button
               type="button"
