@@ -17,6 +17,9 @@
 .dialog--recruit {
   width: min(480px, calc(100vw - 32px));
 }
+.dialog--dm {
+  width: min(560px, calc(100vw - 32px));
+}
 .dialog--recruit .dialog-content {
   padding: 22px;
 }

@@ -113,12 +113,46 @@
 .routine-row > div {
   min-width: 0;
 }
-.routine-row strong,
-.dm-thread p {
+.routine-row strong {
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin: 0 0 12px;
+}
+.dm-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(460px, calc(100dvh - 160px));
+  margin: 0;
+  overflow-y: auto;
+}
+.dm-line {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  max-width: 86%;
+}
+.dm-line--peer {
+  align-self: flex-end;
+  flex-direction: row-reverse;
+}
+.dm-line-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.dm-line--peer .message-speaker {
+  text-align: right;
+}
+.dm-thread .message-bubble {
+  max-width: none;
+}
+.dm-thread-empty {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 .dm-notice {
   display: flex;

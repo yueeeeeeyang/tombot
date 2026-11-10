@@ -11,7 +11,7 @@ export function Dialog({
   title: string
   children: ReactNode
   onClose: () => void
-  variant?: 'default' | 'search' | 'settings' | 'recruit'
+  variant?: 'default' | 'search' | 'settings' | 'recruit' | 'dm'
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   useLayoutEffect(() => {
@@ -39,7 +39,7 @@ export function Dialog({
       }}
     >
       <div className="dialog-content">
-        {(variant === 'default' || variant === 'recruit') && (
+        {(variant === 'default' || variant === 'recruit' || variant === 'dm') && (
           <div className="dialog-heading">
             <h2>{title}</h2>
             <button className="icon-button" aria-label="关闭弹窗" onClick={onClose}>

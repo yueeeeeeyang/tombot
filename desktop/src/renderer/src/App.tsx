@@ -87,7 +87,7 @@ function WorkspaceApp() {
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
   const [chatGroups, setChatGroups] = useState<Array<{ id: string; name: string }>>([])
-  const [dmThread, setDmThread] = useState<DmNotice>()
+  const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
   const [liveReply, setLiveReply] = useState<{ agentId: string; content: string }>()
 
   function startDelivery(agentId: string, messageId: string, quietWhenUnconfigured: boolean): void {
@@ -499,7 +499,7 @@ function WorkspaceApp() {
               getBackend().previewAttachment?.(attachment.path, agent.id) ?? Promise.resolve('')
             }
             peers={workspace.agents}
-            onOpenDm={setDmThread}
+            onOpenDm={(notice) => setDmThread({ notice, selfId: agent.id })}
           />
         )}
         {surface.kind === 'agent' && isCatPanelOpen && (
@@ -626,7 +626,8 @@ function WorkspaceApp() {
       )}
       {dmThread && (
         <DmThreadDialog
-          notice={dmThread}
+          notice={dmThread.notice}
+          self={workspace.agents.find((item) => item.id === dmThread.selfId) ?? agent}
           agents={workspace.agents}
           onClose={() => setDmThread(undefined)}
           onError={setNotice}

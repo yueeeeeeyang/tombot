@@ -59,7 +59,7 @@
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
 - 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
-- 新建按钮先弹出菜单，再选招聘猫咪或创建群聊。群聊走原来的群组和 `POST /conversations/{id}/messages`。猫咪用 `message_bot` 发私信时，双方和用户的单聊里按时间插入居中提示，点开只读查看 `bot_dm`。消息可以上传图片和文件，走原来的 `/api/v1/fs/upload` 和 `SendInput.Attachments`。导出草稿入口已去掉。
+- 新建按钮先弹出菜单，再选招聘猫咪或创建群聊。群聊走原来的群组和 `POST /conversations/{id}/messages`。猫咪用 `message_bot` 发私信时，双方和用户的单聊里按时间插入居中提示。点开后用和主聊天一样的气泡只读查看这段 `bot_dm`，不能代发。消息可以上传图片和文件，走原来的 `/api/v1/fs/upload` 和 `SendInput.Attachments`。导出草稿入口已去掉。
 
 私信在 tom 里是猫咪和猫咪之间的 `bot_dm` 会话，不是用户和一只猫咪的单聊。用户和一只猫咪的对话仍是 `direct`。
 

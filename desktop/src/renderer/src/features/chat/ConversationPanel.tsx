@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { Plus, X } from 'lucide-react'
+import type { CatAvatarId } from '../avatars/presets'
 import type { ServerBubble } from '../desktop/backend'
 import { getBackend } from '../desktop/backend'
 import type { Agent, DmNotice, MessageAttachment } from '../workspace/model'
@@ -361,19 +363,21 @@ export function ConversationPanel({
   )
 }
 
-/** 只读查看两只猫咪之间的一段私信。用户不能在这里代发。 */
+/** 用主聊天的气泡只读查看两只猫咪的私信。这里不能代发，也不能回复。 */
 export function DmThreadDialog({
   notice,
+  self,
   agents,
   onClose,
   onError,
 }: {
   notice: DmNotice
+  self: Agent
   agents: Agent[]
   onClose: () => void
   onError: (message: string) => void
 }) {
-  const [lines, setLines] = useState<ServerBubble[]>([])
+  const [lines, setLines] = useState<ServerBubble[] | null>(null)
   useEffect(() => {
     let cancelled = false
     void getBackend()
@@ -388,23 +392,44 @@ export function DmThreadDialog({
       cancelled = true
     }
   }, [notice.conversationId, onError])
-  const title =
-    notice.direction === 'received'
-      ? `收到 ${notice.peerName} 的消息`
-      : `已发消息给 ${notice.peerName}`
-  // 消息接口按序号倒序返回，这里改回从早到晚，方便顺着读。
-  const ordered = [...lines].reverse()
+  const peer = agents.find((agent) => agent.id === notice.peerId)
+  const title = `${self.name} ↔ ${peer?.name || notice.peerName}`
+  // 消息接口按序号倒序返回，阅读时从早到晚。
+  const ordered = [...(lines ?? [])].reverse()
+  const now = new Date()
   return (
-    <Dialog title={title} onClose={onClose}>
+    <Dialog title={title} onClose={onClose} variant="dm">
       <div className="dm-thread" role="log" aria-label={title}>
-        {ordered.map((line) => (
-          <p key={line.id}>
-            <strong>
-              {agents.find((agent) => agent.id === line.speaker)?.name || notice.peerName}
-            </strong>
-            <span>{line.content}</span>
-          </p>
-        ))}
+        {lines !== null && ordered.length === 0 ? (
+          <p className="dm-thread-empty">这段私信还没有文字。</p>
+        ) : null}
+        {ordered.map((line, index) => {
+          const speaker = agents.find((agent) => agent.id === line.speaker)
+          const mine = line.speaker === self.id
+          const name = mine ? self.name : (speaker?.name ?? notice.peerName)
+          const avatar: CatAvatarId = mine
+            ? self.avatar
+            : (speaker?.avatar ?? peer?.avatar ?? 'bombay')
+          const label = messageTimeSeparator(line.createdAt, ordered[index - 1]?.createdAt, now)
+          return (
+            <div className="message-entry" key={line.id}>
+              {label ? (
+                <div className="time-separator">
+                  <time dateTime={line.createdAt}>{label}</time>
+                </div>
+              ) : null}
+              <div className={`dm-line ${mine ? '' : 'dm-line--peer'}`}>
+                <Avatar preset={avatar} agentId={mine ? self.id : line.speaker || notice.peerId} />
+                <div className="dm-line-body">
+                  <span className="message-speaker">{name}</span>
+                  <div className={`message-bubble ${mine ? 'assistant-bubble' : 'user-bubble'}`}>
+                    <div className="message-text">{line.content}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
       </div>
     </Dialog>
   )
