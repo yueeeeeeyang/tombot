@@ -32,6 +32,8 @@ function createAgent(messages: ChatMessage[] = [createMessage()], draft = ''): A
     group: '我的助手',
     avatar: 'bombay',
     modelId: DEFAULT_CAT_MODEL_ID,
+    artifacts: [],
+    computerUrl: '',
     messages,
     draft,
   }
@@ -68,14 +70,14 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onDraft={(draft) =>
         setCurrent(
           updateDraft(
-            { version: 4, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, agents: [current] },
             current.id,
             draft,
           ).agents[0]!,
         )
       }
       onSave={(replyToId) => {
-        const workspace = { version: 4 as const, activeAgentId: current.id, agents: [current] }
+        const workspace = { version: 5 as const, activeAgentId: current.id, agents: [current] }
         setCurrent(
           saveMessage(
             workspace,
@@ -96,7 +98,7 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onReact={(messageId, emoji) =>
         setCurrent(
           toggleReaction(
-            { version: 4, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, agents: [current] },
             current.id,
             messageId,
             emoji,

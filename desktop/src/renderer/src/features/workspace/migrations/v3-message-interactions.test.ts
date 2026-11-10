@@ -41,7 +41,7 @@ describe('消息交互前向迁移', () => {
     localStorage.setItem(V2_STORAGE_KEY, serialized)
     localStorage.setItem(PREVIOUS_STORAGE_KEY, '损坏的更旧备份')
     const migrated = loadWorkspace(localStorage)
-    expect(migrated.version).toBe(4)
+    expect(migrated.version).toBe(5)
     expect(migrated.agents.every((agent) => agent.modelId === 'gpt-4o')).toBe(true)
     expect(migrated.activeAgentId).toBe('assistant')
     expect(migrated.agents).toHaveLength(previous.agents.length)

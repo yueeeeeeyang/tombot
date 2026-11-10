@@ -8,7 +8,7 @@ import {
   exportConversation,
   type Agent,
   type NewAgent,
-  type LiveWorkspace as Workspace,
+  type AppWorkspace as Workspace,
 } from './model'
 
 /** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */

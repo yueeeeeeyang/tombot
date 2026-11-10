@@ -55,7 +55,8 @@ describe('猫咪头像前向迁移', () => {
     const serialized = JSON.stringify(previous)
     localStorage.setItem(PREVIOUS_STORAGE_KEY, serialized)
     const migrated = loadWorkspace(localStorage)
-    expect(migrated.version).toBe(4)
+    expect(migrated.version).toBe(5)
+    expect(migrated.agents.every((agent) => agent.artifacts.length === 0)).toBe(true)
     expect(migrated.agents.every((agent) => agent.modelId === 'gpt-4o')).toBe(true)
     expect(migrated.agents[0]?.messages[0]).toMatchObject({
       role: 'user',

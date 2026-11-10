@@ -133,6 +133,132 @@
 .cat-panel-export {
   align-self: flex-start;
 }
+.artifact-group {
+  padding: 10px 12px 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.artifact-group h3 {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.artifact-group ul {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-group li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 4px;
+  border-radius: 8px;
+}
+.artifact-group img,
+.artifact-group svg {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  object-fit: cover;
+}
+.artifact-group svg {
+  padding: 6px;
+}
+.artifact-group li span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-group > button {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.artifact-group > button:hover,
+.artifact-group > button:focus-visible {
+  background: var(--hover);
+  color: var(--text);
+}
+.computer-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.computer-pane [role='status'] {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.computer-pane label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.computer-pane input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.computer-pane button,
+.computer-actions button {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+}
+.computer-pane [role='alert'] {
+  margin: 0;
+  color: var(--error-text);
+  font-size: 12px;
+}
+.computer-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.computer-pane iframe {
+  width: 100%;
+  height: 180px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+}
+.computer-pane.is-expanded iframe {
+  height: min(68vh, 520px);
+}
+.computer-actions {
+  display: flex;
+  gap: 8px;
+}
 .cat-panel-empty {
   margin: 4px 0 0;
   padding: 28px 16px;

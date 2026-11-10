@@ -9,6 +9,7 @@ import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   addAgent,
   saveMessage,
+  setAgentComputerUrl,
   setAgentModel,
   toggleReaction,
   updateDraft,
@@ -350,6 +351,11 @@ export default function App() {
             onModelChange={(modelId) =>
               runAction(() => {
                 commit((previous) => setAgentModel(previous, agent.id, modelId))
+              })
+            }
+            onComputerUrl={(computerUrl) =>
+              runAction(() => {
+                commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
               })
             }
             onExport={() => setOpenDialog('share')}

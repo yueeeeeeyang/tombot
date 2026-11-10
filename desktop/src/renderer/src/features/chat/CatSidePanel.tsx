@@ -4,6 +4,8 @@ import { Avatar } from '../../components/Avatar'
 import { Select } from '../../components/Select'
 import { catModelOptions, type CatModelId } from '../models/catalog'
 import type { Agent } from '../workspace/model'
+import { ArtifactLibrary } from './ArtifactLibrary'
+import { ComputerPane } from './ComputerPane'
 
 const PANEL_TABS = ['details', 'library', 'computer'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
@@ -18,12 +20,16 @@ export function CatSidePanel({
   agent,
   onClose,
   onModelChange,
+  onComputerUrl,
   onExport,
+  now,
 }: {
   agent: Agent
   onClose: () => void
   onModelChange: (modelId: CatModelId) => void
+  onComputerUrl: (computerUrl: string) => void
   onExport: () => void
+  now?: Date
 }) {
   const [tab, setTab] = useState<PanelTab>('details')
 
@@ -123,9 +129,7 @@ export function CatSidePanel({
           id="cat-panel-library"
           aria-labelledby="cat-tab-library"
         >
-          <p className="cat-panel-empty" role="status">
-            资料库还是空的。连接服务端后，可以把文件放在这里。
-          </p>
+          <ArtifactLibrary artifacts={agent.artifacts} now={now} />
         </div>
       )}
       {tab === 'computer' && (
@@ -135,9 +139,12 @@ export function CatSidePanel({
           id="cat-panel-computer"
           aria-labelledby="cat-tab-computer"
         >
-          <p className="cat-panel-empty" role="status">
-            这只猫咪还没有自己的电脑。服务端接入后，可以在这里查看运行状态。
-          </p>
+          <ComputerPane
+            key={agent.computerUrl}
+            agentName={agent.name}
+            computerUrl={agent.computerUrl}
+            onSave={onComputerUrl}
+          />
         </div>
       )}
     </aside>
