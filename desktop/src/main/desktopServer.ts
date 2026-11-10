@@ -33,7 +33,7 @@ type CallResult<T> = { ok: true; value: T } | ({ ok: false } & Failure)
 
 let token = ''
 let savedServerAddress = ''
-let sessionLoaded = false
+let sessionLoad: Promise<void> | null = null
 
 // 服务通常在另一台机器上。没有已保存地址时不能猜一个本机端口。
 function requireServerAddress(): string {
@@ -53,9 +53,13 @@ function sessionPath(): string {
   return join(app.getPath('userData'), 'desktop-session.json')
 }
 
-async function loadSession(): Promise<void> {
-  if (sessionLoaded) return
-  sessionLoaded = true
+function loadSession(): Promise<void> {
+  // 第二次调用必须等第一次读完。否则连接请求会先写地址，迟到的空读取再把地址清掉。
+  sessionLoad ??= readStoredSession()
+  return sessionLoad
+}
+
+async function readStoredSession(): Promise<void> {
   try {
     const stored = parseStoredSession(await readFile(sessionPath(), 'utf8'))
     token = stored.deviceToken
@@ -79,8 +83,8 @@ async function persistSession(): Promise<void> {
 }
 
 async function storeToken(next: string): Promise<void> {
+  await loadSession()
   token = next
-  sessionLoaded = true
   await persistSession()
 }
 

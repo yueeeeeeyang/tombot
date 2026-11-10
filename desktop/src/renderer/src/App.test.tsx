@@ -671,4 +671,41 @@ describe('客户端交互', () => {
     ).toBeInTheDocument()
     expect(loadSidebarPreferences(localStorage).pinnedIds).toEqual([])
   })
+
+  it('点击自建猫咪只切换会话，不会把她换到置顶位', async () => {
+    memoryBackend.reset()
+    const cat = (id: string, name: string, avatar: 'calico' | 'bombay') => ({
+      id,
+      name,
+      description: '',
+      group: '未分组',
+      avatar,
+      modelId: 'gpt-4o',
+      messages: [],
+      draft: '',
+      artifacts: [],
+      computerUrl: '',
+    })
+    memoryBackend.loadFixture({
+      workspace: {
+        version: 5,
+        activeAgentId: 'cat-a',
+        agents: [cat('cat-a', '阿花', 'calico'), cat('cat-b', '阿白', 'bombay')],
+      },
+    })
+    try {
+      const user = userEvent.setup()
+      render(<App />)
+      const pinned = document.querySelector('.pinned-area') as HTMLElement
+      const list = document.querySelector('.agent-groups') as HTMLElement
+      expect(within(pinned).queryByRole('button')).not.toBeInTheDocument()
+      await user.click(within(list).getByRole('button', { name: '阿白' }))
+      expect(screen.getByRole('textbox', { name: '给阿白发消息' })).toBeInTheDocument()
+      expect(within(pinned).queryByRole('button')).not.toBeInTheDocument()
+      expect(within(list).getByRole('button', { name: '阿花' })).toBeInTheDocument()
+      expect(within(list).getByRole('button', { name: '阿白' })).toBeInTheDocument()
+    } finally {
+      memoryBackend.reset()
+    }
+  })
 })

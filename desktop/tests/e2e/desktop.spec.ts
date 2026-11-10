@@ -101,6 +101,7 @@ test.afterEach(async () => {
 function launchApp(
   profile: string,
   serverEnv: string | null = companion.url,
+  options?: { userDataDir?: boolean },
 ): Promise<ElectronApplication> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) {
@@ -108,10 +109,10 @@ function launchApp(
   }
   if (serverEnv === null) delete env.TOMBOT_SERVER_URL
   else env.TOMBOT_SERVER_URL = serverEnv
-  return electron.launch({
-    args: ['.', `--user-data-dir=${profile}`, '--force-device-scale-factor=1'],
-    env,
-  })
+  const args = ['.', '--force-device-scale-factor=1']
+  if (options?.userDataDir === false) env.XDG_CONFIG_HOME = profile
+  else args.push(`--user-data-dir=${profile}`)
+  return electron.launch({ args, env })
 }
 
 async function appRegion(selector: string): Promise<string> {
@@ -379,6 +380,34 @@ test('连接失败后可以修改服务地址', async () => {
   await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
 })
 
+test('默认用户目录里也会记住服务地址，重启后直接连接', async () => {
+  await application.close()
+  const configHome = await mkdtemp(join(tmpdir(), 'tombot-xdg-'))
+  try {
+    application = await launchApp(configHome, companion.url, { userDataDir: false })
+    window = await application.firstWindow()
+    window.on('pageerror', (error) => browserErrors.push(error.message))
+    await submitServerAddress()
+    await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
+    await window.getByLabel('密码', { exact: true }).fill(password)
+    await window.getByRole('button', { name: '进入工作空间' }).click()
+    await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
+    const saved = JSON.parse(
+      await readFile(join(configHome, 'TomBot', 'desktop-session.json'), 'utf8'),
+    ) as { serverUrl?: string; deviceToken?: string }
+    expect(saved.serverUrl).toBe(companion.url)
+    expect((saved.deviceToken ?? '').length).toBeGreaterThan(0)
+    await application.close()
+    application = await launchApp(configHome, null, { userDataDir: false })
+    window = await application.firstWindow()
+    window.on('pageerror', (error) => browserErrors.push(error.message))
+    await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
+    await expect(window.getByRole('heading', { name: '连接服务' })).toHaveCount(0)
+  } finally {
+    await rm(configHome, { recursive: true, force: true })
+  }
+})
+
 test('下次打开使用已保存的服务地址', async () => {
   const saved = JSON.parse(await readFile(join(profilePath, 'desktop-session.json'), 'utf8')) as {
     serverUrl?: string
@@ -393,6 +422,50 @@ test('下次打开使用已保存的服务地址', async () => {
   window.on('pageerror', (error) => browserErrors.push(error.message))
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   await expect(window.getByRole('heading', { name: '连接服务' })).toHaveCount(0)
+})
+
+test('点击自建猫咪只切换会话，不会和置顶位交换', async () => {
+  await updateServerWorkspace((workspace) => {
+    workspace.activeAgentId = 'cat-a'
+    workspace.agents = [
+      {
+        id: 'cat-a',
+        name: '阿花',
+        description: '第一只',
+        group: '未分组',
+        avatar: 'calico',
+        modelId: 'gpt-4o',
+        messages: [],
+        draft: '',
+        artifacts: [],
+        computerUrl: '',
+      },
+      {
+        id: 'cat-b',
+        name: '阿白',
+        description: '第二只',
+        group: '未分组',
+        avatar: 'bombay',
+        modelId: 'gpt-4o',
+        messages: [],
+        draft: '',
+        artifacts: [],
+        computerUrl: '',
+      },
+    ] as unknown as typeof workspace.agents
+  })
+  const pinned = window.locator('.pinned-area')
+  const list = window.locator('.agent-groups')
+  await expect(pinned.getByRole('button')).toHaveCount(0)
+  await list.getByRole('button', { name: '阿白', exact: true }).click()
+  await expect(window.getByRole('textbox', { name: '给阿白发消息' })).toBeVisible()
+  await expect(pinned.getByRole('button')).toHaveCount(0)
+  await expect(list.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
+  await expect(list.getByRole('button', { name: '阿白', exact: true })).toBeVisible()
+  await list.getByRole('button', { name: '阿花', exact: true }).click()
+  await expect(window.getByRole('textbox', { name: '给阿花发消息' })).toBeVisible()
+  await expect(pinned.getByRole('button')).toHaveCount(0)
+  await expect(list.getByRole('button', { name: '阿白', exact: true })).toBeVisible()
 })
 
 test('已初始化后要验证密码才能进入工作空间', async () => {

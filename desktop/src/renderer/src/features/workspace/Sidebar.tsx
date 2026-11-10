@@ -58,22 +58,19 @@ export function Sidebar({
   serverUrl: string
 }) {
   const serverHost = hostOf(serverUrl)
-  const assistant =
-    workspace.agents.find((agent) => agent.id === 'assistant') ??
-    workspace.agents.find((agent) => agent.id === workspace.activeAgentId) ??
-    workspace.agents[0]
-  if (!assistant) return null
+  // 只有标识为 assistant 的默认猫固定置顶。当前会话不能顶上去，否则点击会和置顶位交换。
+  const lead = workspace.agents.find((agent) => agent.id === 'assistant')
   const { hiddenIds, pinnedIds, unreadIds } = preferences
   const pinnedAgents = [
-    assistant,
+    ...(lead ? [lead] : []),
     ...pinnedIds.flatMap((id) => {
-      if (id === assistant.id || hiddenIds.includes(id)) return []
+      if (id === lead?.id || hiddenIds.includes(id)) return []
       const agent = workspace.agents.find((candidate) => candidate.id === id)
       return agent ? [agent] : []
     }),
   ]
   const visibleAgents = workspace.agents.filter(
-    (agent) => agent.id !== assistant.id && !hiddenIds.includes(agent.id),
+    (agent) => agent.id !== lead?.id && !hiddenIds.includes(agent.id),
   )
   const unpinnedAgents = visibleAgents.filter((agent) => !pinnedIds.includes(agent.id))
   const groups = [...new Set(unpinnedAgents.map((agent) => agent.group))]
@@ -127,7 +124,7 @@ export function Sidebar({
           <PinnedAgent
             key={agent.id}
             agent={agent}
-            isAssistant={agent.id === assistant.id}
+            isAssistant={agent.id === 'assistant'}
             isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
             isUnread={isUnread(agent)}
             isRenaming={agent.id === renamingAgentId}
