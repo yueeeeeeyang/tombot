@@ -49,8 +49,8 @@ func TestIsolatedBootstrapOfflineRecoveryAndMissingGlyphs(t *testing.T) {
 	if !p.Claim() {
 		t.Fatal("无法领取首次引导")
 	}
-	if err = p.RunClaimed(ctx, false); err == nil || p.Ready() || !strings.Contains(p.Snapshot().Error, "TOM_BROWSER_ARCHIVE") {
-		t.Fatal("断网未阻断引导或未给离线修复方案", p.Snapshot(), err)
+	if err = p.RunClaimed(ctx, false); err == nil || p.Ready() || !strings.Contains(p.Snapshot().Error, "官方离线") || strings.Contains(p.Snapshot().Error, "下载浏览器") {
+		t.Fatal("缺少离线包时未阻断引导，或仍提示去下载", p.Snapshot(), err)
 	}
 	cfg.BrowserArchive = archive
 	p = newEnvironment()

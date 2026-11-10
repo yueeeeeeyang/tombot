@@ -25,7 +25,7 @@
 | 发送并观看 agent | `POST /api/v1/messages/stream` |
 | 打开这只猫咪的电脑 | `POST /api/v1/computer`，画面在 `GET /api/v1/computer/view` |
 
-初始化、登录、工作空间和电脑页不要求主机引导完成。其余 `/api/v1` 业务仍要等引导。`TOM_DESKTOP_COMPANION=1` 跳过字体和浏览器安装，方便桌面在引导完成前工作。
+初始化、登录、工作空间和电脑页不要求主机引导完成。其余 `/api/v1` 业务仍要等引导。正式引导会安装字体，并用官方离线 zip 解压准备托管浏览器，这一步不从网络下载。
 
 流式开关在客户端：打开时按 `delta` / `process` 逐段画进原来的气泡；关闭时忽略增量，等 `done` 后一次显示。失败时保留已经生成的正文，并把用户消息标为 `failed`，界面上的重试按钮继续可用。
 
@@ -55,7 +55,7 @@
 
 - 猫咪面板的「记忆」只查看。记下、修改和忘掉由服务端 agent 在对话里调用原来的 `memory_search`、`memory_write`、`memory_delete`。读写的仍是同一批 `.tom/memory` 文件。删除不再等待审批。
 - 猫咪面板的「定时」没有新建和编辑表单。每个任务只有启用/暂停开关，右键菜单可以删除。创建、修改和删除由 agent 在对话里调用 `routine_list`、`routine_upsert`、`routine_delete`，这三个工具直接走原来的 `Routines.Commit`、`UpdateNow` 和 `Delete`，不等审批。到点仍由原来的调度器执行。
-- 电脑页增加「开始准备」。它调用原来的 `POST /api/v1/bootstrap/retry`，配套模式也可以在这时安装浏览器和字体并启动持久浏览器。端到端测试不会点击它，以免下载 Chrome。
+- 电脑页增加「开始准备」。它调用原来的 `POST /api/v1/bootstrap/retry`，这时会安装字体，并从官方离线 zip 解压托管浏览器。端到端测试不会点击它，因此不会在测试里安装浏览器。
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
 - 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
@@ -76,13 +76,16 @@
 ```sh
 cd server
 export PATH="/usr/local/go/bin:$PATH"   # 需要 Go 1.26.5 或与 go.mod 一致的工具链
-export TOM_DESKTOP_COMPANION=1
 export TOM_ADDR=127.0.0.1:8787
 export TOM_DATA_DIR="$PWD/data"
 export TOM_WORKSPACE_DIR="$PWD/workspace"
+mkdir -p browser
+# 将 Chrome for Testing 157.0.8103.38 的 chrome-<平台>.zip 放到 browser/ 后再启动。
 go build -o bin/tomd ./cmd/tomd
 ./bin/tomd
 ```
+
+托管浏览器默认读数据目录同级的 `browser/chrome-<平台>.zip`（上面就是 `server/browser/`）。引导会复制、校验并解压，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。版本、平台文件名和官方分发地址见 [server/README.md](README.md)。
 
 标准输出里的一次性初始化码只用于第一次初始化，不要转发。然后：
 
@@ -93,7 +96,7 @@ npm run setup
 TOMBOT_SERVER_URL=http://127.0.0.1:8787 npm run dev
 ```
 
-不设置 `TOM_DESKTOP_COMPANION` 时，`tomd` 会按原来的方式做主机引导，包括准备浏览器。
+`tomd` 会做完整主机引导，包括从上述离线 zip 准备浏览器。端到端测试自己的配套进程会设置 `TOM_DESKTOP_COMPANION=1` 跳过字体和浏览器安装，正式启动不要设置它。
 
 ## 检查
 

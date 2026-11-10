@@ -8,13 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
-	"time"
 )
 
 const browserVersion = "157.0.8103.38"
@@ -27,7 +24,7 @@ func (r release) archiveURL() string {
 	return "https://storage.googleapis.com/chrome-for-testing-public/" + browserVersion + "/" + r.Platform + "/chrome-" + r.Platform + ".zip"
 }
 
-// 固定资产由官方 HTTPS 下载后计算 SHA-256；升级必须同时更新版本与校验值。
+// 摘要在纳入版本时按官方 zip 计算；升级必须同时更新版本与校验值。运行时只接受这份离线包。
 var pinnedReleases = map[string]release{
 	"linux/amd64":  {"linux64", "8cdeb344e9b2cefe59f4aea8d1d93d5d93054c03cde217665c16fc1f62e72a66", "chrome-linux64/chrome"},
 	"linux/arm64":  {"linux-arm64", "5517510e61657ff43ee9ab804ecd1a499b3d5bd3caf72f097516bd6565ba5a17", "chrome-linux-arm64/chrome"},
@@ -133,8 +130,75 @@ func VerifyBrowser(dir string) error {
 	return nil
 }
 
-// EnsureBrowser 校验来源后在临时目录展开，再替换运行目录；离线资产也必须匹配固定摘要。
+// defaultBrowserArchive 与数据目录同级，避免把安装源放进会整目录备份的 runtime。
+// 发布时二进制常在 /usr/local/bin，数据在 /var/lib/tom/data，不能跟可执行文件放在一起。
+func defaultBrowserArchive(dataDir string, r release) string {
+	return filepath.Join(filepath.Dir(filepath.Clean(dataDir)), "browser", "chrome-"+r.Platform+".zip")
+}
+
+// resolveBrowserArchive 决定本次安装读哪一份本地 zip。override 对应 TOM_BROWSER_ARCHIVE。
+// 默认路径和覆盖都不存在时，只有运行时目录里已经校验通过的归档可以继续用，例如备份还原之后。
+func resolveBrowserArchive(dataDir, override string, r release, cachedValid bool) (string, error) {
+	if override != "" {
+		return override, nil
+	}
+	path := defaultBrowserArchive(dataDir, r)
+	info, err := os.Stat(path)
+	if err == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("官方离线浏览器包必须是普通文件：%s", path)
+		}
+		return path, nil
+	}
+	if !os.IsNotExist(err) {
+		return "", err
+	}
+	if cachedValid {
+		return "", nil
+	}
+	return "", fmt.Errorf("未找到官方离线浏览器包 %s。请将 Chrome for Testing %s 的 chrome-%s.zip 放到该路径，或设置 TOM_BROWSER_ARCHIVE 指向已放置的 zip", path, browserVersion, r.Platform)
+}
+
+func copyBrowserArchive(source, archive string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return fmt.Errorf("无法读取官方离线浏览器包 %s：%w", source, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("官方离线浏览器包必须是普通文件：%s", source)
+	}
+	if destInfo, statErr := os.Stat(archive); statErr == nil {
+		// 覆盖路径直接指着运行时归档时，先截断会毁掉唯一副本。
+		if os.SameFile(info, destInfo) {
+			return nil
+		}
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	file, err := os.Open(source)
+	if err != nil {
+		return fmt.Errorf("无法读取官方离线浏览器包 %s：%w", source, err)
+	}
+	dest, err := os.OpenFile(archive, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.Join(err, file.Close())
+	}
+	written, copyErr := io.Copy(dest, io.LimitReader(file, maxArchiveBytes+1))
+	if err = errors.Join(copyErr, dest.Close(), file.Close()); err != nil {
+		return err
+	}
+	if written > maxArchiveBytes {
+		return fmt.Errorf("浏览器归档超过大小上限")
+	}
+	return nil
+}
+
+// EnsureBrowser 用官方离线 zip 安装托管浏览器：复制到运行时目录、核对固定摘要，再在临时目录展开并替换。
+// offline 非空时改用该路径；否则读取数据目录同级的默认包。不会从网络下载。
 func EnsureBrowser(ctx context.Context, dir, offline string) (result error) {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r, err := currentRelease()
 	if err != nil {
 		return err
@@ -144,37 +208,22 @@ func EnsureBrowser(ctx context.Context, dir, offline string) (result error) {
 		return err
 	}
 	archive := filepath.Join(root, "chrome-"+browserVersion+"-"+r.Platform+".zip")
-	if offline != "" {
-		source, err := os.Open(offline)
-		if err != nil {
+	digest, hashErr := hashFile(archive)
+	source, err := resolveBrowserArchive(dir, offline, r, hashErr == nil && digest == r.Checksum)
+	if err != nil {
+		return err
+	}
+	if source != "" {
+		if err = copyBrowserArchive(source, archive); err != nil {
 			return err
-		}
-		dest, err := os.OpenFile(archive, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-		if err != nil {
-			return errors.Join(err, source.Close())
-		}
-		written, copyErr := io.Copy(dest, io.LimitReader(source, maxArchiveBytes+1))
-		err = errors.Join(copyErr, dest.Close(), source.Close())
-		if err != nil {
-			return err
-		}
-		if written > maxArchiveBytes {
-			return fmt.Errorf("浏览器归档超过大小上限")
-		}
-	} else {
-		digest, hashErr := hashFile(archive)
-		if hashErr != nil || digest != r.Checksum {
-			if err = download(ctx, r.archiveURL(), archive); err != nil {
-				return fmt.Errorf("下载浏览器失败；可设置 TOM_BROWSER_ARCHIVE 使用官方离线 zip：%w", err)
-			}
 		}
 	}
-	digest, err := hashFile(archive)
+	digest, err = hashFile(archive)
 	if err != nil {
 		return err
 	}
 	if digest != r.Checksum {
-		return fmt.Errorf("浏览器归档 SHA-256 不匹配，拒绝执行")
+		return fmt.Errorf("浏览器归档 SHA-256 不匹配，拒绝执行。请换用 Chrome for Testing %s 的官方离线 zip", browserVersion)
 	}
 	stage, err := os.MkdirTemp(root, ".browser-*")
 	if err != nil {
@@ -311,80 +360,4 @@ func extractZip(archive, root string) (manifest map[string]string, result error)
 		}
 	}
 	return manifest, nil
-}
-
-func download(ctx context.Context, address, path string) error {
-	client := &http.Client{Timeout: 5 * time.Minute}
-	var last error
-	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			timer := time.NewTimer(time.Second * time.Duration(1<<uint(attempt-1)))
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-		}
-		last = downloadAttempt(ctx, client, address, path)
-		if last == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-	}
-	return last
-}
-
-func downloadAttempt(ctx context.Context, client *http.Client, address, path string) error {
-	partial := path + ".part"
-	var offset int64
-	if stat, err := os.Stat(partial); err == nil {
-		offset = stat.Size()
-	} else if !os.IsNotExist(err) {
-		return err
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
-	if err != nil {
-		return err
-	}
-	if offset > 0 {
-		request.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return err
-	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK && response.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("资产服务返回状态 %d", response.StatusCode)
-	}
-	flags := os.O_CREATE | os.O_WRONLY
-	if response.StatusCode == http.StatusPartialContent {
-		prefix := "bytes " + strconv.FormatInt(offset, 10) + "-"
-		if !strings.HasPrefix(response.Header.Get("Content-Range"), prefix) {
-			return fmt.Errorf("下载续传区间无效")
-		}
-		flags |= os.O_APPEND
-	} else {
-		offset = 0
-		flags |= os.O_TRUNC
-	}
-	if offset > maxArchiveBytes {
-		return fmt.Errorf("下载文件超过大小上限")
-	}
-	file, err := os.OpenFile(partial, flags, 0600)
-	if err != nil {
-		return err
-	}
-	written, copyErr := io.Copy(file, io.LimitReader(response.Body, maxArchiveBytes-offset+1))
-	err = errors.Join(copyErr, file.Close())
-	if err != nil {
-		return err
-	}
-	if written+offset > maxArchiveBytes {
-		return fmt.Errorf("下载文件超过大小上限")
-	}
-	return os.Rename(partial, path)
 }

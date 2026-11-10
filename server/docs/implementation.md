@@ -157,7 +157,7 @@ type Step struct {
 2. `prepare_dirs` — `data/`、`workspace/`、`data/runtime/`；校验可写、可用空间 ≥ 2GB。
 3. `install_fonts` — 检测 `fc-list` 中是否含 CJK 字体；缺失则安装 `fonts-noto-cjk`（Debian/Ubuntu）、`google-noto-sans-cjk-fonts`（Fedora/RHEL）、`font-noto-cjk`（Alpine）、`noto-sans-cjk-fonts`（openSUSE）。Alpine 需同时装 `fontconfig`。
 4. `install_runtime_libs` — Chromium 运行库（`libnss3 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2`；RPM 名映射在 `packages.go` 的表里维护）。失败先尝试 `--no-install-recommends` 重跑一次，仍失败则给出完整命令。
-5. `ensure_browser` — 数据目录内已有 `chrome-linux64/` 且 sha256 匹配则跳过；否则从内置默认镜像下载 Chrome for Testing 固定版本（版本与 sha256 硬编码在 `browser.go` 的 `pinnedRelease`），支持 `TOM_BROWSER_ARCHIVE` 指向本地 tar 包离线安装。下载走 3 次重试 + 断点续传（`.part` 文件）。
+5. `ensure_browser` — 展开结果和清单已经校验通过则跳过。否则安装官方离线 zip：默认是数据目录同级的 `browser/chrome-<平台>.zip`，`TOM_BROWSER_ARCHIVE` 可改路径。复制到 `runtime/` 后核对 `browser.go` 里的固定版本与 SHA-256，再解压。不从网络下载。备份还原后的运行时归档若摘要匹配，直接复用，不必再提供外部文件。
 6. `selfcheck` — 见 3.3。
 
 非 Blocking 步骤（失败只降级能力，界面隐藏入口）：

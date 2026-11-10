@@ -3,8 +3,7 @@ package provision
 import (
 	"archive/zip"
 	"context"
-	"net/http"
-	"net/http/httptest"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,36 +77,141 @@ func TestOfflineChecksumRejectsModifiedArchive(t *testing.T) {
 		t.Fatalf("错误资产被接受: %v", err)
 	}
 }
-func TestDownloadResumeAndRangeValidation(t *testing.T) {
-	content := "download-content"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Range") != "bytes=5-" {
-			t.Error("未发送续传区间")
-		}
-		w.Header().Set("Content-Range", "bytes 5-15/16")
-		w.WriteHeader(206)
-		if _, err := w.Write([]byte(content[5:])); err != nil {
-			t.Error(err)
-		}
-	}))
-	defer server.Close()
-	path := filepath.Join(t.TempDir(), "archive")
-	if err := os.WriteFile(path+".part", []byte(content[:5]), 0600); err != nil {
+func TestResolveBrowserArchiveUsesSiblingZip(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	def := defaultBrowserArchive(data+"/", release)
+	want := filepath.Join(root, "browser", "chrome-"+release.Platform+".zip")
+	if def != want {
+		t.Fatalf("默认路径错误: %s", def)
+	}
+	if _, err = resolveBrowserArchive(data, "", release, false); err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "下载") || !strings.Contains(err.Error(), "TOM_BROWSER_ARCHIVE") {
+		t.Fatal("缺少默认离线包时的提示不正确", err)
+	}
+	if source, err := resolveBrowserArchive(data, "", release, true); err != nil || source != "" {
+		t.Fatal("已校验的运行时归档应直接复用", source, err)
+	}
+	if err = os.MkdirAll(filepath.Dir(def), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := downloadAttempt(context.Background(), server.Client(), server.URL, path); err != nil {
+	if err = os.Mkdir(def, 0700); err != nil {
 		t.Fatal(err)
 	}
-	actual, err := os.ReadFile(path)
-	if err != nil || string(actual) != content {
-		t.Fatal("续传内容错误")
+	if _, err = resolveBrowserArchive(data, "", release, false); err == nil || !strings.Contains(err.Error(), "普通文件") {
+		t.Fatal("目录被当成离线包", err)
+	}
+	if err = os.Remove(def); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(def, []byte("official"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := resolveBrowserArchive(data, "", release, true)
+	if err != nil || source != def {
+		t.Fatal("默认离线包应优先于已有缓存", source, err)
+	}
+	override := filepath.Join(root, "override.zip")
+	if err = os.WriteFile(override, []byte("override"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	source, err = resolveBrowserArchive(data, override, release, true)
+	if err != nil || source != override {
+		t.Fatal("覆盖路径未生效", source, err)
 	}
 }
-func TestDownloadHonorsCancellation(t *testing.T) {
+
+func TestEnsureBrowserInstallsDefaultZipWithoutDownload(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	def := defaultBrowserArchive(data, release)
+	if err = os.MkdirAll(filepath.Dir(def), 0700); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(archiveFixture(t, "chrome/file"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(def, payload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = EnsureBrowser(context.Background(), data, "")
+	if err == nil || !strings.Contains(err.Error(), "SHA-256") || strings.Contains(err.Error(), "下载") {
+		t.Fatal("未按默认离线包安装", err)
+	}
+	copied, err := os.ReadFile(filepath.Join(data, "runtime", "chrome-"+browserVersion+"-"+release.Platform+".zip"))
+	if err != nil || string(copied) != string(payload) {
+		t.Fatal("运行时目录没有默认离线包的副本", err)
+	}
+	override := filepath.Join(root, "override.zip")
+	overridePayload := []byte("override-archive")
+	if err = os.WriteFile(override, overridePayload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = EnsureBrowser(context.Background(), data, override); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatal("覆盖路径未参与校验", err)
+	}
+	copied, err = os.ReadFile(filepath.Join(data, "runtime", "chrome-"+browserVersion+"-"+release.Platform+".zip"))
+	if err != nil || string(copied) != string(overridePayload) {
+		t.Fatal("运行时目录仍是默认包，覆盖未生效", err)
+	}
+}
+
+func TestEnsureBrowserMissingZipDoesNotLeaveDownload(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	data := filepath.Join(t.TempDir(), "data")
+	archive := filepath.Join(data, "runtime", "chrome-"+browserVersion+"-"+release.Platform+".zip")
+	if err = os.MkdirAll(filepath.Dir(archive), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(archive, []byte("corrupt"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = EnsureBrowser(context.Background(), data, "")
+	if err == nil || strings.Contains(err.Error(), "下载") || !strings.Contains(err.Error(), defaultBrowserArchive(data, release)) {
+		t.Fatal("损坏缓存触发了下载或未指出默认路径", err)
+	}
+	partial, statErr := os.Stat(archive + ".part")
+	if statErr == nil {
+		t.Fatal("缺少离线包时写出了下载分片", partial)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := download(ctx, "http://127.0.0.1:1", filepath.Join(t.TempDir(), "archive")); err == nil {
-		t.Fatal("取消未生效")
+	if err = EnsureBrowser(ctx, data, ""); !errors.Is(err, context.Canceled) {
+		t.Fatal("取消未生效", err)
+	}
+}
+
+func TestEnsureBrowserDoesNotTruncateArchiveUsedAsSource(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	data := filepath.Join(t.TempDir(), "data")
+	archive := filepath.Join(data, "runtime", "chrome-"+browserVersion+"-"+release.Platform+".zip")
+	if err = os.MkdirAll(filepath.Dir(archive), 0700); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("keep-this-archive")
+	if err = os.WriteFile(archive, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err = EnsureBrowser(context.Background(), data, archive); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatal("把运行时归档当作来源时未做校验", err)
+	}
+	got, err := os.ReadFile(archive)
+	if err != nil || string(got) != string(content) {
+		t.Fatal("来源与目标是同一文件时内容被截断", err)
 	}
 }
 func TestRealBrowser(t *testing.T) {
