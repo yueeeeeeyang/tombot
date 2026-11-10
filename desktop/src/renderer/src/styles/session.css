@@ -107,9 +107,34 @@
 .session-step-row {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   color: var(--text);
   font-size: 13px;
+}
+
+.session-step-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+/* 缺口留在圆环上，单帧也能看出是加载指示；旋转只挂在这一枚，不带动其它步骤。 */
+.session-step-spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--text);
+  animation: session-step-spin 0.85s linear infinite;
+}
+
+@keyframes session-step-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .session-step-detail {
