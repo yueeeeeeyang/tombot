@@ -24,7 +24,7 @@ export function renameAgent(workspace: Workspace, id: string, name: string): Wor
 /** 将猫咪移至已有分组或未分组；默认猫咪保留独立入口，不接受无效目标。 */
 export function moveAgent(workspace: Workspace, id: string, group: string): Workspace {
   if (!workspace.agents.some((agent) => agent.id === id)) throw new Error('猫咪不存在')
-  if (id === 'assistant') throw new Error('默认猫咪不参与分组')
+  if (id === workspace.leadAgentId) throw new Error('默认猫咪不参与分组')
   if (!getAgentGroups(workspace).includes(group)) throw new Error('目标分组不存在')
   return {
     ...workspace,
@@ -36,7 +36,9 @@ export function moveAgent(workspace: Workspace, id: string, group: string): Work
 export function getAgentGroups(workspace: Workspace): string[] {
   return [
     ...new Set([
-      ...workspace.agents.filter((agent) => agent.id !== 'assistant').map((agent) => agent.group),
+      ...workspace.agents
+        .filter((agent) => agent.id !== workspace.leadAgentId)
+        .map((agent) => agent.group),
       '未分组',
     ]),
   ]
@@ -54,7 +56,7 @@ export function getNextGroupName(workspace: Workspace): string {
 /** 校验分组名后为指定猫咪创建分组并移入；分组名不得与已有分组重复。 */
 export function createGroupForAgent(workspace: Workspace, id: string, name: string): Workspace {
   if (!workspace.agents.some((agent) => agent.id === id)) throw new Error('猫咪不存在')
-  if (id === 'assistant') throw new Error('默认猫咪不参与分组')
+  if (id === workspace.leadAgentId) throw new Error('默认猫咪不参与分组')
   const result = groupNameSchema.safeParse(name)
   if (!result.success) throw new Error(result.error.issues[0]!.message)
   if (
@@ -91,7 +93,7 @@ export function renameAgentGroup(
   return {
     ...workspace,
     agents: workspace.agents.map((agent) =>
-      agent.id !== 'assistant' && agent.group === previousName
+      agent.id !== workspace.leadAgentId && agent.group === previousName
         ? { ...agent, group: result.data }
         : agent,
     ),
@@ -100,12 +102,13 @@ export function renameAgentGroup(
 
 /** 确认后删除猫咪及其本地内容；活动会话回到默认猫咪，默认猫咪不可删除。 */
 export function deleteAgent(workspace: Workspace, id: string): Workspace {
-  if (id === 'assistant') throw new Error('默认猫咪不能删除')
+  if (id === workspace.leadAgentId) throw new Error('默认猫咪不能删除')
   if (!workspace.agents.some((agent) => agent.id === id)) throw new Error('猫咪不存在')
   const agents = workspace.agents.filter((agent) => agent.id !== id)
   let activeAgentId = workspace.activeAgentId
   if (activeAgentId === id) {
-    activeAgentId = agents.find((agent) => agent.id === 'assistant')?.id ?? agents[0]?.id ?? ''
+    activeAgentId =
+      agents.find((agent) => agent.id === workspace.leadAgentId)?.id ?? agents[0]?.id ?? ''
   }
   return { ...workspace, activeAgentId, agents }
 }

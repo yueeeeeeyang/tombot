@@ -50,6 +50,7 @@ export function CatContextMenu({
   anchor,
   agent,
   groups,
+  isLead,
   isPinned,
   isUnread,
   onAction,
@@ -60,6 +61,7 @@ export function CatContextMenu({
   anchor: CatMenuAnchor
   agent: Agent
   groups: string[]
+  isLead: boolean
   isPinned: boolean
   isUnread: boolean
   onAction: (action: CatMenuAction) => void
@@ -72,7 +74,7 @@ export function CatContextMenu({
   const submenu = useRef<HTMLDivElement>(null)
   const [isMoveOpen, setMoveOpen] = useState(false)
   const [focusSubmenu, setFocusSubmenu] = useState(false)
-  const isDefault = agent.id === 'assistant'
+  const isDefault = isLead
 
   useLayoutEffect(() => {
     const element = menu.current!

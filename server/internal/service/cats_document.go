@@ -48,6 +48,7 @@ var reactionEmojis = map[string]struct{}{
 type Workspace struct {
 	Version       int     `json:"version"`
 	ActiveAgentID string  `json:"activeAgentId"`
+	LeadAgentID   string  `json:"leadAgentId"`
 	Agents        []Agent `json:"agents"`
 }
 
@@ -163,7 +164,7 @@ func validateWorkspace(workspace *Workspace) error {
 		return invalidWorkspace("助手数量无效")
 	}
 	if len(workspace.Agents) == 0 {
-		if workspace.ActiveAgentID != "" {
+		if workspace.ActiveAgentID != "" || workspace.LeadAgentID != "" {
 			return invalidWorkspace("工作空间的助手标识无效")
 		}
 		return nil
@@ -190,6 +191,13 @@ func validateWorkspace(workspace *Workspace) error {
 	}
 	if _, ok := ids[workspace.ActiveAgentID]; !ok {
 		return invalidWorkspace("工作空间的助手标识无效")
+	}
+	// 有猫咪就必须有主猫。客户端没带时用列表里的第一只，空工作空间招来的第一只会落在这里。
+	if workspace.LeadAgentID == "" {
+		workspace.LeadAgentID = workspace.Agents[0].ID
+	}
+	if _, ok := ids[workspace.LeadAgentID]; !ok {
+		return invalidWorkspace("置顶猫咪不存在")
 	}
 	return nil
 }
@@ -351,7 +359,7 @@ func SeedWorkspace() Workspace {
 		{"news", "资讯助手", "为你整理值得关注的新鲜事。", "未分组", "ragdoll"},
 		{"organizer", "整理助手", "少一点杂乱，多一点井井有条。", "未分组", "persian"},
 	}
-	workspace := Workspace{Version: 5, ActiveAgentID: "assistant", Agents: make([]Agent, 0, len(profiles))}
+	workspace := Workspace{Version: 5, ActiveAgentID: "assistant", LeadAgentID: "assistant", Agents: make([]Agent, 0, len(profiles))}
 	for _, item := range profiles {
 		workspace.Agents = append(workspace.Agents, Agent{
 			ID: item.id, Name: item.name, Description: item.description, Group: item.group,
