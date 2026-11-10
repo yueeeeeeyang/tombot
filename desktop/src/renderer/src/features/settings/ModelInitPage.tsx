@@ -21,7 +21,7 @@ export function ModelInitPage({
 }) {
   const [localDraft, setLocalDraft] = useState(draft)
   const [localKey, setLocalKey] = useState(apiKey)
-  const builtin = localDraft.provider === 'deepseek'
+  const builtin = localDraft.provider !== 'custom'
   const ready = builtin
     ? localKey.trim() !== '' && localDraft.modelName.trim() !== ''
     : localKey.trim() !== '' &&
@@ -37,9 +37,17 @@ export function ModelInitPage({
 
   return (
     <SessionFrame>
-      <section className="session-card session-card--wide" aria-label="配置默认模型">
+      <form
+        className="session-card session-card--wide"
+        aria-label="配置默认模型"
+        onSubmit={(event) => {
+          event.preventDefault()
+          continueNext()
+        }}
+      >
         <h1>配置默认模型</h1>
-        <p>先配置一个默认模型，助手才能回复。API Key 只保存在服务端，不会回显。</p>
+        <p>先配置一个默认模型，助手才能回复。</p>
+        <p>API Key 只保存在服务端，不会回显。</p>
         <ModelProviderFields
           draft={localDraft}
           onChange={setLocalDraft}
@@ -52,10 +60,10 @@ export function ModelInitPage({
             {error}
           </p>
         )}
-        <button type="button" className="primary-button" disabled={!ready} onClick={continueNext}>
+        <button className="primary-button" type="submit" disabled={!ready}>
           继续
         </button>
-      </section>
+      </form>
     </SessionFrame>
   )
 }

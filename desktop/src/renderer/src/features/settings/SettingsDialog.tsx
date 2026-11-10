@@ -2,13 +2,7 @@ import { Settings, SlidersHorizontal, X } from 'lucide-react'
 import { ModelProviderFields } from './ModelProviderFields'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../components/Select'
-import {
-  MODEL_PARAMETER_LIMITS,
-  validateSettingsDraft,
-  type SettingsDraft,
-  type SettingsSection,
-  type ThemePreference,
-} from './settings'
+import { type SettingsDraft, type SettingsSection, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {
   theme: ThemePreference
@@ -80,7 +74,7 @@ export function SettingsDialog({
           <p className="settings-preview-note">
             {section === 'general'
               ? '主题即时生效。语言选择会保存，界面仍使用简体中文'
-              : '模型设置会保存到服务。填写 API 地址和模型名称后即可发送'}
+              : '模型设置会保存到服务。密钥只留在服务端，不会回显。'}
           </p>
           {themeError && (
             <p className="form-error" role="alert">
@@ -138,100 +132,19 @@ function GeneralSettings({
   )
 }
 
-/** 渲染供应商与参数表单。密钥只提交给服务，不会留在本地存储。 */
+/** 渲染供应商表单。密钥只提交给服务，不会留在本地存储。 */
 function ModelSettings(
   props: Pick<
     SettingsDialogProps,
     'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'
   >,
 ) {
-  const { draft, onChange } = props
-  const errors = validateSettingsDraft(draft)
   return (
-    <>
-      <div className="settings-section">
-        <h3>模型供应商</h3>
-        <div className="settings-card">
-          <ModelProviderFields {...props} />
-        </div>
+    <div className="settings-section">
+      <h3>模型供应商</h3>
+      <div className="settings-card">
+        <ModelProviderFields {...props} />
       </div>
-      <div className="settings-section">
-        <h3>模型参数</h3>
-        <div className="settings-card">
-          <label className="setting-row">
-            <span className="setting-label">
-              温度<small>控制回复的随机性</small>
-            </span>
-            <span className="setting-range">
-              <input
-                type="range"
-                aria-label="温度"
-                {...MODEL_PARAMETER_LIMITS.temperature}
-                value={draft.temperature}
-                onChange={(event) =>
-                  onChange({ ...draft, temperature: Number(event.target.value) })
-                }
-              />
-              <output>{draft.temperature.toFixed(1)}</output>
-            </span>
-          </label>
-          <label className="setting-row">
-            <span className="setting-label">
-              Top P<small>控制候选词的采样范围</small>
-            </span>
-            <span className="setting-range">
-              <input
-                type="range"
-                aria-label="Top P"
-                {...MODEL_PARAMETER_LIMITS.topP}
-                value={draft.topP}
-                onChange={(event) => onChange({ ...draft, topP: Number(event.target.value) })}
-              />
-              <output>{draft.topP.toFixed(2)}</output>
-            </span>
-          </label>
-          <div className="setting-field">
-            <label className="setting-row" htmlFor="max-output-tokens">
-              <span className="setting-label">
-                最大输出长度<small>单次回复的长度上限</small>
-              </span>
-              <span className="setting-number">
-                <input
-                  id="max-output-tokens"
-                  type="number"
-                  step={1}
-                  {...MODEL_PARAMETER_LIMITS.maxOutputTokens}
-                  value={draft.maxOutputTokens}
-                  aria-invalid={Boolean(errors.maxOutputTokens)}
-                  aria-describedby={errors.maxOutputTokens ? 'max-output-error' : undefined}
-                  onChange={(event) => onChange({ ...draft, maxOutputTokens: event.target.value })}
-                />
-                <span>Token</span>
-              </span>
-            </label>
-            {errors.maxOutputTokens && (
-              <p className="setting-error" id="max-output-error" role="alert">
-                {errors.maxOutputTokens}
-              </p>
-            )}
-          </div>
-          <div className="setting-row">
-            <span className="setting-label" id="streaming-label">
-              流式响应<small>开启后逐段出现，关闭后在完成后一次出现</small>
-            </span>
-            <button
-              type="button"
-              className="setting-switch"
-              role="switch"
-              aria-labelledby="streaming-label"
-              aria-checked={draft.isStreaming}
-              onClick={() => onChange({ ...draft, isStreaming: !draft.isStreaming })}
-            >
-              <span />
-            </button>
-          </div>
-        </div>
-      </div>
-    </>
+    </div>
   )
 }

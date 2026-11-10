@@ -150,6 +150,7 @@ export interface DesktopBackend {
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>
   saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>
+  listBuiltinProviders?: () => Promise<Array<{ id: string; name: string }>>
   listProviderModels?: (
     providerId: string,
     apiKey: string,

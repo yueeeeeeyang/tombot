@@ -151,7 +151,7 @@ export function RecruitCatDialog({
 export function FirstCatPage(props: RecruitCatFormProps) {
   return (
     <SessionFrame>
-      <section className="session-card session-card--wide" aria-label="招聘第一只猫咪">
+      <section className="session-page" aria-label="招聘第一只猫咪">
         <RecruitCatForm {...props} heading="招聘第一只猫咪" />
       </section>
     </SessionFrame>

@@ -136,7 +136,6 @@ func TestModelFormDoesNotEchoAPIKey(t *testing.T) {
 	service := newService(t)
 	view, err := service.SaveModelForm(context.Background(), ModelForm{
 		Language: "zh-CN", Provider: "custom", BaseURL: "http://127.0.0.1:9/v1", ModelName: "desk-model",
-		Temperature: 0.7, TopP: 1, MaxOutputTokens: "128", IsStreaming: true,
 	}, "secret-key", false)
 	if err != nil || !view.HasAPIKey {
 		t.Fatal("保存密钥失败", err)

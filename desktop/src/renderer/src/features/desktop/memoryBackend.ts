@@ -224,6 +224,10 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve(this.trySettingsSync())
   }
 
+  listBuiltinProviders(): Promise<Array<{ id: string; name: string }>> {
+    return Promise.resolve([{ id: 'deepseek', name: 'DeepSeek' }])
+  }
+
   listProviderModels(
     _providerId: string,
     apiKey: string,

@@ -117,17 +117,13 @@ type Artifact struct {
 	Preview   string `json:"preview,omitempty"`
 }
 
-// ModelForm 是设置页里除主题以外的选项。密钥不在这份 JSON 里。
+// ModelForm 是设置页里除主题以外的选项。采样参数使用服务端默认值，密钥不在这份 JSON 里。
 type ModelForm struct {
-	Language        string  `json:"language"`
-	Provider        string  `json:"provider"`
-	ProviderName    string  `json:"providerName"`
-	BaseURL         string  `json:"baseUrl"`
-	ModelName       string  `json:"modelName"`
-	Temperature     float64 `json:"temperature"`
-	TopP            float64 `json:"topP"`
-	MaxOutputTokens string  `json:"maxOutputTokens"`
-	IsStreaming     bool    `json:"isStreaming"`
+	Language     string `json:"language"`
+	Provider     string `json:"provider"`
+	ProviderName string `json:"providerName"`
+	BaseURL      string `json:"baseUrl"`
+	ModelName    string `json:"modelName"`
 }
 
 // ModelFormView 是返回给界面的设置。hasApiKey 只说明是否保存过密钥。
@@ -370,7 +366,6 @@ func SeedWorkspace() Workspace {
 func DefaultModelForm() ModelForm {
 	return ModelForm{
 		Language: "system", Provider: "deepseek", ProviderName: "DeepSeek", BaseURL: "", ModelName: "",
-		Temperature: 0.7, TopP: 1, MaxOutputTokens: "4096", IsStreaming: true,
 	}
 }
 
@@ -411,28 +406,7 @@ func validateModelForm(settings *ModelForm) error {
 	if settings.BaseURL != "" && !validComputerURL(settings.BaseURL) {
 		return domain.NewError(400, "SETTINGS_INVALID", "请输入不含登录凭据的 HTTP 或 HTTPS 地址。")
 	}
-	if settings.Temperature < 0 || settings.Temperature > 2 || settings.TopP < 0 || settings.TopP > 1 {
-		return domain.NewError(400, "SETTINGS_INVALID", "模型参数超出范围")
-	}
-	tokens, ok := parseTokenLimit(settings.MaxOutputTokens)
-	if !ok || tokens < 1 || tokens > 131072 {
-		return domain.NewError(400, "SETTINGS_INVALID", "请输入 1～131072 之间的整数。")
-	}
 	return nil
-}
-
-func parseTokenLimit(value string) (int, bool) {
-	if value == "" || len(value) > 6 {
-		return 0, false
-	}
-	number := 0
-	for _, char := range value {
-		if char < '0' || char > '9' {
-			return 0, false
-		}
-		number = number*10 + int(char-'0')
-	}
-	return number, true
 }
 
 func modelReady(settings ModelForm) bool {

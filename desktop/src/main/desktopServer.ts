@@ -324,6 +324,12 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
+  ipcMain.handle('desktop:model-providers', () =>
+    handle(async () => {
+      const listed = (await call('GET', '/model-providers')) as Array<{ id: string; name: string }>
+      return listed
+    }),
+  )
   ipcMain.handle(
     'desktop:provider-models',
     (_event, input: { providerId: string; apiKey: string }) =>
@@ -517,10 +523,6 @@ export function registerDesktopIpc(): void {
           providerName: draft.providerName,
           baseUrl: draft.baseUrl,
           modelName: draft.modelName,
-          temperature: draft.temperature,
-          topP: draft.topP,
-          maxOutputTokens: draft.maxOutputTokens,
-          isStreaming: draft.isStreaming,
           ...(input.apiKey ? { apiKey: input.apiKey } : {}),
         })
       }),

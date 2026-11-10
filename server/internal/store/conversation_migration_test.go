@@ -74,7 +74,7 @@ func TestConversationMigrationRebuildsPublicIndexAndRollsBackInvalidHistory(t *t
 				}
 				return
 			}
-			if err != nil || version != 23 {
+			if err != nil || version != 24 {
 				t.Fatal(version, err)
 			}
 			var content, original string

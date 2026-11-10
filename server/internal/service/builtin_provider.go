@@ -4,8 +4,8 @@ import "io.yueyang/tom/internal/config"
 
 // BuiltinProvider 是服务端内置的模型供应商。接口地址不交给客户端填写。
 type BuiltinProvider struct {
-	ID   string
-	Name string
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // BuiltinProviders 返回当前内置供应商。后续增加供应商时只扩展这个列表。

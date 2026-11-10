@@ -119,6 +119,7 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:reaction', { messageId, emoji }),
       ensureAgent: (agentId: string) => invoke('desktop:ensure-agent', agentId),
       loadSettings: () => invoke('desktop:load-settings'),
+      listBuiltinProviders: () => invoke('desktop:model-providers'),
       listProviderModels: (providerId: string, apiKey: string) =>
         invoke('desktop:provider-models', { providerId, apiKey }),
       saveSettings: (draft: unknown, apiKey: string) =>

@@ -123,7 +123,6 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         )
         return
       }
-      if (!settingsDraft.isStreaming) return
       if (streamEvent.type === 'process') processLine = streamEvent.text
       else if (streamEvent.type === 'delta') reply += streamEvent.text
       const content = [processLine, reply].filter((part) => part !== '').join('\n')

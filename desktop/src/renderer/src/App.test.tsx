@@ -289,16 +289,8 @@ describe('客户端交互', () => {
     fireEvent.change(address, { target: { value: '无效地址' } })
     expect(screen.getByRole('alert')).toHaveTextContent('完整的 HTTP 或 HTTPS')
     fireEvent.change(address, { target: { value: 'https://models.example.test/api' } })
-    fireEvent.change(screen.getByRole('slider', { name: '温度' }), { target: { value: '1.2' } })
-    fireEvent.change(screen.getByRole('slider', { name: 'Top P' }), { target: { value: '0.85' } })
-    await user.click(screen.getByRole('switch', { name: /流式响应/ }))
-    expect(screen.getByRole('switch', { name: /流式响应/ })).not.toBeChecked()
-    const outputLength = screen.getByRole('spinbutton', { name: /最大输出长度/ })
-    for (const value of ['', '0', '131073', '2.5']) {
-      fireEvent.change(outputLength, { target: { value } })
-      expect(screen.getByRole('alert')).toHaveTextContent('之间的整数')
-    }
-    fireEvent.change(outputLength, { target: { value: '131072' } })
+    expect(screen.queryByRole('slider', { name: '温度' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch', { name: /流式响应/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '通用' }))
     await user.click(screen.getByRole('button', { name: '模型设置' }))
@@ -306,9 +298,10 @@ describe('客户端交互', () => {
       'aria-pressed',
       'true',
     )
-    expect(screen.getByRole('slider', { name: '温度' })).toHaveValue('1.2')
-    expect(screen.getByRole('slider', { name: 'Top P' })).toHaveValue('0.85')
-    expect(screen.getByRole('spinbutton', { name: /最大输出长度/ })).toHaveValue(131072)
+    expect(screen.getByLabelText('API 地址')).toHaveValue('https://models.example.test/api')
+    expect(screen.queryByRole('combobox', { name: '提供商' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '内置提供商' }))
+    expect(screen.getByRole('combobox', { name: '提供商' })).toHaveTextContent('DeepSeek')
     expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
   })
 

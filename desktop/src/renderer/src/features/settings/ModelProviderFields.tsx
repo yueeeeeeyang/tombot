@@ -1,6 +1,19 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { Select } from '../../components/Select'
 import { getBackend } from '../desktop/backend'
 import { validateSettingsDraft, type SettingsDraft } from './settings'
+
+interface BuiltinProvider {
+  id: string
+  name: string
+}
+
+interface DiscoveredModel {
+  id: string
+  name: string
+}
+
+const fallbackProviders: BuiltinProvider[] = [{ id: 'deepseek', name: 'DeepSeek' }]
 
 interface ModelProviderFieldsProps {
   draft: SettingsDraft
@@ -10,7 +23,7 @@ interface ModelProviderFieldsProps {
   onApiKeyChange: (apiKey: string) => void
 }
 
-/** 内置提供商只填密钥并由服务端拉模型；自定义提供商的地址和模型都手填。 */
+/** 内置提供商先选择再填密钥；名单来自服务端，后面增加供应商时这里不用改。自定义提供商全部手填。 */
 export function ModelProviderFields({
   draft,
   onChange,
@@ -18,17 +31,60 @@ export function ModelProviderFields({
   hasApiKey,
   onApiKeyChange,
 }: ModelProviderFieldsProps) {
-  const builtin = draft.provider === 'deepseek'
-  const errors = validateSettingsDraft(draft)
-  const [models, setModels] = useState<Array<{ id: string; name: string }>>([])
+  const [providers, setProviders] = useState<BuiltinProvider[]>(fallbackProviders)
+  const [models, setModels] = useState<DiscoveredModel[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const builtin = providers.some((provider) => provider.id === draft.provider)
+  const selected: BuiltinProvider = providers.find((provider) => provider.id === draft.provider) ??
+    providers[0] ?? { id: 'deepseek', name: 'DeepSeek' }
+  const errors = validateSettingsDraft(draft)
+  const modelOptions = models.map((model) => ({
+    value: model.id,
+    label: model.name || model.id,
+  }))
+  if (draft.modelName && !modelOptions.some((option) => option.value === draft.modelName)) {
+    modelOptions.unshift({ value: draft.modelName, label: draft.modelName })
+  }
+
+  useEffect(() => {
+    const load = getBackend().listBuiltinProviders
+    if (!load) return
+    let cancelled = false
+    void load()
+      .then((listed) => {
+        if (!cancelled && listed.length > 0) setProviders(listed)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  function chooseBuiltin(): void {
+    const next = providers.find((provider) => provider.id === draft.provider) ?? providers[0]
+    if (!next) return
+    onChange({ ...draft, provider: next.id, providerName: next.name, baseUrl: '' })
+  }
+
+  function chooseProvider(id: string): void {
+    const next = providers.find((provider) => provider.id === id)
+    if (!next || next.id === draft.provider) return
+    setModels([])
+    onChange({
+      ...draft,
+      provider: next.id,
+      providerName: next.name,
+      baseUrl: '',
+      modelName: '',
+    })
+  }
 
   async function pullModels(): Promise<void> {
     setBusy(true)
     setError('')
     try {
-      const listed = await getBackend().listProviderModels?.('deepseek', apiKey)
+      const listed = await getBackend().listProviderModels?.(selected.id, apiKey)
       const first = listed?.[0]
       if (!listed?.length || !first) {
         setError('没有拉到可用模型。')
@@ -48,28 +104,20 @@ export function ModelProviderFields({
 
   return (
     <>
-      <div className="setting-row provider-mode">
+      <div className="setting-row">
         <span>提供商类型</span>
-        <span className="provider-mode-actions">
-          <button
-            type="button"
-            className={builtin ? 'is-selected' : ''}
-            aria-pressed={builtin}
-            onClick={() =>
-              onChange({ ...draft, provider: 'deepseek', providerName: 'DeepSeek', baseUrl: '' })
-            }
-          >
+        <span className="provider-kind" role="group" aria-label="提供商类型">
+          <button type="button" aria-pressed={builtin} onClick={chooseBuiltin}>
             内置提供商
           </button>
           <button
             type="button"
-            className={!builtin ? 'is-selected' : ''}
             aria-pressed={!builtin}
             onClick={() =>
               onChange({
                 ...draft,
                 provider: 'custom',
-                providerName: draft.provider === 'deepseek' ? '' : draft.providerName,
+                providerName: draft.provider === 'custom' ? draft.providerName : '',
               })
             }
           >
@@ -79,6 +127,15 @@ export function ModelProviderFields({
       </div>
       {builtin ? (
         <>
+          <div className="setting-row">
+            <span>提供商</span>
+            <Select
+              label="提供商"
+              value={selected.id}
+              onChange={chooseProvider}
+              options={providers.map((provider) => ({ value: provider.id, label: provider.name }))}
+            />
+          </div>
           <p className="setting-note">接口地址已内置在服务端，只需填写 API Key 后拉取模型。</p>
           <label className="setting-row" htmlFor="model-api-key">
             <span>API 密钥</span>
@@ -94,30 +151,25 @@ export function ModelProviderFields({
           </label>
           <div className="setting-row">
             <span>模型列表</span>
-            <button type="button" disabled={busy} onClick={() => void pullModels()}>
+            <button
+              type="button"
+              className="provider-fetch"
+              disabled={busy}
+              onClick={() => void pullModels()}
+            >
               {busy ? '正在拉取' : '拉取模型'}
             </button>
           </div>
-          <label className="setting-row" htmlFor="builtin-model">
+          <div className="setting-row">
             <span>默认模型</span>
-            <select
-              id="builtin-model"
-              className="setting-text-input"
-              aria-label="默认模型"
+            <Select
+              label="默认模型"
               value={draft.modelName}
-              onChange={(event) => onChange({ ...draft, modelName: event.target.value })}
-            >
-              <option value="">请选择</option>
-              {models.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name || model.id}
-                </option>
-              ))}
-              {draft.modelName && !models.some((model) => model.id === draft.modelName) && (
-                <option value={draft.modelName}>{draft.modelName}</option>
-              )}
-            </select>
-          </label>
+              placeholder="请先拉取模型"
+              onChange={(modelName) => onChange({ ...draft, modelName })}
+              options={modelOptions}
+            />
+          </div>
           {error && (
             <p className="setting-error" role="alert">
               {error}
