@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { CAT_AVATAR_IDS, DEFAULT_AGENT_AVATARS } from '../avatars/presets'
+import { CAT_MODEL_IDS, DEFAULT_CAT_MODEL_ID, isCatModelId } from '../models/catalog'
 import { isReactionEmoji, REACTION_EMOJIS, type ReactionEmoji } from './reactions'
 
 export const MAX_MESSAGE_LENGTH = 10_000
@@ -48,7 +49,6 @@ function refineWorkspace(
 
 /**
  * 冻结的 v2 工作空间。历史迁移脚本直接用它校验 v1 升级结果，字段不能再改。
- * 当前读写走 currentWorkspaceSchema。
  */
 export const workspaceSchema = z
   .object({
@@ -91,7 +91,8 @@ const messageSchema = z
     }
   })
 
-export const agentSchema = z.object({
+/** 冻结的 v3 助手。v3 迁移脚本校验的就是这份结构，不能再加字段。 */
+const v3AgentSchema = z.object({
   id: z.string().min(1),
   name: z.string().trim().min(1, '请输入助手名称').max(24, '助手名称最多 24 个字'),
   description: z.string().trim().max(120, '助手介绍最多 120 个字'),
@@ -101,9 +102,31 @@ export const agentSchema = z.object({
   draft: z.string().max(MAX_MESSAGE_LENGTH),
 })
 
+/** 冻结的 v3 工作空间。v3 迁移脚本直接解析它，版本号和字段保持不动。 */
 export const currentWorkspaceSchema = z
   .object({
     version: z.literal(3),
+    activeAgentId: z.string().min(1),
+    agents: z.array(v3AgentSchema).min(1).max(MAX_AGENTS),
+  })
+  .superRefine(refineWorkspace)
+
+export type CurrentWorkspace = z.infer<typeof currentWorkspaceSchema>
+
+export const agentSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(1, '请输入助手名称').max(24, '助手名称最多 24 个字'),
+  description: z.string().trim().max(120, '助手介绍最多 120 个字'),
+  group: groupNameSchema,
+  avatar: z.enum(CAT_AVATAR_IDS, { error: '请选择预设猫咪头像' }),
+  modelId: z.enum(CAT_MODEL_IDS, { error: '请选择列表中的模型' }),
+  messages: z.array(messageSchema).max(MAX_MESSAGES),
+  draft: z.string().max(MAX_MESSAGE_LENGTH),
+})
+
+export const liveWorkspaceSchema = z
+  .object({
+    version: z.literal(4),
     activeAgentId: z.string().min(1),
     agents: z.array(agentSchema).min(1).max(MAX_AGENTS),
   })
@@ -111,12 +134,12 @@ export const currentWorkspaceSchema = z
 
 export type Agent = z.infer<typeof agentSchema>
 export type ChatMessage = z.infer<typeof messageSchema>
-export type CurrentWorkspace = z.infer<typeof currentWorkspaceSchema>
+export type LiveWorkspace = z.infer<typeof liveWorkspaceSchema>
 export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
 export type ModelTurn = { role: 'user' | 'assistant'; content: string }
 
 /** 创建首次使用的工作空间；预设助手没有伪造会话或模型回复。 */
-export function createWorkspace(): CurrentWorkspace {
+export function createWorkspace(): LiveWorkspace {
   const profiles: Array<[keyof typeof DEFAULT_AGENT_AVATARS, string, string, string]> = [
     ['assistant', '小黑', '你的日常搭档，陪你把想法变成现实。', '我的助手'],
     ['developer', '游戏程序', '代码、逻辑和实现，交给我一起想。', '游戏开发'],
@@ -128,7 +151,7 @@ export function createWorkspace(): CurrentWorkspace {
     ['organizer', '整理助手', '少一点杂乱，多一点井井有条。', '未分组'],
   ]
   return {
-    version: 3,
+    version: 4,
     activeAgentId: 'assistant',
     agents: profiles.map(([id, name, description, group]) => ({
       id,
@@ -136,6 +159,7 @@ export function createWorkspace(): CurrentWorkspace {
       description,
       group,
       avatar: DEFAULT_AGENT_AVATARS[id],
+      modelId: DEFAULT_CAT_MODEL_ID,
       messages: [],
       draft: '',
     })),
@@ -143,13 +167,15 @@ export function createWorkspace(): CurrentWorkspace {
 }
 
 /** 校验名称及容量后添加助手；冲突或输入无效时抛出中文错误。 */
-export function addAgent(
-  workspace: CurrentWorkspace,
-  profile: NewAgent,
-  id: string,
-): CurrentWorkspace {
+export function addAgent(workspace: LiveWorkspace, profile: NewAgent, id: string): LiveWorkspace {
   if (workspace.agents.length >= MAX_AGENTS) throw new Error(`最多创建 ${MAX_AGENTS} 个助手`)
-  const result = agentSchema.safeParse({ ...profile, id, messages: [], draft: '' })
+  const result = agentSchema.safeParse({
+    ...profile,
+    id,
+    modelId: DEFAULT_CAT_MODEL_ID,
+    messages: [],
+    draft: '',
+  })
   if (!result.success) throw new Error(result.error.issues[0]?.message ?? '请检查助手资料')
   const agent = result.data
   if (
@@ -163,12 +189,26 @@ export function addAgent(
   return { ...workspace, activeAgentId: id, agents: [...workspace.agents, agent] }
 }
 
+/** 更换指定猫咪的模型；未知模型或猫咪不存在时抛错，不改原工作空间。 */
+export function setAgentModel(
+  workspace: LiveWorkspace,
+  agentId: string,
+  modelId: string,
+): LiveWorkspace {
+  if (!isCatModelId(modelId)) throw new Error('请选择列表中的模型')
+  if (!workspace.agents.some((agent) => agent.id === agentId)) throw new Error('助手不存在')
+  return {
+    ...workspace,
+    agents: workspace.agents.map((agent) => (agent.id === agentId ? { ...agent, modelId } : agent)),
+  }
+}
+
 /** 更新指定助手的输入草稿，不改变其他会话；超长输入或助手不存在时抛出错误。 */
 export function updateDraft(
-  workspace: CurrentWorkspace,
+  workspace: LiveWorkspace,
   agentId: string,
   draft: string,
-): CurrentWorkspace {
+): LiveWorkspace {
   if (draft.length > MAX_MESSAGE_LENGTH) throw new Error(`消息最多 ${MAX_MESSAGE_LENGTH} 个字`)
   if (!workspace.agents.some((agent) => agent.id === agentId)) throw new Error('助手不存在')
   return {
@@ -187,12 +227,12 @@ export function replyExcerpt(content: string): string {
 
 /** 将输入存为明确的未发送消息；空白、容量、重复标识或失效回复都不会改变原工作空间。 */
 export function saveMessage(
-  workspace: CurrentWorkspace,
+  workspace: LiveWorkspace,
   agentId: string,
   id: string,
   createdAt: string,
   replyToId?: string,
-): CurrentWorkspace {
+): LiveWorkspace {
   const agent = workspace.agents.find((candidate) => candidate.id === agentId)
   if (!agent) throw new Error('助手不存在')
   const replyTarget = replyToId
@@ -232,11 +272,11 @@ export function saveMessage(
  * 再次点同一个表情会整颗取消，而不是累加；数量大于 1 只用于展示已经存在的计数。
  */
 export function toggleReaction(
-  workspace: CurrentWorkspace,
+  workspace: LiveWorkspace,
   agentId: string,
   messageId: string,
   emoji: string,
-): CurrentWorkspace {
+): LiveWorkspace {
   if (!isReactionEmoji(emoji)) throw new Error('不支持这个表情')
   const agent = workspace.agents.find((item) => item.id === agentId)
   if (!agent) throw new Error('助手不存在')

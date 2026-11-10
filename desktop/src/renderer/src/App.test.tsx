@@ -140,7 +140,11 @@ describe('客户端交互', () => {
       screen.getByRole('button', { name: '查看创作搭档资料' }).querySelector('.avatar'),
     ).toHaveAttribute('data-avatar', 'calico')
     await user.click(screen.getByRole('button', { name: '查看创作搭档资料' }))
-    expect(screen.getByRole('dialog')).toHaveTextContent('写作模型')
+    const catPanel = screen.getByRole('complementary', { name: '创作搭档' })
+    expect(catPanel).toHaveTextContent('创作搭档')
+    expect(within(catPanel).getByRole('combobox', { name: '模型' })).toHaveTextContent('GPT-4o')
+    await user.click(within(catPanel).getByRole('button', { name: '关闭猫咪面板' }))
+    expect(screen.queryByRole('complementary', { name: '创作搭档' })).not.toBeInTheDocument()
   })
 
   it('未配置模型时禁止招聘，可转到设置后返回且保留已填猫咪资料', async () => {
@@ -312,7 +316,6 @@ describe('客户端交互', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '给小黑发消息' }), {
       target: { value: '待导出内容' },
     })
-    await user.click(screen.getByRole('button', { name: '查看小黑资料' }))
     await user.click(screen.getByRole('button', { name: '导出草稿' }))
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('拒绝剪贴板访问'))
     await user.click(screen.getByRole('button', { name: '复制内容' }))

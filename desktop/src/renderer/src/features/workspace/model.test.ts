@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_CAT_MODEL_ID } from '../models/catalog'
 import {
   addAgent,
   createWorkspace,
@@ -10,10 +11,11 @@ import {
   REPLY_EXCERPT_LENGTH,
   saveMessage,
   searchAgents,
+  setAgentModel,
   toggleReaction,
   toModelTranscript,
   updateDraft,
-  currentWorkspaceSchema,
+  liveWorkspaceSchema,
   type ChatMessage,
   type NewAgent,
 } from './model'
@@ -29,8 +31,9 @@ const timestamp = '2026-11-09T07:00:00.000Z'
 describe('工作空间领域规则', () => {
   it('初始工作空间包含独立助手，没有伪造消息', () => {
     const workspace = createWorkspace()
-    expect(currentWorkspaceSchema.safeParse(workspace).success).toBe(true)
-    expect(workspace.version).toBe(3)
+    expect(liveWorkspaceSchema.safeParse(workspace).success).toBe(true)
+    expect(workspace.version).toBe(4)
+    expect(workspace.agents.every((agent) => agent.modelId === 'gpt-4o')).toBe(true)
     expect(workspace.agents).toHaveLength(8)
     expect(new Set(workspace.agents.map((agent) => agent.avatar)).size).toBe(8)
     expect(workspace.agents.every((agent) => agent.messages.length === 0)).toBe(true)
@@ -49,7 +52,7 @@ describe('工作空间领域规则', () => {
     for (const avatar of ['', 'black', 'https://example.test/avatar.png', 'workspace-cat']) {
       const workspace = createWorkspace()
       expect(
-        currentWorkspaceSchema.safeParse({
+        liveWorkspaceSchema.safeParse({
           ...workspace,
           agents: [{ ...workspace.agents[0], avatar }],
         }).success,
@@ -165,11 +168,11 @@ describe('工作空间领域规则', () => {
 
   it('拒绝损坏的活动助手引用和重复标识', () => {
     expect(
-      currentWorkspaceSchema.safeParse({ ...createWorkspace(), activeAgentId: 'missing' }).success,
+      liveWorkspaceSchema.safeParse({ ...createWorkspace(), activeAgentId: 'missing' }).success,
     ).toBe(false)
     const workspace = createWorkspace()
     workspace.agents[1]!.id = 'assistant'
-    expect(currentWorkspaceSchema.safeParse(workspace).success).toBe(false)
+    expect(liveWorkspaceSchema.safeParse(workspace).success).toBe(false)
   })
 
   it('保存回复时记下原文摘要，目标丢失或空白输入不会改动草稿', () => {
@@ -246,7 +249,7 @@ describe('工作空间领域规则', () => {
       ],
     }
     expect(
-      currentWorkspaceSchema.safeParse({
+      liveWorkspaceSchema.safeParse({
         ...workspace,
         agents: [invalid, ...workspace.agents.slice(1)],
       }).success,
@@ -317,5 +320,16 @@ describe('工作空间领域规则', () => {
     expect(markdown).toContain('> 上一句')
     expect(markdown).toContain('表情：👍×2 🎉')
     expect(markdown).toContain('已存内容')
+  })
+
+  it('可以更换猫咪模型，未知模型或猫咪不存在时不改原数据', () => {
+    const workspace = createWorkspace()
+    const changed = setAgentModel(workspace, 'assistant', 'claude-sonnet')
+    expect(changed.agents[0]?.modelId).toBe('claude-sonnet')
+    expect(workspace.agents[0]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
+    expect(changed.agents[1]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
+    expect(() => setAgentModel(workspace, 'assistant', '不存在的模型')).toThrow('列表中的模型')
+    expect(() => setAgentModel(workspace, 'missing', 'gpt-4o')).toThrow('助手不存在')
+    expect(workspace.agents[0]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
   })
 })

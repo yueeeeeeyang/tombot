@@ -7,6 +7,7 @@
 @import url('./styles/cat-menu.css');
 @import url('./styles/avatar.css');
 @import url('./styles/message-menu.css');
+@import url('./styles/cat-panel.css');
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
