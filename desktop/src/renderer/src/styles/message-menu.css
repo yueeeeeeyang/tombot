@@ -46,6 +46,7 @@
 .composer-reply button {
   outline-offset: 1px;
 }
+/* 默认只留图标，避免一排方框挡在气泡旁边；热区仍是 28 像素。 */
 .message-actions button {
   display: flex;
   align-items: center;
@@ -53,16 +54,21 @@
   width: 28px;
   height: 28px;
   padding: 0;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 8px;
-  background: var(--surface);
+  background: transparent;
   color: var(--muted);
-  box-shadow: 0 1px 3px #00000014;
+  box-shadow: none;
 }
-.message-actions button:hover,
+.message-actions button:hover {
+  background: var(--hover);
+  color: var(--text);
+}
 .message-actions button:focus-visible {
   background: var(--hover);
   color: var(--text);
+  outline: 2px solid var(--muted);
+  outline-offset: 1px;
 }
 .message-status {
   display: flex;
@@ -104,12 +110,16 @@
   outline: 2px solid var(--muted);
   outline-offset: 2px;
 }
-.reaction-pills {
+/* 胶囊跟在正文下面、留在气泡里；用当前文字色的淡底，深浅气泡里都能分开。 */
+.message-bubble .reaction-pills {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 4px;
+  margin-top: 6px;
   max-width: 100%;
+}
+.user-bubble .reaction-pills {
+  justify-content: flex-end;
 }
 .reaction-pill {
   display: inline-flex;
@@ -117,15 +127,17 @@
   gap: 4px;
   height: 22px;
   padding: 0 7px;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-secondary);
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  color: inherit;
   font-size: 12px;
 }
 .reaction-pill:hover,
 .reaction-pill:focus-visible {
-  background: var(--hover);
+  background: color-mix(in srgb, currentColor 28%, transparent);
+  outline: 2px solid currentColor;
+  outline-offset: 1px;
 }
 .time-separator {
   margin: 14px 0 8px;

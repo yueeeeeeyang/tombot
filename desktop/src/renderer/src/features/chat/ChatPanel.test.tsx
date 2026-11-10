@@ -145,6 +145,34 @@ describe('消息气泡操作', () => {
     expect(screen.getAllByRole('time')).toHaveLength(2)
   })
 
+  it('表情胶囊渲染在用户和助手气泡内部', () => {
+    renderPanel(
+      createAgent([
+        createMessage({
+          id: 'user',
+          content: '用户说',
+          reactions: [{ emoji: '👍', count: 2 }],
+        }),
+        createMessage({
+          id: 'bot',
+          role: 'assistant',
+          content: '助手说',
+          status: 'sent',
+          createdAt: '2026-11-10T08:10:00.000Z',
+          reactions: [{ emoji: '❤️', count: 1 }],
+        }),
+      ]),
+    )
+    const userPill = screen.getByRole('button', { name: '👍 2，点击取消' })
+    const assistantPill = screen.getByRole('button', { name: '❤️，点击取消' })
+    expect(userPill.closest('.user-bubble')).toContainElement(screen.getByText('用户说'))
+    expect(assistantPill.closest('.assistant-bubble')).toContainElement(screen.getByText('助手说'))
+    expect(userPill.compareDocumentPosition(screen.getByText('用户说'))).toBe(
+      Node.DOCUMENT_POSITION_PRECEDING,
+    )
+    expect(document.querySelector('.message-line > .reaction-pills')).toBeNull()
+  })
+
   it('右键菜单包含表情和原有操作，没有请求标识时不显示复制请求 ID', async () => {
     const user = userEvent.setup()
     const props = renderPanel()

@@ -88,31 +88,31 @@ export function ChatMessage({
               </button>
             )}
             <div className="message-text">{message.content}</div>
+            {message.reactions.length > 0 && (
+              <div className="reaction-pills">
+                {message.reactions.map((reaction) => (
+                  <button
+                    key={reaction.emoji}
+                    type="button"
+                    className="reaction-pill"
+                    aria-pressed="true"
+                    aria-label={
+                      reaction.count > 1
+                        ? `${reaction.emoji} ${reaction.count}，点击取消`
+                        : `${reaction.emoji}，点击取消`
+                    }
+                    onClick={() => onReact(message.id, reaction.emoji)}
+                  >
+                    <span aria-hidden="true">{reaction.emoji}</span>
+                    {reaction.count > 1 && <span>{reaction.count}</span>}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           {message.role === 'assistant' && status}
           {message.role === 'assistant' && actions}
         </div>
-        {message.reactions.length > 0 && (
-          <div className="reaction-pills">
-            {message.reactions.map((reaction) => (
-              <button
-                key={reaction.emoji}
-                type="button"
-                className="reaction-pill"
-                aria-pressed="true"
-                aria-label={
-                  reaction.count > 1
-                    ? `${reaction.emoji} ${reaction.count}，点击取消`
-                    : `${reaction.emoji}，点击取消`
-                }
-                onClick={() => onReact(message.id, reaction.emoji)}
-              >
-                <span aria-hidden="true">{reaction.emoji}</span>
-                {reaction.count > 1 && <span>{reaction.count}</span>}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   )
