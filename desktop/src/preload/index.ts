@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld(
     platform: process.platform,
     backend: Object.freeze({
       session: () => invoke('desktop:session'),
+      connect: (serverUrl: string) => invoke('desktop:connect', serverUrl),
       setup: (input: { setupCode: string; password: string }) => invoke('desktop:setup', input),
       login: (password: string) => invoke('desktop:login', password),
       loadWorkspace: () => invoke('desktop:load-workspace'),

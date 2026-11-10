@@ -55,7 +55,7 @@ import { SessionGate } from './features/session/SessionGate'
 type OpenDialog = 'create' | 'search' | 'settings' | 'group' | 'workspace' | null
 type Surface = { kind: 'agent' | 'group'; id: string }
 
-/** 未验证身份时只显示初始化或密码页，避免把预设工作空间当成已连接。 */
+/** 未连接或未验证时只显示连接、初始化或密码页，避免把预设工作空间当成已连接。 */
 export default function App() {
   const session = useSession()
   useTheme()
