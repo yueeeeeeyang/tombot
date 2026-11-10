@@ -2,6 +2,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
+import { DEFAULT_CAT_MODEL_ID } from '../models/catalog'
 import {
   saveMessage,
   toggleReaction,
@@ -30,6 +31,9 @@ function createAgent(messages: ChatMessage[] = [createMessage()], draft = ''): A
     description: '说明',
     group: '我的助手',
     avatar: 'bombay',
+    modelId: DEFAULT_CAT_MODEL_ID,
+    artifacts: [],
+    computerUrl: '',
     messages,
     draft,
   }
@@ -48,6 +52,7 @@ function renderPanel(
     onReact: vi.fn(),
     onRetry: vi.fn(),
     onDetails: vi.fn(),
+    isDetailsOpen: false,
     onNotice: vi.fn(),
     onError: vi.fn(),
     ...overrides,
@@ -65,14 +70,14 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onDraft={(draft) =>
         setCurrent(
           updateDraft(
-            { version: 3, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, agents: [current] },
             current.id,
             draft,
           ).agents[0]!,
         )
       }
       onSave={(replyToId) => {
-        const workspace = { version: 3 as const, activeAgentId: current.id, agents: [current] }
+        const workspace = { version: 5 as const, activeAgentId: current.id, agents: [current] }
         setCurrent(
           saveMessage(
             workspace,
@@ -93,7 +98,7 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onReact={(messageId, emoji) =>
         setCurrent(
           toggleReaction(
-            { version: 3, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, agents: [current] },
             current.id,
             messageId,
             emoji,
@@ -102,6 +107,7 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       }
       onRetry={vi.fn()}
       onDetails={vi.fn()}
+      isDetailsOpen={false}
       onNotice={vi.fn()}
       onError={vi.fn()}
     />
@@ -292,6 +298,7 @@ describe('消息气泡操作', () => {
         onReact={vi.fn()}
         onRetry={vi.fn()}
         onDetails={vi.fn()}
+        isDetailsOpen={false}
         onNotice={vi.fn()}
         onError={onError}
       />,

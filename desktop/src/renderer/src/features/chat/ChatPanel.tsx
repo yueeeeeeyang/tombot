@@ -15,6 +15,7 @@ type ChatPanelProps = {
   onReact: (messageId: string, emoji: string) => void
   onRetry: (messageId: string) => void
   onDetails: () => void
+  isDetailsOpen: boolean
   onNotice: (message: string) => void
   onError: (message: string) => void
 }
@@ -29,6 +30,7 @@ export function ChatPanel({
   onReact,
   onRetry,
   onDetails,
+  isDetailsOpen,
   onNotice,
   onError,
 }: ChatPanelProps) {
@@ -103,6 +105,7 @@ export function ChatPanel({
         <button
           className="chat-agent-pill"
           onClick={onDetails}
+          aria-expanded={isDetailsOpen}
           aria-label={`查看${agent.name}资料`}
         >
           <Avatar preset={agent.avatar} agentId={agent.id} size="small" />

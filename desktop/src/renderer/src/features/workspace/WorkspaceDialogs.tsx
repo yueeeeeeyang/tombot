@@ -8,7 +8,7 @@ import {
   exportConversation,
   type Agent,
   type NewAgent,
-  type CurrentWorkspace as Workspace,
+  type AppWorkspace as Workspace,
 } from './model'
 
 /** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
@@ -196,53 +196,6 @@ export function ShareDialog({ agent, onClose }: { agent: Agent; onClose: () => v
         </p>
       )}
       <p className="form-footnote">文件仅在本机导出。云端分享将在服务端接入后提供。</p>
-    </Dialog>
-  )
-}
-
-/** 查看助手的本地资料和连接状态。 */
-export function AgentDetailsDialog({
-  agent,
-  onClose,
-  onExport,
-  model,
-}: {
-  agent: Agent
-  onClose: () => void
-  onExport: () => void
-  model?: SelectOption
-}) {
-  return (
-    <Dialog title="你的搭档" onClose={onClose}>
-      <div className="settings-brand">
-        <Avatar
-          preset={agent.avatar}
-          agentId={agent.id}
-          size="large"
-          starred={agent.id === 'assistant'}
-        />
-        <h3>{agent.name}</h3>
-        <p>{agent.description || '期待和你一起开启下一个想法。'}</p>
-        <span>{agent.group}</span>
-      </div>
-      <div className="agent-model-summary">
-        <span>模型</span>
-        <strong>{model?.label ?? '未配置'}</strong>
-        <small>当前窗口预览，服务端接入后启用</small>
-      </div>
-      <div className="details-note">
-        <span className="connection-dot" />
-        <p>助手已添加到本地工作空间。连接服务端后，可以为它配置模型与工具。</p>
-      </div>
-      <div className="share-actions">
-        <button className="secondary-button" onClick={onExport}>
-          <Download size={15} />
-          导出草稿
-        </button>
-        <button className="primary-button" onClick={onClose}>
-          回到会话
-        </button>
-      </div>
     </Dialog>
   )
 }

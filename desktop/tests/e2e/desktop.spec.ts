@@ -134,8 +134,10 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   await createDialog.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   const input = window.getByRole('textbox', { name: '给写作搭档发消息' })
   await window.getByRole('button', { name: '查看写作搭档资料' }).click()
-  await expect(window.getByRole('dialog')).toContainText('项目模型')
+  const catPanel = window.getByRole('complementary', { name: '写作搭档' })
+  await expect(catPanel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('GPT-4o')
   await window.keyboard.press('Escape')
+  await expect(catPanel).toHaveCount(0)
   await input.fill('把想法变成一篇好故事。')
   await input.press('Enter')
   await expect(window.getByRole('log')).toContainText('把想法变成一篇好故事。')
@@ -1090,7 +1092,7 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
   await input.press('Enter')
   await expect(window.getByRole('log')).toContainText('原来的想法')
   await window.evaluate(() => {
-    const workspace = JSON.parse(localStorage.getItem('tombot.workspace.v3')!)
+    const workspace = JSON.parse(localStorage.getItem('tombot.workspace.v5')!)
     const agent = workspace.agents.find(
       (item: { id: string }) => item.id === workspace.activeAgentId,
     )
@@ -1106,7 +1108,7 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
       requestId: 'req-e2e',
       reactions: [{ emoji: '👍', count: 2 }],
     })
-    localStorage.setItem('tombot.workspace.v3', JSON.stringify(workspace))
+    localStorage.setItem('tombot.workspace.v5', JSON.stringify(workspace))
   })
   await window.reload()
   await expect(input).toBeVisible()
@@ -1206,4 +1208,98 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
   await window.reload()
   await expect(window.getByRole('button', { name: '❤️，点击取消' })).toBeVisible()
   await expect(quote).toBeVisible()
+})
+
+test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', async () => {
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const trigger = window.getByRole('button', { name: '查看小黑资料', exact: true })
+  await window.screenshot({ path: `${artifacts}/cat-panel-closed.png`, scale: 'css' })
+  await trigger.click()
+  const panel = window.getByRole('complementary', { name: '小黑' })
+  await expect(panel).toBeVisible()
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true')
+  await expect(panel.getByRole('tab', { name: '详情', selected: true })).toBeVisible()
+  await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('GPT-4o')
+  await window.screenshot({ path: `${artifacts}/cat-panel-details.png`, scale: 'css' })
+  await panel.getByRole('tab', { name: '资料库', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('资料库还是空的')
+  await window.screenshot({ path: `${artifacts}/cat-panel-library.png`, scale: 'css' })
+  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toContainText('未连接')
+  await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
+  await trigger.click()
+  await expect(panel).toHaveCount(0)
+  await trigger.click()
+  await panel.getByRole('combobox', { name: '模型', exact: true }).click()
+  await window.getByRole('option', { name: 'Claude Sonnet', exact: true }).click()
+  await window.reload()
+  await trigger.click()
+  await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveText(
+    'Claude Sonnet',
+  )
+  await window.keyboard.press('Escape')
+  await expect(panel).toHaveCount(0)
+})
+
+test('资料库按时间分组展示产物，电脑在没有地址时保持未连接', async () => {
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  await window.getByRole('textbox', { name: '给小黑发消息' }).fill('暂存')
+  await expect
+    .poll(() => window.evaluate(() => localStorage.getItem('tombot.workspace.v5')))
+    .not.toBeNull()
+  await window.evaluate(() => {
+    const key = 'tombot.workspace.v5'
+    const workspace = JSON.parse(localStorage.getItem(key)!)
+    const agent = workspace.agents.find((item: { id: string }) => item.id === 'assistant')
+    const now = new Date()
+    const day = now.getDay()
+    const mondayOffset = day === 0 ? 6 : day - 1
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - mondayOffset, 12)
+    const older = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 10, 11)
+    const preview =
+      'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
+    agent.artifacts = [
+      ...Array.from({ length: 6 }, (_, index) => ({
+        id: `today-${index}`,
+        title: `今天的文件 ${index + 1}`,
+        kind: index === 5 ? 'image' : 'file',
+        createdAt: new Date(now.getTime() - (6 - index) * 60_000).toISOString(),
+        ...(index === 5 ? { preview } : {}),
+      })),
+      {
+        id: 'week',
+        title: '本周录像',
+        kind: 'video',
+        createdAt: weekStart.toISOString(),
+      },
+      {
+        id: 'older',
+        title: '更早的草稿',
+        kind: 'file',
+        createdAt: older.toISOString(),
+      },
+    ]
+    agent.draft = ''
+    localStorage.setItem(key, JSON.stringify(workspace))
+  })
+  await window.reload()
+  await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
+  const panel = window.getByRole('complementary', { name: '小黑' })
+  await panel.getByRole('tab', { name: '资料库', exact: true }).click()
+  await expect(panel.getByRole('region', { name: '今天' })).toBeVisible()
+  await expect(panel.getByRole('region', { name: '更早' })).toBeVisible()
+  await expect(panel.getByText('今天的文件 6')).toBeVisible()
+  await expect(panel.getByText('今天的文件 1')).toHaveCount(0)
+  await expect(panel.locator('li img')).toBeVisible()
+  await window.screenshot({ path: `${artifacts}/cat-panel-library-grouped.png`, scale: 'css' })
+  await panel.getByRole('button', { name: '展开', exact: true }).click()
+  await expect(panel.getByText('今天的文件 1')).toBeVisible()
+  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
+  await panel.getByLabel('远端电脑地址').fill('javascript:alert(1)')
+  await panel.getByRole('button', { name: '保存地址', exact: true }).click()
+  await expect(panel.getByRole('alert')).toContainText('HTTP 或 HTTPS')
 })

@@ -4,7 +4,7 @@ import workspaceCat from '../../assets/cats/workspace-cat.png'
 import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
 import type { CatMenuAnchor } from './CatContextMenu'
-import type { Agent, CurrentWorkspace as Workspace } from './model'
+import type { Agent, AppWorkspace as Workspace } from './model'
 import type { SidebarPreferences } from './sidebarPreferences'
 
 /** 显示置顶区、分组助手与当前会话入口；右键菜单只上报目标与坐标。 */

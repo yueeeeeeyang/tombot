@@ -3,17 +3,19 @@ import { installAgentActivityEvents } from './features/avatars/activity'
 import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
+import { CatSidePanel } from './features/chat/CatSidePanel'
 import { ChatPanel } from './features/chat/ChatPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   addAgent,
   saveMessage,
+  setAgentComputerUrl,
+  setAgentModel,
   toggleReaction,
   updateDraft,
   type NewAgent,
 } from './features/workspace/model'
 import {
-  AgentDetailsDialog,
   RecruitCatDialog,
   ShareDialog,
   WorkspaceDialog,
@@ -42,9 +44,8 @@ import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
 import { createSettingsDraft, type SettingsSection } from './features/settings/settings'
 import { getModelOptions } from './features/models/modelOptions'
-import type { SelectOption } from './components/Select'
 
-type OpenDialog = 'create' | 'search' | 'settings' | 'share' | 'details' | 'workspace' | null
+type OpenDialog = 'create' | 'search' | 'settings' | 'share' | 'workspace' | null
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
 export default function App() {
@@ -60,7 +61,7 @@ export default function App() {
   const [editingGroupName, setEditingGroupName] = useState<string>()
   const [deletingAgentId, setDeletingAgentId] = useState<string>()
   const [settingsDraft, setSettingsDraft] = useState(createSettingsDraft)
-  const [agentModelPreviews, setAgentModelPreviews] = useState<Record<string, SelectOption>>({})
+  const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
   const [returnToRecruit, setReturnToRecruit] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
@@ -132,10 +133,9 @@ export default function App() {
     setSettingsSection(section)
     setOpenDialog('settings')
   }
-  function createAgent(profile: NewAgent, model: SelectOption): void {
+  function createAgent(profile: NewAgent): void {
     const id = crypto.randomUUID()
     commit((previous) => addAgent(previous, profile, id))
-    setAgentModelPreviews((previous) => ({ ...previous, [id]: model }))
     setRecruitProfile(undefined)
     setOpenDialog(null)
   }
@@ -255,11 +255,6 @@ export default function App() {
     } catch (failure) {
       preferenceError = (failure as Error).message
     }
-    setAgentModelPreviews((previous) => {
-      const next = { ...previous }
-      delete next[target.id]
-      return next
-    })
     setDeletingAgentId(undefined)
     setEditingGroupName(undefined)
     setNotice(preferenceError || `已删除「${target.name}」`)
@@ -296,57 +291,77 @@ export default function App() {
         onSettings={() => openSettings()}
       />
       <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} onResizing={setResizing} />
-      <ChatPanel
-        key={agent.id}
-        agent={agent}
-        isBlocked={isBlocked}
-        onDraft={(draft) =>
-          runAction(() => {
-            commit((previous) => updateDraft(previous, agent.id, draft))
-          })
-        }
-        onSave={(replyToId) => {
-          try {
-            commit((previous) =>
-              saveMessage(
-                previous,
-                agent.id,
-                crypto.randomUUID(),
-                new Date().toISOString(),
-                replyToId,
-              ),
-            )
-            return true
-          } catch (failure) {
-            setNotice((failure as Error).message)
-            return false
+      <div className="chat-stage">
+        <ChatPanel
+          key={agent.id}
+          agent={agent}
+          isBlocked={isBlocked}
+          isDetailsOpen={isCatPanelOpen}
+          onDraft={(draft) =>
+            runAction(() => {
+              commit((previous) => updateDraft(previous, agent.id, draft))
+            })
           }
-        }}
-        onDelete={(messageId) =>
-          runAction(() => {
-            commit((previous) => ({
-              ...previous,
-              agents: previous.agents.map((item) =>
-                item.id === agent.id
-                  ? {
-                      ...item,
-                      messages: item.messages.filter((message) => message.id !== messageId),
-                    }
-                  : item,
-              ),
-            }))
-          })
-        }
-        onReact={(messageId, emoji) =>
-          runAction(() => {
-            commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
-          })
-        }
-        onRetry={() => setNotice('服务端尚未接入，暂时无法重新发送。')}
-        onDetails={() => setOpenDialog('details')}
-        onNotice={setNotice}
-        onError={setNotice}
-      />
+          onSave={(replyToId) => {
+            try {
+              commit((previous) =>
+                saveMessage(
+                  previous,
+                  agent.id,
+                  crypto.randomUUID(),
+                  new Date().toISOString(),
+                  replyToId,
+                ),
+              )
+              return true
+            } catch (failure) {
+              setNotice((failure as Error).message)
+              return false
+            }
+          }}
+          onDelete={(messageId) =>
+            runAction(() => {
+              commit((previous) => ({
+                ...previous,
+                agents: previous.agents.map((item) =>
+                  item.id === agent.id
+                    ? {
+                        ...item,
+                        messages: item.messages.filter((message) => message.id !== messageId),
+                      }
+                    : item,
+                ),
+              }))
+            })
+          }
+          onReact={(messageId, emoji) =>
+            runAction(() => {
+              commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
+            })
+          }
+          onRetry={() => setNotice('服务端尚未接入，暂时无法重新发送。')}
+          onDetails={() => setCatPanelOpen((open) => !open)}
+          onNotice={setNotice}
+          onError={setNotice}
+        />
+        {isCatPanelOpen && (
+          <CatSidePanel
+            agent={agent}
+            onClose={() => setCatPanelOpen(false)}
+            onModelChange={(modelId) =>
+              runAction(() => {
+                commit((previous) => setAgentModel(previous, agent.id, modelId))
+              })
+            }
+            onComputerUrl={(computerUrl) =>
+              runAction(() => {
+                commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
+              })
+            }
+            onExport={() => setOpenDialog('share')}
+          />
+        )}
+      </div>
       {menuAnchor && menuAgent && (
         <CatContextMenu
           anchor={menuAnchor}
@@ -434,14 +449,6 @@ export default function App() {
         />
       )}
       {openDialog === 'share' && <ShareDialog agent={agent} onClose={() => setOpenDialog(null)} />}
-      {openDialog === 'details' && (
-        <AgentDetailsDialog
-          agent={agent}
-          model={agentModelPreviews[agent.id]}
-          onClose={() => setOpenDialog(null)}
-          onExport={() => setOpenDialog('share')}
-        />
-      )}
       {deletingAgent && (
         <DeleteCatDialog
           agent={deletingAgent}
