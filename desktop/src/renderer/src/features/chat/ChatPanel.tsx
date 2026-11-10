@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUp, AudioLines, ChevronDown, Mic, Plus, X, FileText } from 'lucide-react'
+import { ArrowUp, AudioLines, ChevronRight, Mic, Plus, X, FileText } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { MAX_MESSAGE_LENGTH, replyExcerpt, type Agent } from '../workspace/model'
 import { ChatMessage } from './ChatMessage'
@@ -110,7 +110,7 @@ export function ChatPanel({
         >
           <Avatar preset={agent.avatar} agentId={agent.id} size="small" />
           <span>{agent.name}</span>
-          <ChevronDown className="pill-chevron" size={12} />
+          <ChevronRight className="pill-chevron" size={14} aria-hidden="true" />
         </button>
       </header>
       <section className="messages-scroll" aria-label={`与${agent.name}的会话`}>

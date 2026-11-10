@@ -393,8 +393,15 @@ button:disabled {
   overflow: hidden;
 }
 .pill-chevron {
+  width: 14px;
   color: var(--subtle);
   flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+.chat-agent-pill:hover .pill-chevron,
+.chat-agent-pill:focus-visible .pill-chevron {
+  opacity: 1;
 }
 .chat-agent-pill:hover {
   background: var(--sidebar);

@@ -37,7 +37,9 @@ describe('猫咪侧栏面板', () => {
     expect(onModelChange).toHaveBeenCalledWith('claude-sonnet')
     await user.click(screen.getByRole('button', { name: '导出草稿' }))
     expect(onExport).toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '关闭猫咪面板' }))
+    const close = screen.getByRole('button', { name: '关闭猫咪面板' })
+    expect(close).toHaveClass('round-button')
+    await user.click(close)
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
