@@ -53,6 +53,9 @@ func definitions() map[string]definition {
 	for name, definition := range memoryDefinitions() {
 		registered[name] = definition
 	}
+	for name, definition := range routineDefinitions() {
+		registered[name] = definition
+	}
 	for name, definition := range conversationDefinitions() {
 		registered[name] = definition
 	}

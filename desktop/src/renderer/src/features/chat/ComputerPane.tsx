@@ -10,11 +10,13 @@ export function ComputerPane({
   computerUrl,
   onSave,
   onConnect,
+  onPrepare,
 }: {
   agentName: string
   computerUrl: string
   onSave: (computerUrl: string) => void
   onConnect?: () => void
+  onPrepare?: () => void
 }) {
   const [draft, setDraft] = useState(computerUrl)
   const [error, setError] = useState('')
@@ -35,6 +37,11 @@ export function ComputerPane({
     return (
       <form className="computer-pane" onSubmit={submit}>
         <p role="status">未连接</p>
+        {onPrepare && (
+          <button type="button" onClick={onPrepare}>
+            开始准备
+          </button>
+        )}
         {onConnect && (
           <button type="button" onClick={onConnect}>
             连接电脑

@@ -88,19 +88,20 @@ func (s *Server) Handler() http.Handler {
 		r.Post("/auth/setup", s.setup)
 		r.Post("/auth/login", s.login)
 		s.workspaceRoutes(r)
+		r.Group(func(open chi.Router) {
+			open.Use(s.authenticate)
+			// 记忆、例程、群组和文件不依赖浏览器安装，桌面在引导完成前也要能用。
+			s.memoryRoutes(open)
+			s.routineRoutes(open)
+			s.groupRoutes(open)
+			s.fileRoutes(open)
+		})
 		r.Group(func(r chi.Router) {
 			r.Use(s.ready)
 			r.Group(func(r chi.Router) {
 				r.Use(s.authenticate)
 				s.configurationRoutes(r)
-				s.usageRoutes(r)
-				r.Get("/audit", s.listAudit)
-				r.Get("/audit/export", s.exportAudit)
-				s.groupRoutes(r)
 				s.executionRoutes(r)
-				s.fileRoutes(r)
-				s.memoryRoutes(r)
-				s.routineRoutes(r)
 				s.terminalRoutes(r)
 				s.browserRoutes(r)
 				r.Get("/devices", s.devices)

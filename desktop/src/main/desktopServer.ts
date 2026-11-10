@@ -165,6 +165,39 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
+  ipcMain.handle('desktop:bootstrap', () => handle(() => call('POST', '/bootstrap/retry')))
+  ipcMain.handle('desktop:memories', (_event, agentId: string) =>
+    handle(() => call('GET', `/bots/${encodeURIComponent(agentId)}/memory`)),
+  )
+  ipcMain.handle('desktop:routines', (_event, agentId: string) =>
+    handle(async () => {
+      const rows = (await call('GET', `/routines?bot_id=${encodeURIComponent(agentId)}`)) as Array<{
+        id: string
+        name: string
+        cron: string
+        prompt: string
+        is_enabled: boolean
+        revision: number
+        target?: { bot_id?: string }
+      }>
+      return (Array.isArray(rows) ? rows : []).filter((item) => item.target?.bot_id === agentId)
+    }),
+  )
+  ipcMain.handle(
+    'desktop:routine-enabled',
+    (_event, input: { id: string; revision: number; enabled: boolean }) =>
+      handle(() =>
+        call('PATCH', `/routines/${encodeURIComponent(input.id)}`, {
+          revision: input.revision,
+          is_enabled: input.enabled,
+        }),
+      ),
+  )
+  ipcMain.handle('desktop:routine-delete', (_event, input: { id: string; revision: number }) =>
+    handle(() =>
+      call('DELETE', `/routines/${encodeURIComponent(input.id)}?revision=${input.revision}`),
+    ),
+  )
   ipcMain.handle('desktop:computer', (_event, agentId: string) =>
     handle(async () => {
       const result = (await call('POST', '/computer', { agentId })) as { url: string }

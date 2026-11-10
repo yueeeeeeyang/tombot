@@ -26,6 +26,7 @@ type Executor struct {
 	events        *bus.Bus
 	files         *workspace.Files
 	memories      *service.Memories
+	routines      *service.Routines
 	conversations *service.Conversations
 	approvals     *service.Approvals
 	secrets       *secret.Manager
@@ -41,7 +42,7 @@ func New(db *sql.DB, events *bus.Bus, files *workspace.Files, approvals *service
 	if terminals == nil || browser == nil || reviewer == nil || memories == nil {
 		return nil, errors.New("工具执行器缺少终端、浏览器、审查或记忆服务")
 	}
-	e := &Executor{db: db, events: events, files: files, memories: memories, approvals: approvals, secrets: secrets, terminals: terminals, browser: browser, reviewer: reviewer, shell: term.NewShell(), definitions: definitions(), schemas: map[string]json.RawMessage{}}
+	e := &Executor{db: db, events: events, files: files, memories: memories, routines: service.NewRoutines(db, events, nil), approvals: approvals, secrets: secrets, terminals: terminals, browser: browser, reviewer: reviewer, shell: term.NewShell(), definitions: definitions(), schemas: map[string]json.RawMessage{}}
 	e.conversations = service.NewConversations(db, events)
 	for name, definition := range e.definitions {
 		encoded, err := json.Marshal(map[string]any{"type": "object", "properties": definition.properties, "required": definition.required, "additionalProperties": false})
@@ -247,6 +248,8 @@ func (e *Executor) Execute(ctx context.Context, invocation domain.ToolInvocation
 		value, err = e.invokeMessaging(timeout, invocation, use.ID, input.input.(domain.BotMessageRequest))
 	} else if use.Name == "memory_search" || use.Name == "memory_write" || use.Name == "memory_delete" {
 		value, err = e.invokeMemory(timeout, bot.ID, use.Name, input.input.(memoryInput))
+	} else if use.Name == "routine_list" || use.Name == "routine_upsert" || use.Name == "routine_delete" {
+		value, err = e.invokeRoutine(timeout, bot.ID, use.Name, input.input.(routineInput))
 	} else if use.Name == "conversation_search" {
 		value, err = e.conversations.SearchTranscript(timeout, bot.ID, input.input.(domain.ConversationSearch))
 	} else if use.Name == "conversation_read" {

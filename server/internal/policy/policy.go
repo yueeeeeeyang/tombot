@@ -28,14 +28,8 @@ func ValidAction(class string) bool {
 
 // NeedsApproval 只对已通过白名单及规则判断的动作生效；未知风险必须拒绝而非默认低风险。
 func NeedsApproval(strictness, risk string) (bool, error) {
-	level := 0
 	switch risk {
-	case "low":
-		level = 1
-	case "medium":
-		level = 2
-	case "high":
-		level = 3
+	case "low", "medium", "high":
 	default:
 		return false, domain.NewError(500, "POLICY_INVALID", "Unknown action risk.")
 	}
@@ -43,9 +37,9 @@ func NeedsApproval(strictness, risk string) (bool, error) {
 	case "strict":
 		return true, nil
 	case "standard":
-		return level >= 2, nil
+		return risk != "low", nil
 	case "loose":
-		return level >= 3, nil
+		return risk == "high", nil
 	}
 	return false, domain.NewError(500, "POLICY_INVALID", "Unknown approval strictness.")
 }

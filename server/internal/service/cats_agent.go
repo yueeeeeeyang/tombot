@@ -132,7 +132,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	var botID, conversationID string
 	err := s.db.QueryRowContext(ctx, `SELECT bots.id, conversations.id FROM bots JOIN conversations ON conversations.bot_id=bots.id AND conversations.kind='direct' AND conversations.source!='routine' WHERE bots.id=? OR bots.desktop_id=?`, agent.ID, agent.ID).Scan(&botID, &conversationID)
 	if err == nil {
-		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}}
+		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}, Soul: Field[string]{Set: true, Value: desktopSoul}, ToolPolicy: Field[domain.ToolPolicy]{Set: true, Value: desktopToolPolicy()}}
 		if modelID != "" {
 			patch.ModelID = Field[*string]{Set: true, Value: &modelID}
 		}
@@ -147,11 +147,12 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	if modelID != "" {
 		modelPtr = &modelID
 	}
+	policy := desktopToolPolicy()
 	created, err := s.bots.Create(ctx, BotInput{
 		ID: agent.ID, Name: agent.Name, RoleTitle: role,
-		Soul:       "You are the user's cat assistant running on Tom. Think, use tools when they help, and stay inside your workspace. Reply in the user's language.",
+		Soul:       desktopSoul,
 		ModelID:    modelPtr,
-		ToolPolicy: &domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search"}, Approval: "loose"},
+		ToolPolicy: &policy,
 	}, "desktop")
 	if err != nil {
 		return "", err

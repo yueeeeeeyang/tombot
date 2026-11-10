@@ -471,7 +471,7 @@ func requireBotGroupIdle(ctx context.Context, tx *sql.Tx, id string) error {
 
 // ToolNames 返回设置页可配置的工具标识，客户端不再维护第二份白名单。
 func ToolNames() []string {
-	names := []string{"file_read", "file_write", "file_edit", "file_list", "file_glob", "file_search", "computer_shell", "terminal_session", "browser", "message_bot", "post_to_group", "group_members", "delegate_task", "memory_search", "memory_write", "memory_delete", "conversation_search", "conversation_read", "ask_user"}
+	names := []string{"file_read", "file_write", "file_edit", "file_list", "file_glob", "file_search", "computer_shell", "terminal_session", "browser", "message_bot", "post_to_group", "group_members", "delegate_task", "memory_search", "memory_write", "memory_delete", "conversation_search", "conversation_read", "ask_user", "routine_list", "routine_upsert", "routine_delete"}
 	sort.Strings(names)
 	return names
 }

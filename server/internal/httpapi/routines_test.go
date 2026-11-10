@@ -75,22 +75,14 @@ func TestRoutineHTTPApprovalManualBotGroupAndHistory(t *testing.T) {
 	for _, target := range []domain.RoutineTarget{{BotID: bot.ID}, {GroupID: group.ID}} {
 		input := service.RoutineInput{RoutineDefinition: domain.RoutineDefinition{Name: "例程整理", Cron: "0 8 * * *", Prompt: "整理资料", Target: target}}
 		response := request(t, handler, "POST", "/api/v1/routines", input, headers)
-		if response.Code != 202 {
+		if response.Code != 201 {
 			t.Fatal(response.Code, response.Body.String())
 		}
-		var proposal service.RoutineProposal
-		if err = json.Unmarshal(response.Body.Bytes(), &proposal); err != nil {
+		var created domain.Routine
+		if err = json.Unmarshal(response.Body.Bytes(), &created); err != nil {
 			t.Fatal(err)
 		}
-		response = request(t, handler, "GET", "/api/v1/routines/"+proposal.RoutineID, nil, headers)
-		if response.Code != 404 {
-			t.Fatal("未审批例程提前生效", response.Code)
-		}
-		response = request(t, handler, "POST", "/api/v1/approvals/"+proposal.ApprovalID+"/decision", service.ApprovalDecision{Decision: "approve"}, headers)
-		if response.Code != 200 {
-			t.Fatal(response.Code, response.Body.String())
-		}
-		routine, err := server.Routines.Get(ctx, proposal.RoutineID)
+		routine, err := server.Routines.Get(ctx, created.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,20 +120,15 @@ func TestRoutineHTTPApprovalManualBotGroupAndHistory(t *testing.T) {
 		if response.Code != 200 || !strings.Contains(response.Body.String(), `"turn_status":"succeeded"`) {
 			t.Fatal(response.Code, response.Body.String())
 		}
-		input.Revision = routine.Revision
-		input.Name = "修改后例程"
 		response = request(t, handler, "PATCH", "/api/v1/routines/"+routine.ID, map[string]any{"revision": routine.Revision, "name": "修改后例程"}, headers)
-		if response.Code != 202 {
+		if response.Code != 200 {
 			t.Fatal(response.Code, response.Body.String())
 		}
-		if err = json.Unmarshal(response.Body.Bytes(), &proposal); err != nil {
-			t.Fatal(err)
+		renamed, err := server.Routines.Get(ctx, routine.ID)
+		if err != nil || renamed.Name != "修改后例程" {
+			t.Fatal("例程没有直接改名", err, renamed.Name)
 		}
-		response = request(t, handler, "POST", "/api/v1/approvals/"+proposal.ApprovalID+"/decision", service.ApprovalDecision{Decision: "deny"}, headers)
-		if response.Code != 200 {
-			t.Fatal(response.Code)
-		}
-		response = request(t, handler, "DELETE", fmt.Sprintf("/api/v1/routines/%s?revision=%d", routine.ID, routine.Revision), nil, headers)
+		response = request(t, handler, "DELETE", fmt.Sprintf("/api/v1/routines/%s?revision=%d", renamed.ID, renamed.Revision), nil, headers)
 		if response.Code != 204 {
 			t.Fatal(response.Code, response.Body.String())
 		}

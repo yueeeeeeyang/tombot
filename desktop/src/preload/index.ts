@@ -37,6 +37,13 @@ contextBridge.exposeInMainWorld(
         })
       },
       openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
+      startBootstrap: () => invoke('desktop:bootstrap'),
+      listMemories: (agentId: string) => invoke('desktop:memories', agentId),
+      listRoutines: (agentId: string) => invoke('desktop:routines', agentId),
+      setRoutineEnabled: (id: string, revision: number, enabled: boolean) =>
+        invoke('desktop:routine-enabled', { id, revision, enabled }),
+      deleteRoutine: (id: string, revision: number) =>
+        invoke('desktop:routine-delete', { id, revision }),
       loadSettings: () => invoke('desktop:load-settings'),
       saveSettings: (draft: unknown, apiKey: string) =>
         invoke('desktop:save-settings', { draft, apiKey }),

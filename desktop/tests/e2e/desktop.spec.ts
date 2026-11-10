@@ -6,7 +6,7 @@ import {
   type Page,
 } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
-import { createServer } from 'node:http'
+import { createServer, type ServerResponse } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -1381,7 +1381,16 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   await window.screenshot({ path: `${artifacts}/cat-panel-library.png`, scale: 'css' })
   await panel.getByRole('tab', { name: '电脑', exact: true }).click()
   await expect(panel.getByRole('status')).toContainText('未连接')
+  await expect(panel.getByRole('button', { name: '开始准备', exact: true })).toBeVisible()
   await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
+  await panel.getByRole('tab', { name: '记忆', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('还没有记忆')
+  await expect(panel.getByRole('button', { name: '记下' })).toHaveCount(0)
+  await window.screenshot({ path: `${artifacts}/cat-memory.png`, scale: 'css' })
+  await panel.getByRole('tab', { name: '定时', exact: true }).click()
+  await expect(panel.getByRole('status')).toHaveText('还没有定时任务')
+  await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
+  await window.screenshot({ path: `${artifacts}/cat-routines.png`, scale: 'css' })
   await trigger.click()
   await expect(panel).toHaveCount(0)
   await trigger.click()
@@ -1465,6 +1474,50 @@ test('连接电脑使用这只猫咪的工作区，断开后回到未连接', as
   await window.screenshot({ path: `${artifacts}/computer-disconnected.png`, scale: 'css' })
 })
 
+test('对话里记住一件事并创建定时任务后，界面能看到、能暂停、能右键删除', async () => {
+  test.setTimeout(120_000)
+  const artifacts = '/opt/cursor/artifacts'
+  await mkdir(artifacts, { recursive: true })
+  const model = await startToolModel()
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model', true)
+    await window
+      .getByRole('textbox', { name: '给小黑发消息' })
+      .fill('请记住我每周三晨跑，并在当天早上9点提醒我')
+    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await expect
+      .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 45_000 })
+      .toContain('已经记下，并设好周三早上的提醒。')
+    await expect(window.getByRole('alert')).toHaveCount(0)
+    await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
+    const panel = window.getByRole('complementary', { name: '小黑' })
+    await panel.getByRole('tab', { name: '记忆', exact: true }).click()
+    await expect(panel.getByText('晨跑', { exact: true })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '记下' })).toHaveCount(0)
+    await expect(panel.getByRole('button', { name: '删除' })).toHaveCount(0)
+    await window.screenshot({ path: `${artifacts}/cat-memory.png`, scale: 'css' })
+    await panel.getByRole('tab', { name: '定时', exact: true }).click()
+    await expect(panel.getByText('晨跑提醒', { exact: true })).toBeVisible()
+    await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
+    await window.screenshot({ path: `${artifacts}/cat-routines.png`, scale: 'css' })
+    await panel.getByRole('switch', { name: '暂停晨跑提醒' }).click()
+    await expect(panel.getByRole('switch', { name: '启用晨跑提醒' })).toBeVisible()
+    await panel.getByText('晨跑提醒', { exact: true }).click({ button: 'right' })
+    await expect(window.getByRole('menuitem', { name: '删除' })).toBeVisible()
+    await window.screenshot({ path: `${artifacts}/cat-routine-menu.png`, scale: 'css' })
+    await window.getByRole('menuitem', { name: '删除' }).click()
+    await expect(panel.getByRole('status')).toHaveText('还没有定时任务')
+  } finally {
+    await model.close()
+  }
+})
+
 test('流式开关打开时回复逐段出现，关闭时完成后一次出现', async () => {
   test.setTimeout(120_000)
   const artifacts = '/opt/cursor/artifacts'
@@ -1539,6 +1592,83 @@ async function waitForModel(modelName: string, isStreaming: boolean): Promise<vo
       { timeout: 15_000 },
     )
     .toBe('ready')
+}
+
+/** 前两轮分别调用记忆和例程工具，第三轮返回最终回复。 */
+function startToolModel(): Promise<{ url: string; close: () => Promise<void> }> {
+  let step = 0
+  const server = createServer((request, response) => {
+    void (async () => {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          request.on('end', () => resolve())
+          request.on('error', reject)
+          request.resume()
+        })
+        if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
+          response.writeHead(404).end()
+          return
+        }
+        const current = step
+        step += 1
+        response.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+        })
+        if (current === 0) {
+          writeToolCall(
+            response,
+            'call-memory',
+            'memory_write',
+            '{"title":"晨跑","content":"用户每周三晨跑"}',
+          )
+        } else if (current === 1) {
+          writeToolCall(
+            response,
+            'call-routine',
+            'routine_upsert',
+            '{"name":"晨跑提醒","cron":"0 9 * * 3","prompt":"提醒用户周三晨跑"}',
+          )
+        } else {
+          response.write(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '已经记下，并设好周三早上的提醒。' }, finish_reason: 'stop' }] })}\n\n`,
+          )
+          response.write('data: [DONE]\n\n')
+          response.end()
+        }
+      } catch {
+        response.destroy()
+      }
+    })()
+  })
+  return new Promise((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型端口没有打开'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+          new Promise((done, fail) => {
+            server.close((error) => (error ? fail(error) : done()))
+          }),
+      })
+    })
+    server.on('error', reject)
+  })
+}
+
+function writeToolCall(response: ServerResponse, id: string, name: string, args: string): void {
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id, function: { name, arguments: args } }] } }] })}\n\n`,
+  )
+  response.write(
+    `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] })}\n\n`,
+  )
+  response.write('data: [DONE]\n\n')
+  response.end()
 }
 
 /** 按 OpenAI 兼容流式分两段返回。两段之间留出时间，方便截到进行中的回复。 */

@@ -197,7 +197,7 @@ export function ShareDialog({ agent, onClose }: { agent: Agent; onClose: () => v
           {error}
         </p>
       )}
-      <p className="form-footnote">文件仅在本机导出。云端分享将在服务端接入后提供。</p>
+      <p className="form-footnote">文件只导出到这台设备。</p>
     </Dialog>
   )
 }
