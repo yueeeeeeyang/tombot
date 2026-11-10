@@ -182,7 +182,16 @@ func locateBrowserArchive(dataDir, executable, override string, r release, cache
 	if cachedValid {
 		return "", nil
 	}
-	return "", fmt.Errorf("未找到官方离线浏览器包 %s。各平台包已随仓库放在 server/browser/chrome-%s.zip（Git LFS）。请在仓库根目录执行 git lfs pull；数据目录不在仓库内时，把该文件复制到上述路径。需要改位置时设置 TOM_BROWSER_ARCHIVE", candidates[0], r.Platform)
+	return "", fmt.Errorf("未找到官方离线浏览器包 %s。各平台包已随仓库放在 server/browser/chrome-%s.zip（Git LFS）。%s数据目录不在仓库内时，把该文件复制到上述路径。需要改位置时设置 TOM_BROWSER_ARCHIVE", candidates[0], r.Platform, gitLFSSetupHint())
+}
+
+// gitLFSSetupHint 先说明要安装 Git LFS。只写 git lfs pull 时，没装 git-lfs 的系统会报 lfs 不是 git 命令。
+func gitLFSSetupHint() string {
+	missing := ""
+	if _, err := exec.LookPath("git-lfs"); err != nil {
+		missing = "当前系统没有 git-lfs 命令。"
+	}
+	return missing + "需要先安装 Git LFS。macOS 执行 brew install git-lfs；Debian/Ubuntu 执行 sudo apt-get install git-lfs；Fedora 执行 sudo dnf install git-lfs。也可以按 https://git-lfs.com 安装。装好后在仓库根目录执行 git lfs install，再执行 git lfs pull。"
 }
 
 // resolveBrowserArchive 用当前可执行文件补齐仓库内的默认包位置。
@@ -200,17 +209,17 @@ func materializeBrowserArchive(ctx context.Context, path string) (string, error)
 	}
 	object, err := localLFSObject(ctx, path, oid)
 	if err != nil {
-		return "", fmt.Errorf("浏览器包 %s 是 Git LFS 指针，无法读取本地对象：%w", path, err)
+		return "", fmt.Errorf("浏览器包 %s 是 Git LFS 指针，无法读取本地对象：%w。%s", path, err, gitLFSSetupHint())
 	}
 	info, err := os.Stat(object)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("浏览器包 %s 仍是 Git LFS 指针，本地没有对象 %s。请在仓库根目录执行 git lfs pull", path, oid)
+			return "", fmt.Errorf("浏览器包 %s 仍是 Git LFS 指针，本地没有对象 %s。%s", path, oid, gitLFSSetupHint())
 		}
 		return "", err
 	}
 	if !info.Mode().IsRegular() || info.Size() != size {
-		return "", fmt.Errorf("浏览器包 %s 的 Git LFS 对象不完整", path)
+		return "", fmt.Errorf("浏览器包 %s 的 Git LFS 对象不完整。%s", path, gitLFSSetupHint())
 	}
 	return object, nil
 }
