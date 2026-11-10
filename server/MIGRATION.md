@@ -83,7 +83,7 @@ go build -o bin/tomd ./cmd/tomd
 ./bin/tomd
 ```
 
-四个平台的官方包已经在 `server/browser/`，由 Git LFS 提供。若克隆后只看到指针文本，先在仓库根目录执行 `git lfs install` 和 `git lfs pull`。默认会做完整主机引导，包括安装中文字体，并从这里复制、校验、解压浏览器，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。平台文件名见 [server/README.md](README.md)。引导完成前，桌面显示进度；完成后才进入工作空间。不要设置 `TOM_BOOTSTRAP_FIXTURE`，它只让端到端测试模拟进度，不是启动方式。
+四个平台的官方包已经在 `server/browser/`，由 Git LFS 提供。工作区里如果还是指针，引导会读本地 Git LFS 对象，不会把指针当 zip 校验。本地没有对象时，先在仓库根目录执行 `git lfs install` 和 `git lfs pull`。默认会做完整主机引导，包括安装中文字体，并从这里复制、校验、解压浏览器，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。平台文件名见 [server/README.md](README.md)。引导完成前，桌面显示进度；完成后才进入工作空间。不要设置 `TOM_BOOTSTRAP_FIXTURE`，它只让端到端测试模拟进度，不是启动方式。
 
 标准输出里的一次性初始化码只用于第一次初始化，不要转发。然后：
 

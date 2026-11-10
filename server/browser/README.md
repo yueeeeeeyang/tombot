@@ -9,7 +9,7 @@
 | darwin/amd64 | `chrome-mac-x64.zip` |
 | darwin/arm64 | `chrome-mac-arm64.zip` |
 
-每个包约 190–200MB，超过普通 Git 的单文件上限，因此用 Git LFS 存放。克隆后如果文件只有几行 `oid sha256:` 文本，在仓库根目录执行：
+每个包约 190–200MB，超过普通 Git 的单文件上限，因此用 Git LFS 存放。工作区里如果还是指针，引导会直接读 `.git/lfs/objects` 中的对应对象，不会把指针当 zip 校验。本地没有对象时，在仓库根目录执行：
 
 ```sh
 git lfs install

@@ -3,8 +3,12 @@ package provision
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -94,14 +98,101 @@ func TestShippedBrowserArchivesMatchPins(t *testing.T) {
 	}
 	for platform, release := range pinnedReleases {
 		path := filepath.Join(dir, "chrome-"+release.Platform+".zip")
-		digest, err := hashFile(path)
+		source, err := materializeBrowserArchive(context.Background(), path)
 		if err != nil {
-			t.Fatalf("%s 缺少随仓库提供的离线包 %s: %v", platform, path, err)
+			t.Fatalf("%s 不能把指针当成 zip: %v", platform, err)
+		}
+		digest, err := hashFile(source)
+		if err != nil {
+			t.Fatalf("%s 缺少随仓库提供的离线包 %s: %v", platform, source, err)
 		}
 		if digest != release.Checksum {
-			t.Fatalf("%s 摘要不符，得到 %s", path, digest)
+			t.Fatalf("%s 摘要不符，得到 %s", source, digest)
 		}
 	}
+}
+
+func TestEnsureBrowserInstallsShippedArchive(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	pointer := filepath.Join(shippedBrowserDir(t), "chrome-"+release.Platform+".zip")
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	dir := t.TempDir()
+	if err = EnsureBrowser(ctx, dir, pointer); err != nil {
+		t.Fatal(err)
+	}
+	if err = VerifyBrowser(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureBrowserReadsLFSObjectInsteadOfPointer(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	repo := t.TempDir()
+	if err = exec.Command("git", "init", repo).Run(); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("lfs-object-not-a-pointer")
+	pointer := filepath.Join(repo, "browser", "chrome-"+release.Platform+".zip")
+	if err = writeLFSFixture(repo, pointer, content); err != nil {
+		t.Fatal(err)
+	}
+	data := filepath.Join(repo, "data")
+	err = EnsureBrowser(context.Background(), data, "")
+	if err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatal("展开后的对象仍应接受摘要校验", err)
+	}
+	archive := filepath.Join(data, "runtime", "chrome-"+browserVersion+"-"+release.Platform+".zip")
+	got, err := os.ReadFile(archive)
+	if err != nil || string(got) != string(content) {
+		t.Fatal("安装用了指针文本，没有读本地 LFS 对象", err)
+	}
+}
+
+func TestLFSPointerWithoutObjectDoesNotFailChecksum(t *testing.T) {
+	release, err := currentRelease()
+	if err != nil {
+		t.Skip("当前平台无固定浏览器资产")
+	}
+	repo := t.TempDir()
+	if err = exec.Command("git", "init", repo).Run(); err != nil {
+		t.Fatal(err)
+	}
+	pointer := filepath.Join(repo, "browser", "chrome-"+release.Platform+".zip")
+	if err = os.MkdirAll(filepath.Dir(pointer), 0700); err != nil {
+		t.Fatal(err)
+	}
+	text := "version https://git-lfs.github.com/spec/v1\noid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 4\n"
+	if err = os.WriteFile(pointer, []byte(text), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err = EnsureBrowser(context.Background(), filepath.Join(repo, "data"), "")
+	if err == nil || !strings.Contains(err.Error(), "指针") || strings.Contains(err.Error(), "SHA-256") {
+		t.Fatal("缺少对象时被当成摘要错误", err)
+	}
+}
+
+func writeLFSFixture(repo, pointer string, content []byte) error {
+	sum := sha256.Sum256(content)
+	oid := hex.EncodeToString(sum[:])
+	object := filepath.Join(repo, ".git", "lfs", "objects", oid[:2], oid[2:4], oid)
+	if err := os.MkdirAll(filepath.Dir(object), 0700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(object, content, 0600); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(pointer), 0700); err != nil {
+		return err
+	}
+	text := fmt.Sprintf("version https://git-lfs.github.com/spec/v1\noid sha256:%s\nsize %d\n", oid, len(content))
+	return os.WriteFile(pointer, []byte(text), 0600)
 }
 
 func TestLocateBrowserArchiveUsesShippedRepoCopy(t *testing.T) {

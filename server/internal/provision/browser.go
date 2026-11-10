@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -189,6 +191,79 @@ func resolveBrowserArchive(dataDir, override string, r release, cachedValid bool
 	return locateBrowserArchive(dataDir, executable, override, r, cachedValid)
 }
 
+// materializeBrowserArchive 在文件是 Git LFS 指针时改为读取本地对象。
+// 对象就在仓库的 .git/lfs/objects 里，不访问浏览器分发地址。
+func materializeBrowserArchive(ctx context.Context, path string) (string, error) {
+	oid, size, ok := parseLFSPointer(path)
+	if !ok {
+		return path, nil
+	}
+	object, err := localLFSObject(ctx, path, oid)
+	if err != nil {
+		return "", fmt.Errorf("浏览器包 %s 是 Git LFS 指针，无法读取本地对象：%w", path, err)
+	}
+	info, err := os.Stat(object)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("浏览器包 %s 仍是 Git LFS 指针，本地没有对象 %s。请在仓库根目录执行 git lfs pull", path, oid)
+		}
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Size() != size {
+		return "", fmt.Errorf("浏览器包 %s 的 Git LFS 对象不完整", path)
+	}
+	return object, nil
+}
+
+func parseLFSPointer(path string) (oid string, size int64, ok bool) {
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 1024 {
+		return "", 0, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", 0, false
+	}
+	if !strings.HasPrefix(string(raw), "version https://git-lfs.github.com/spec/v1\n") && !strings.HasPrefix(string(raw), "version https://git-lfs.github.com/spec/v1\r\n") {
+		return "", 0, false
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if value, found := strings.CutPrefix(line, "oid sha256:"); found {
+			oid = value
+		}
+		if value, found := strings.CutPrefix(line, "size "); found && size == 0 {
+			size, err = strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return "", 0, false
+			}
+		}
+	}
+	if len(oid) != 64 || size <= 0 {
+		return "", 0, false
+	}
+	for _, char := range oid {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return "", 0, false
+		}
+	}
+	return oid, size, true
+}
+
+func localLFSObject(ctx context.Context, file, oid string) (string, error) {
+	command := exec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-path", "lfs/objects")
+	command.Dir = filepath.Dir(file)
+	output, err := command.Output()
+	if err != nil {
+		return "", err
+	}
+	base := strings.TrimSpace(string(output))
+	if base == "" || len(oid) < 4 {
+		return "", fmt.Errorf("无法定位 LFS 对象目录")
+	}
+	return filepath.Join(base, oid[:2], oid[2:4], oid), nil
+}
+
 func copyBrowserArchive(source, archive string) error {
 	info, err := os.Stat(source)
 	if err != nil {
@@ -244,6 +319,11 @@ func EnsureBrowser(ctx context.Context, dir, offline string) (result error) {
 		return err
 	}
 	if source != "" {
+		// 检出时若跳过 smudge，server/browser 里只剩一百多字节的指针。直接校验它会误报摘要不符。
+		source, err = materializeBrowserArchive(ctx, source)
+		if err != nil {
+			return err
+		}
 		if err = copyBrowserArchive(source, archive); err != nil {
 			return err
 		}
