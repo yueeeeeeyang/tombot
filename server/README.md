@@ -36,7 +36,7 @@ make build
 | darwin/amd64 | `server/browser/chrome-mac-x64.zip` |
 | darwin/arm64 | `server/browser/chrome-mac-arm64.zip` |
 
-克隆后如果这些文件只有几行指针文本，在仓库根目录执行 `git lfs install` 和 `git lfs pull`。在 `server/` 下执行 `./bin/tomd` 时，引导会找到上一级 `server/browser/` 里的当前平台包；`TOM_DATA_DIR` 设为 `server/data` 时，这个目录正好是数据目录的同级 `browser/`。引导会复制、核对 SHA-256 并解压，不会跳过安装。把服务装到仓库以外时，从 `server/browser/` 复制当前平台的包到数据目录同级的 `browser/`，不必再访问官方分发地址。`TOM_BROWSER_ARCHIVE` 只用于改路径。摘要不匹配或文件缺失时，引导失败并写出应放置的路径。
+克隆后如果这些文件只有几行指针文本，引导会读取仓库里已有的 Git LFS 对象，不会把指针当成 zip 做摘要校验，也不会因此去浏览器分发地址下载。本地还没有对象时，先在仓库根目录执行 `git lfs install` 和 `git lfs pull`。在 `server/` 下执行 `./bin/tomd` 时，引导会找到上一级 `server/browser/` 里的当前平台包；`TOM_DATA_DIR` 设为 `server/data` 时，这个目录正好是数据目录的同级 `browser/`。引导会复制、核对 SHA-256 并解压，不会跳过安装。把服务装到仓库以外时，从 `server/browser/` 复制当前平台的包到数据目录同级的 `browser/`，不必再访问官方分发地址。`TOM_BROWSER_ARCHIVE` 只用于改路径。摘要不匹配或文件缺失时，引导失败并写出应放置的路径。
 
 引导失败时，在连接页选择“重新体检与修复”。已登录设备也可从“已授权设备 → 服务器环境与修复”查看进度。“重置引导记录”会清除环境检测结果并重新执行全部检查，保留业务数据。环境修复使用 `POST /api/v1/bootstrap/repair`，重置使用 `POST /api/v1/bootstrap/reset`，二者在后台执行。接受后返回 202，同时发起的维护返回 409。首次初始化前需提供初始化码，之后需提供有效设备授权。`GET /api/v1/bootstrap/status` 返回的 `cursor` 可直接用于订阅 `/api/v1/bootstrap/events?after=…`。引导检查期间，新业务请求返回 503，例程调度在每轮领取前等待就绪。已经接受的任务继续执行，环境维护宜安排在活动任务结束后。
 
