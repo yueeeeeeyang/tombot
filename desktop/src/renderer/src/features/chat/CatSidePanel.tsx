@@ -28,6 +28,7 @@ const TAB_LABELS: Record<PanelTab, string> = {
 /** 会话右侧的猫咪面板；Esc 关闭，但下拉菜单或弹窗先处理自己的 Esc。 */
 export function CatSidePanel({
   agent,
+  isLead = false,
   onClose,
   onModelChange,
   onComputerUrl,
@@ -36,6 +37,7 @@ export function CatSidePanel({
   now,
 }: {
   agent: Agent
+  isLead?: boolean
   onClose: () => void
   onModelChange: (modelId: string) => void
   onComputerUrl: (computerUrl: string) => void
@@ -79,12 +81,7 @@ export function CatSidePanel({
         <X size={18} strokeWidth={1.7} />
       </button>
       <div className="cat-panel-hero">
-        <Avatar
-          preset={agent.avatar}
-          agentId={agent.id}
-          size="large"
-          starred={agent.id === 'assistant'}
-        />
+        <Avatar preset={agent.avatar} agentId={agent.id} size="large" starred={isLead} />
         <h2>{agent.name}</h2>
       </div>
       <div className="cat-panel-tabs" role="tablist" aria-label="猫咪栏目">

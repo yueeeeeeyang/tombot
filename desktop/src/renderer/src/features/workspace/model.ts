@@ -203,7 +203,11 @@ export const agentSchema = z
   })
 
 function refineAppWorkspace(
-  workspace: { activeAgentId: string; agents: { id: string; messages: readonly unknown[] }[] },
+  workspace: {
+    activeAgentId: string
+    leadAgentId: string
+    agents: { id: string; messages: readonly unknown[] }[]
+  },
   context: { addIssue: (issue: { code: 'custom'; message: string }) => void },
 ): void {
   const ids = workspace.agents.map((agent) => agent.id)
@@ -211,10 +215,10 @@ function refineAppWorkspace(
     context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
   }
   if (workspace.agents.length === 0) {
-    if (workspace.activeAgentId !== '') {
+    if (workspace.activeAgentId !== '' || workspace.leadAgentId !== '') {
       context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
     }
-  } else if (!ids.includes(workspace.activeAgentId)) {
+  } else if (!ids.includes(workspace.activeAgentId) || !ids.includes(workspace.leadAgentId)) {
     context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
   }
   if (workspace.agents.reduce((count, agent) => count + agent.messages.length, 0) > MAX_MESSAGES) {
@@ -226,6 +230,7 @@ export const appWorkspaceSchema = z
   .object({
     version: z.literal(5),
     activeAgentId: z.string(),
+    leadAgentId: z.string(),
     agents: z.array(agentSchema).max(MAX_AGENTS),
   })
   .superRefine(refineAppWorkspace)
@@ -241,7 +246,7 @@ export type ModelTurn = { role: 'user' | 'assistant'; content: string }
 
 /** 服务端首次创建的工作空间没有任何猫咪。 */
 export function emptyWorkspace(): AppWorkspace {
-  return { version: 5, activeAgentId: '', agents: [] }
+  return { version: 5, activeAgentId: '', leadAgentId: '', agents: [] }
 }
 
 /** 测试里用的八只样例猫咪。服务端不再在首次创建时写入它们。 */
@@ -259,6 +264,7 @@ export function createWorkspace(): AppWorkspace {
   return {
     version: 5,
     activeAgentId: 'assistant',
+    leadAgentId: 'assistant',
     agents: profiles.map(([id, name, description, group]) => ({
       id,
       name,
@@ -301,7 +307,12 @@ export function addAgent(
   ) {
     throw new Error('这个助手名称已存在，请换一个名称')
   }
-  return { ...workspace, activeAgentId: id, agents: [...workspace.agents, agent] }
+  return {
+    ...workspace,
+    activeAgentId: id,
+    leadAgentId: workspace.leadAgentId || id,
+    agents: [...workspace.agents, agent],
+  }
 }
 
 /** 更换指定猫咪的模型；未知模型或猫咪不存在时抛错，不改原工作空间。 */

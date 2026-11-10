@@ -427,6 +427,7 @@ test('下次打开使用已保存的服务地址', async () => {
 test('点击自建猫咪只切换会话，不会和置顶位交换', async () => {
   await updateServerWorkspace((workspace) => {
     workspace.activeAgentId = 'cat-a'
+    ;(workspace as { leadAgentId: string }).leadAgentId = 'cat-a'
     workspace.agents = [
       {
         id: 'cat-a',
@@ -456,15 +457,11 @@ test('点击自建猫咪只切换会话，不会和置顶位交换', async () =>
   })
   const pinned = window.locator('.pinned-area')
   const list = window.locator('.agent-groups')
-  await expect(pinned.getByRole('button')).toHaveCount(0)
+  await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
   await list.getByRole('button', { name: '阿白', exact: true }).click()
   await expect(window.getByRole('textbox', { name: '给阿白发消息' })).toBeVisible()
-  await expect(pinned.getByRole('button')).toHaveCount(0)
-  await expect(list.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
-  await expect(list.getByRole('button', { name: '阿白', exact: true })).toBeVisible()
-  await list.getByRole('button', { name: '阿花', exact: true }).click()
-  await expect(window.getByRole('textbox', { name: '给阿花发消息' })).toBeVisible()
-  await expect(pinned.getByRole('button')).toHaveCount(0)
+  await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
+  await expect(pinned.getByRole('button', { name: '阿白', exact: true })).toHaveCount(0)
   await expect(list.getByRole('button', { name: '阿白', exact: true })).toBeVisible()
 })
 
@@ -2210,6 +2207,22 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
     await window.getByRole('textbox', { name: '助手名称' }).fill('阿花')
     await window.getByRole('button', { name: '招聘猫咪' }).click()
     await expect(window.getByRole('textbox', { name: '给阿花发消息' })).toBeVisible()
+    const pinned = window.locator('.pinned-area')
+    await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
+    await window.screenshot({ path: '/opt/cursor/artifacts/first-cat-home.png', scale: 'css' })
+    await expect
+      .poll(() => window.evaluate(() => document.documentElement.dataset.workspaceSave ?? 'saved'))
+      .toBe('saved')
+    await window.reload()
+    await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
+    await window.getByRole('textbox', { name: '助手名称' }).fill('阿白')
+    await window.getByRole('button', { name: '招聘猫咪' }).click()
+    await expect(window.getByRole('textbox', { name: '给阿白发消息' })).toBeVisible()
+    await window.locator('.agent-groups').getByRole('button', { name: '阿白', exact: true }).click()
+    await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
+    await expect(pinned.getByRole('button', { name: '阿白', exact: true })).toHaveCount(0)
     await window.getByRole('button', { name: '打开设置' }).click()
     await window.getByRole('button', { name: '模型设置', exact: true }).click()
     await expect(window.getByRole('button', { name: '内置提供商' })).toHaveAttribute(

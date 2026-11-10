@@ -242,7 +242,8 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     closeMenu()
     switch (action) {
       case 'pin': {
-        const isPinned = target.id === 'assistant' || preferences.pinnedIds.includes(target.id)
+        const isPinned =
+          target.id === workspace.leadAgentId || preferences.pinnedIds.includes(target.id)
         runAction(() => {
           updatePreferences((previous) =>
             setSidebarFlag(previous, agentIds, target.id, 'pinnedIds', !isPinned),
@@ -565,6 +566,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         {surface.kind === 'agent' && isCatPanelOpen && (
           <CatSidePanel
             agent={agent}
+            isLead={agent.id === workspace.leadAgentId}
             onClose={() => setCatPanelOpen(false)}
             onModelChange={(modelId) =>
               runAction(() => {
@@ -600,7 +602,10 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
           anchor={menuAnchor}
           agent={menuAgent}
           groups={getAgentGroups(workspace)}
-          isPinned={menuAgent.id === 'assistant' || preferences.pinnedIds.includes(menuAgent.id)}
+          isLead={menuAgent.id === workspace.leadAgentId}
+          isPinned={
+            menuAgent.id === workspace.leadAgentId || preferences.pinnedIds.includes(menuAgent.id)
+          }
           isUnread={preferences.unreadIds.includes(menuAgent.id)}
           onAction={handleMenuAction}
           onMove={handleMoveAgent}

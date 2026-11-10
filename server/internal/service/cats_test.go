@@ -32,8 +32,19 @@ func TestWorkspaceSeedAndSave(t *testing.T) {
 		ID: "cat-1", Name: "阿花", Description: "一起写", Group: "未分组", Avatar: "calico", ModelID: "写作模型",
 		Messages: []ChatMessage{}, Artifacts: []Artifact{},
 	}}}
-	if _, err = service.Save(ctx, created); err != nil {
-		t.Fatal("没有样例标识的猫咪应能保存", err)
+	savedFirst, err := service.Save(ctx, created)
+	if err != nil || savedFirst.Workspace.LeadAgentID != "cat-1" {
+		t.Fatal("第一只猫应成为主猫", err, savedFirst.Workspace.LeadAgentID)
+	}
+	second := savedFirst.Workspace
+	second.Agents = append(second.Agents, Agent{
+		ID: "cat-2", Name: "阿白", Description: "第二只", Group: "未分组", Avatar: "bombay", ModelID: "写作模型",
+		Messages: []ChatMessage{}, Artifacts: []Artifact{},
+	})
+	second.ActiveAgentID = "cat-2"
+	savedSecond, err := service.Save(ctx, second)
+	if err != nil || savedSecond.Workspace.LeadAgentID != "cat-1" {
+		t.Fatal("再招一只不应换掉主猫", err, savedSecond.Workspace.LeadAgentID)
 	}
 	first.Workspace = SeedWorkspace()
 	first.Workspace.Agents[0].Draft = "还没发送"

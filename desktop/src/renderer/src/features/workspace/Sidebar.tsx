@@ -58,8 +58,8 @@ export function Sidebar({
   serverUrl: string
 }) {
   const serverHost = hostOf(serverUrl)
-  // 只有标识为 assistant 的默认猫固定置顶。当前会话不能顶上去，否则点击会和置顶位交换。
-  const lead = workspace.agents.find((agent) => agent.id === 'assistant')
+  // 主猫由服务端 leadAgentId 固定。当前会话不能顶上去，否则点击会和置顶位交换。
+  const lead = workspace.agents.find((agent) => agent.id === workspace.leadAgentId)
   const { hiddenIds, pinnedIds, unreadIds } = preferences
   const pinnedAgents = [
     ...(lead ? [lead] : []),
@@ -124,7 +124,7 @@ export function Sidebar({
           <PinnedAgent
             key={agent.id}
             agent={agent}
-            isAssistant={agent.id === 'assistant'}
+            isAssistant={agent.id === workspace.leadAgentId}
             isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
             isUnread={isUnread(agent)}
             isRenaming={agent.id === renamingAgentId}

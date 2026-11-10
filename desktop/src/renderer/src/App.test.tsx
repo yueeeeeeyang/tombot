@@ -690,6 +690,7 @@ describe('客户端交互', () => {
       workspace: {
         version: 5,
         activeAgentId: 'cat-a',
+        leadAgentId: 'cat-a',
         agents: [cat('cat-a', '阿花', 'calico'), cat('cat-b', '阿白', 'bombay')],
       },
     })
@@ -698,11 +699,11 @@ describe('客户端交互', () => {
       render(<App />)
       const pinned = document.querySelector('.pinned-area') as HTMLElement
       const list = document.querySelector('.agent-groups') as HTMLElement
-      expect(within(pinned).queryByRole('button')).not.toBeInTheDocument()
+      expect(within(pinned).getByRole('button', { name: '阿花' })).toBeInTheDocument()
       await user.click(within(list).getByRole('button', { name: '阿白' }))
       expect(screen.getByRole('textbox', { name: '给阿白发消息' })).toBeInTheDocument()
-      expect(within(pinned).queryByRole('button')).not.toBeInTheDocument()
-      expect(within(list).getByRole('button', { name: '阿花' })).toBeInTheDocument()
+      expect(within(pinned).getByRole('button', { name: '阿花' })).toBeInTheDocument()
+      expect(within(pinned).queryByRole('button', { name: '阿白' })).not.toBeInTheDocument()
       expect(within(list).getByRole('button', { name: '阿白' })).toBeInTheDocument()
     } finally {
       memoryBackend.reset()

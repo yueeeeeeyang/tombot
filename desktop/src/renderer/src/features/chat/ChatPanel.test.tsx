@@ -70,14 +70,19 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onDraft={(draft) =>
         setCurrent(
           updateDraft(
-            { version: 5, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, leadAgentId: current.id, agents: [current] },
             current.id,
             draft,
           ).agents[0]!,
         )
       }
       onSave={(replyToId) => {
-        const workspace = { version: 5 as const, activeAgentId: current.id, agents: [current] }
+        const workspace = {
+          version: 5 as const,
+          activeAgentId: current.id,
+          leadAgentId: current.id,
+          agents: [current],
+        }
         setCurrent(
           saveMessage(
             workspace,
@@ -98,7 +103,7 @@ function StatefulPanel({ agent }: { agent: Agent }) {
       onReact={(messageId, emoji) =>
         setCurrent(
           toggleReaction(
-            { version: 5, activeAgentId: current.id, agents: [current] },
+            { version: 5, activeAgentId: current.id, leadAgentId: current.id, agents: [current] },
             current.id,
             messageId,
             emoji,

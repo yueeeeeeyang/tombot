@@ -8,9 +8,11 @@ export const V4_STORAGE_KEY = 'tombot.workspace.v4'
  */
 export function migrateCatSurfaces(previous: unknown): AppWorkspace {
   const workspace = liveWorkspaceSchema.parse(previous)
+  const ids = workspace.agents.map((agent) => agent.id)
   return appWorkspaceSchema.parse({
     version: 5,
     activeAgentId: workspace.activeAgentId,
+    leadAgentId: ids.includes('assistant') ? 'assistant' : (ids[0] ?? ''),
     agents: workspace.agents.map((agent) => ({
       ...agent,
       artifacts: [],

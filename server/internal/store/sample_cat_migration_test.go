@@ -45,6 +45,28 @@ func TestUntouchedSampleCatsAreRemovedAndRealCatsStay(t *testing.T) {
 	}
 }
 
+func TestEarliestCatBecomesLeadWhenNoAssistant(t *testing.T) {
+	db := databaseBefore(t, 25)
+	if _, err := db.Exec(`INSERT INTO workspace_meta(id,active_agent_id,revision,pristine,language,provider,provider_name,base_url,model_name,updated_at) VALUES(1,'late',1,0,'system','custom','','','',1)`); err != nil {
+		t.Fatal(err)
+	}
+	insertCat(t, db, "late", "late", "后到的", "第二只", "未分组", "bombay", "", "")
+	insertCat(t, db, "early", "early", "先到的", "第一只", "未分组", "calico", "", "")
+	if _, err := db.Exec(`UPDATE bots SET created_at=1 WHERE id='early'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE bots SET created_at=2 WHERE id='late'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	var lead string
+	if err := db.QueryRow(`SELECT lead_agent_id FROM workspace_meta WHERE id=1`).Scan(&lead); err != nil || lead != "early" {
+		t.Fatal("没有默认猫时应置顶最早创建的猫", lead, err)
+	}
+}
+
 func insertCat(t *testing.T, db *sql.DB, id, desktopID, name, description, group, avatar, draft, computer string) {
 	t.Helper()
 	if _, err := db.Exec(`INSERT INTO bots(id,name,role_title,soul,workspace_dir,accent_hue,created_at,updated_at,desktop_id,group_name,description,avatar_preset,catalog_model_id,draft,computer_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
