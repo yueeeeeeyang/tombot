@@ -28,6 +28,12 @@ function expectDragShell(): void {
   expect(document.querySelector('.session-card')).toBeTruthy()
 }
 
+function stepRow(title: string): HTMLElement {
+  const row = screen.getByText(title).closest('.session-step')
+  if (!(row instanceof HTMLElement)) throw new Error(`找不到步骤：${title}`)
+  return row
+}
+
 describe('会话门禁', () => {
   it('连接、失败、初始化和密码页都留出拖动区', () => {
     memoryBackend.phase = 'loading'
@@ -75,6 +81,8 @@ describe('会话门禁', () => {
     expect(screen.getByText('已完成 2 / 3')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: '引导进度' })).toHaveProperty('value', 2)
     expect(screen.getByRole('alert')).toHaveTextContent('夹具没有浏览器')
+    expect(document.querySelector('.session-step-spinner')).toBeNull()
+    expect(stepRow('准备托管浏览器')).not.toHaveClass('session-step--running')
     expect(screen.queryByRole('textbox', { name: '给小黑发消息' })).not.toBeInTheDocument()
     expectDragShell()
     await user.click(screen.getByRole('button', { name: '重新准备' }))
@@ -98,6 +106,9 @@ describe('会话门禁', () => {
     expect(screen.getByRole('heading', { name: '正在准备服务' })).toBeInTheDocument()
     expect(screen.getByText('当前阶段：准备依赖，正在安装中文字体')).toBeInTheDocument()
     expect(screen.getByText('进行中')).toBeInTheDocument()
+    expect(stepRow('安装中文字体')).toHaveClass('session-step--running')
+    expect(stepRow('安装中文字体').querySelector('.session-step-spinner')).toBeTruthy()
+    expect(stepRow('检测操作系统').querySelector('.session-step-spinner')).toBeNull()
     expect(screen.queryByRole('button', { name: '重新准备' })).not.toBeInTheDocument()
     act(() => {
       memoryBackend.publishBootstrap({
@@ -117,7 +128,36 @@ describe('会话门禁', () => {
       })
     })
     expect(screen.getByRole('alert')).toHaveTextContent('夹具没有浏览器')
+    expect(document.querySelector('.session-step-spinner')).toBeNull()
+    expect(stepRow('安装中文字体')).not.toHaveClass('session-step--running')
     await user.click(screen.getByRole('button', { name: '重新准备' }))
     expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+  })
+
+  it('只有进行中的步骤带执行指示，已完成、待处理和失败保持静止', () => {
+    memoryBackend.bootstrap = {
+      phase: 'preparing',
+      cursor: 4,
+      steps: [
+        { id: 'detect_os', title: '检测操作系统', status: 'ok', duration_ms: 1 },
+        { id: 'prepare_dirs', title: '准备数据与工作目录', status: 'degraded', duration_ms: 1 },
+        { id: 'install_fonts', title: '安装中文字体', status: 'pending', duration_ms: 0 },
+        { id: 'ensure_browser', title: '准备托管浏览器', status: 'running', duration_ms: 0 },
+        { id: 'selfcheck', title: '自检浏览器', status: 'failed', duration_ms: 2 },
+      ],
+    }
+    render(<App />)
+    const running = stepRow('准备托管浏览器')
+    expect(running).toHaveClass('session-step--running')
+    expect(running).toHaveAttribute('aria-busy', 'true')
+    expect(running.querySelectorAll('.session-step-spinner')).toHaveLength(1)
+    for (const title of ['检测操作系统', '准备数据与工作目录', '安装中文字体', '自检浏览器']) {
+      const row = stepRow(title)
+      expect(row).not.toHaveClass('session-step--running')
+      expect(row).not.toHaveAttribute('aria-busy')
+      expect(row.querySelector('.session-step-spinner')).toBeNull()
+    }
+    expect(document.querySelectorAll('.session-step-spinner')).toHaveLength(1)
+    expect(document.querySelector('.session-progress.session-step--running')).toBeNull()
   })
 })

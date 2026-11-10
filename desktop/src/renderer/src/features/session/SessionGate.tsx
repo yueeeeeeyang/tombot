@@ -130,12 +130,23 @@ function BootstrapView({ session }: { session: Session }) {
   )
 }
 
+/**
+ * 引导步骤。字体和浏览器可能停在进行中很久，只有这一行带持续指示，
+ * 已完成、待处理和失败保持静止，避免整页看起来一起在动或已经卡死。
+ */
 function StepRow({ step }: { step: BootstrapStep }) {
+  const isRunning = step.status === 'running'
   return (
-    <li className="session-step">
+    <li
+      className={isRunning ? 'session-step session-step--running' : 'session-step'}
+      aria-busy={isRunning || undefined}
+    >
       <span className="session-step-row">
         <span>{step.title}</span>
-        <span>{stepLabel(step.status)}</span>
+        <span className="session-step-status">
+          {isRunning && <span className="session-step-spinner" aria-hidden="true" />}
+          <span>{stepLabel(step.status)}</span>
+        </span>
       </span>
       {step.detail && <span className="session-step-detail">{step.detail}</span>}
     </li>

@@ -366,6 +366,31 @@ test('引导未完成时显示进度，重试成功后才进入工作空间', as
   await expect(window.getByRole('alert')).toHaveText('夹具没有浏览器，测试不会下载 Chrome')
   await expect(window.getByRole('button', { name: '重新准备' })).toBeVisible()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toHaveCount(0)
+  await expect(window.locator('.session-step--running')).toHaveCount(0)
+  await expect(window.locator('.session-step-spinner')).toHaveCount(0)
+  // 失败页没有进行中的步骤，但样式表里的旋转必须仍只挂在这一枚指示上。
+  const spinnerMotion = await window.evaluate(() => {
+    const rules = [...document.styleSheets].flatMap((sheet) => {
+      try {
+        return [...sheet.cssRules]
+      } catch {
+        return []
+      }
+    })
+    const animated = rules.filter(
+      (rule): rule is CSSStyleRule =>
+        rule instanceof CSSStyleRule && rule.style.animationName.includes('session-step-spin'),
+    )
+    const spinner = animated[0]
+    return {
+      selectors: animated.map((rule) => rule.selectorText),
+      duration: spinner?.style.animationDuration ?? '',
+      iteration: spinner?.style.animationIterationCount ?? '',
+    }
+  })
+  expect(spinnerMotion.selectors).toEqual(['.session-step-spinner'])
+  expect(spinnerMotion.iteration).toBe('infinite')
+  expect(['0.85s', '.85s', '850ms']).toContain(spinnerMotion.duration)
   await expectSessionDrag()
   await mkdir('/opt/cursor/artifacts', { recursive: true })
   await window.screenshot({ path: '/opt/cursor/artifacts/bootstrap-progress.png', scale: 'css' })
