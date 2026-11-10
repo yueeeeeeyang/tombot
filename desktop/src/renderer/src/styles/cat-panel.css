@@ -29,25 +29,12 @@
     opacity: 1;
   }
 }
+/* 只固定角落位置；圆形底、边框和 36px 尺寸复用侧栏 .round-button。 */
 .cat-panel-close {
   position: absolute;
   top: 12px;
   right: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-}
-.cat-panel-close:hover,
-.cat-panel-close:focus-visible {
-  background: var(--hover);
-  color: var(--text);
+  z-index: 1;
 }
 .cat-panel-hero {
   display: flex;

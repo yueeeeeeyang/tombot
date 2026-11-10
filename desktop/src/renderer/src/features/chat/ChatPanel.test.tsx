@@ -114,6 +114,15 @@ function StatefulPanel({ agent }: { agent: Agent }) {
   )
 }
 
+describe('会话顶部名称', () => {
+  it('箭头朝右并保留占位，显隐交给样式', () => {
+    renderPanel()
+    const chevron = screen.getByRole('button', { name: '查看小黑资料' }).querySelector('svg')
+    expect(chevron).toHaveClass('pill-chevron', 'lucide-chevron-right')
+    expect(chevron).toHaveAttribute('width', '14')
+  })
+})
+
 describe('消息气泡操作', () => {
   it('用户和助手气泡都有朝向中央的快捷按钮，失败状态只保留图标', () => {
     renderPanel(

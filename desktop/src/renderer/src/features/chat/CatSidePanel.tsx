@@ -58,8 +58,13 @@ export function CatSidePanel({
 
   return (
     <aside className="cat-panel" aria-label={agent.name}>
-      <button type="button" className="cat-panel-close" aria-label="关闭猫咪面板" onClick={onClose}>
-        <X size={16} />
+      <button
+        type="button"
+        className="cat-panel-close round-button"
+        aria-label="关闭猫咪面板"
+        onClick={onClose}
+      >
+        <X size={18} strokeWidth={1.7} />
       </button>
       <div className="cat-panel-hero">
         <Avatar
