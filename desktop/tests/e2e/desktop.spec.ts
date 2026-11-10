@@ -234,7 +234,8 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
   )
 
   await configureModel()
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const createDialog = window.getByRole('dialog')
   const dialogBox = await createDialog.boundingBox()
   expect(dialogBox!.width).toBe(480)
@@ -302,7 +303,8 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     await window.getByRole('button', { name: '打开设置' }).click()
     await chooseOption('主题', theme === 'light' ? '浅色' : '深色')
     await window.keyboard.press('Escape')
-    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
     const choices = window.getByRole('group', { name: '预设猫咪头像' })
     await expect(choices.getByRole('button')).toHaveCount(8)
     for (const choice of await choices.getByRole('button').all()) {
@@ -324,7 +326,8 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
   }
   await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const dialog = window.getByRole('dialog', { name: '招聘猫咪' })
   expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true)
   const bounds = await dialog.boundingBox()
@@ -368,7 +371,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
     await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
     await window.keyboard.press('Escape')
 
-    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
     await expect(window.locator('select')).toHaveCount(0)
     const model = window.getByRole('combobox', { name: '模型', exact: true })
     await model.click()
@@ -394,7 +398,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
 
   await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   await window.getByRole('combobox', { name: '模型', exact: true }).click()
   const menu = window.getByRole('listbox', { name: '模型', exact: true })
   const menuBounds = await menu.boundingBox()
@@ -408,7 +413,8 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
 })
 
 test('招聘仅列出已配置模型，空状态配置后返回并保留表单', async () => {
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   const recruit = window.getByRole('dialog', { name: '招聘猫咪' })
   const model = recruit.getByRole('combobox', { name: '模型', exact: true })
   await expect(model).toBeDisabled()
@@ -691,7 +697,8 @@ test('侧栏拖动上限、收缩阈值、头像栏操作及重新展开', async
   await window.getByRole('button', { name: '打开设置' }).click()
   await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
   await window.keyboard.press('Escape')
-  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
   await expect(window.getByRole('dialog', { name: '招聘猫咪' })).toBeVisible()
   await window.keyboard.press('Escape')
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
@@ -949,7 +956,8 @@ for (const modal of [
     inputName: '搜索内容',
   },
   {
-    trigger: '招聘猫咪',
+    trigger: '新建',
+    menuItem: '招聘猫咪',
     title: '招聘猫咪',
     inputRole: 'textbox' as const,
     inputName: '助手名称',
@@ -967,6 +975,9 @@ for (const modal of [
       { x: 60, y: 400 },
     ]) {
       await trigger.click()
+      if ('menuItem' in modal && modal.menuItem) {
+        await window.getByRole('menuitem', { name: modal.menuItem, exact: true }).click()
+      }
       await expect(dialog).toBeVisible()
       // 页面合成点击会绕过 Electron 的原生拖拽命中测试，必须同时验证原生区域已关闭。
       expect(
@@ -996,6 +1007,10 @@ for (const modal of [
       ).toEqual(['drag', 'drag'])
     }
     await trigger.click()
+    if ('menuItem' in modal && modal.menuItem) {
+      await window.getByRole('menuitem', { name: modal.menuItem, exact: true }).click()
+    }
+    await expect(dialog).toBeVisible()
     await window.keyboard.press('Escape')
     await expect(dialog).toHaveCount(0)
     await expect(trigger).toBeFocused()
@@ -1340,7 +1355,7 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   await expect(panel).toBeVisible()
   const close = panel.getByRole('button', { name: '关闭猫咪面板' })
   const search = window.getByRole('button', { name: '搜索助手和消息' })
-  const create = window.getByRole('button', { name: '招聘猫咪' })
+  const create = window.getByRole('button', { name: '新建' })
   await expect(close).toHaveClass(/round-button/)
   const closeBox = (await close.boundingBox())!
   const searchBox = (await search.boundingBox())!
@@ -1509,7 +1524,9 @@ test('群聊、私信和附件沿用原来的气泡', async () => {
     await window.getByLabel('API 密钥').fill('fixture-key')
     await window.keyboard.press('Escape')
     await waitForModel('fixture-model', true)
-    await window.getByRole('button', { name: '群聊', exact: true }).click()
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.screenshot({ path: `${artifacts}/create-menu.png`, scale: 'css' })
+    await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
     await window.getByRole('textbox', { name: '群名称', exact: true }).fill('晨会')
     await window.getByRole('checkbox', { name: '小黑' }).check()
     await window.getByRole('button', { name: '创建群聊', exact: true }).click()
@@ -1559,14 +1576,12 @@ test('猫咪主动发的私信出现在侧栏', async () => {
     })
     await window.getByRole('textbox', { name: '给小黑发消息' }).fill('请私下告诉游戏程序一声')
     await window.getByRole('button', { name: '保存为本地草稿' }).click()
-    await expect(
-      window.getByRole('button', { name: /小黑 ↔ 游戏程序|游戏程序 ↔ 小黑/ }),
-    ).toBeVisible({
-      timeout: 30_000,
-    })
-    await window.getByRole('button', { name: /↔/ }).click()
-    await expect(window.getByRole('log')).toContainText('晨会我先看了')
+    const notice = window.getByRole('button', { name: /已发消息给/ })
+    await expect(notice).toBeVisible({ timeout: 30_000 })
     await window.screenshot({ path: `${artifacts}/cat-dm.png`, scale: 'css' })
+    await notice.click()
+    await expect(window.getByRole('dialog')).toContainText('晨会我先看了')
+    await window.screenshot({ path: `${artifacts}/cat-dm-open.png`, scale: 'css' })
   } finally {
     await model.close()
   }

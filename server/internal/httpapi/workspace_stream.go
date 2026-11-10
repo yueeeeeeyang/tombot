@@ -262,6 +262,8 @@ func (s *Server) followRun(ctx context.Context, conversationID, turnID string, c
 				}
 			case "tool.started":
 				emit("process", `{"text":"正在使用工具"}`)
+			case "handoff.created":
+				emit("dm", string(event.Payload))
 			case "turn.finished":
 				var payload struct {
 					TurnID string `json:"turn_id"`

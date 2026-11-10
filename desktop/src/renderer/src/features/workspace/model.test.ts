@@ -8,6 +8,7 @@ import {
   MAX_MESSAGES,
   replyExcerpt,
   REPLY_EXCERPT_LENGTH,
+  insertDmNotice,
   saveMessage,
   searchAgents,
   setAgentComputerUrl,
@@ -29,6 +30,40 @@ const profile: NewAgent = {
 const timestamp = '2026-11-09T07:00:00.000Z'
 
 describe('工作空间领域规则', () => {
+  it('私信提示按时间留在会话里，同一条不重复插入', () => {
+    const workspace = createWorkspace()
+    const agent = workspace.agents[0]
+    if (!agent) throw new Error('缺少初始助手')
+    const notice = {
+      id: 'dm-1',
+      createdAt: timestamp,
+      direction: 'sent' as const,
+      peerId: 'peer',
+      peerName: '游戏程序',
+      conversationId: 'dm-conv',
+    }
+    const once = insertDmNotice(workspace, agent.id, notice)
+    const twice = insertDmNotice(once, agent.id, notice)
+    const missing = insertDmNotice(workspace, 'missing', notice)
+    const message = once.agents.find((item) => item.id === agent.id)?.messages.at(-1)
+    expect(message?.content).toBe('已发消息给 游戏程序')
+    expect(message?.dmNotice).toEqual({
+      direction: 'sent',
+      peerId: 'peer',
+      peerName: '游戏程序',
+      conversationId: 'dm-conv',
+    })
+    expect(twice).toBe(once)
+    expect(missing).toBe(workspace)
+    const received = insertDmNotice(workspace, agent.id, {
+      ...notice,
+      id: 'dm-2',
+      direction: 'received',
+    })
+    expect(received.agents.find((item) => item.id === agent.id)?.messages.at(-1)?.content).toBe(
+      '收到 游戏程序 的消息',
+    )
+  })
   it('初始工作空间包含独立助手，没有伪造消息', () => {
     const workspace = createWorkspace()
     expect(appWorkspaceSchema.safeParse(workspace).success).toBe(true)

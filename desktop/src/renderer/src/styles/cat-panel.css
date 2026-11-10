@@ -114,6 +114,29 @@
   min-width: 0;
 }
 .routine-row strong,
+.dm-thread p {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+.dm-notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  margin: 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.dm-notice .avatar {
+  width: 18px;
+  height: 18px;
+}
 .message-speaker {
   display: block;
   margin-bottom: 4px;

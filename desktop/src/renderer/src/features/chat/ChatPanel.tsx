@@ -5,6 +5,7 @@ import {
   MAX_MESSAGE_LENGTH,
   replyExcerpt,
   type Agent,
+  type DmNotice,
   type MessageAttachment,
 } from '../workspace/model'
 import { ChatMessage } from './ChatMessage'
@@ -25,6 +26,8 @@ type ChatPanelProps = {
   onError: (message: string) => void
   onUpload?: (file: File) => Promise<MessageAttachment>
   onPreview?: (attachment: MessageAttachment) => Promise<string>
+  peers?: readonly Agent[]
+  onOpenDm?: (notice: DmNotice) => void
 }
 
 /** 渲染当前助手的使用指南、本地消息和输入区；不生成或伪造模型回复。 */
@@ -42,6 +45,8 @@ export function ChatPanel({
   onError,
   onUpload,
   onPreview,
+  peers = [],
+  onOpenDm,
 }: ChatPanelProps) {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -209,16 +214,40 @@ export function ChatPanel({
                       <time dateTime={message.createdAt}>{label}</time>
                     </div>
                   )}
-                  <ChatMessage
-                    message={message}
-                    isHighlighted={highlightedId === message.id}
-                    onOpenMenu={openMenu}
-                    onReply={startReply}
-                    onRetry={onRetry}
-                    onReact={onReact}
-                    onReveal={revealMessage}
-                    onPreview={onPreview}
-                  />
+                  {message.dmNotice ? (
+                    <button
+                      type="button"
+                      className="dm-notice"
+                      onClick={() => onOpenDm?.(message.dmNotice!)}
+                    >
+                      <span>
+                        {message.dmNotice.direction === 'received' ? '收到' : '已发消息给'}
+                      </span>
+                      <Avatar
+                        preset={
+                          peers.find((peer) => peer.id === message.dmNotice?.peerId)?.avatar ??
+                          'bombay'
+                        }
+                        agentId={message.dmNotice.peerId}
+                        size="small"
+                      />
+                      <span>
+                        {message.dmNotice.peerName}
+                        {message.dmNotice.direction === 'received' ? ' 的消息' : ''}
+                      </span>
+                    </button>
+                  ) : (
+                    <ChatMessage
+                      message={message}
+                      isHighlighted={highlightedId === message.id}
+                      onOpenMenu={openMenu}
+                      onReply={startReply}
+                      onRetry={onRetry}
+                      onReact={onReact}
+                      onReveal={revealMessage}
+                      onPreview={onPreview}
+                    />
+                  )}
                 </div>
               )
             })}

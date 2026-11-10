@@ -53,20 +53,18 @@
 
 ## 这一批新增
 
-- 猫咪面板的「记忆」只查看。记下、修改和忘掉由服务端 agent 在对话里调用原来的 `memory_search`、`memory_write`、`memory_delete`。读写的仍是同一批 `.tom/memory` 文件。删除记为中风险，桌面的 loose 策略会直接执行；标准策略仍要审批。
+- 猫咪面板的「记忆」只查看。记下、修改和忘掉由服务端 agent 在对话里调用原来的 `memory_search`、`memory_write`、`memory_delete`。读写的仍是同一批 `.tom/memory` 文件。删除不再等待审批。
 - 猫咪面板的「定时」没有新建和编辑表单。每个任务只有启用/暂停开关，右键菜单可以删除。创建、修改和删除由 agent 在对话里调用 `routine_list`、`routine_upsert`、`routine_delete`，这三个工具直接走原来的 `Routines.Commit`、`UpdateNow` 和 `Delete`，不等审批。到点仍由原来的调度器执行。
 - 电脑页增加「开始准备」。它调用原来的 `POST /api/v1/bootstrap/retry`，配套模式也可以在这时安装浏览器和字体并启动持久浏览器。端到端测试不会点击它，以免下载 Chrome。
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
 - 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
-- 猫咪面板有群聊和私信。群聊走原来的群组与 `POST /conversations/{id}/messages`。私信是猫咪之间的 `bot_dm`，只查看。消息可以上传图片和文件，走原来的 `/api/v1/fs/upload` 和 `SendInput.Attachments`。导出草稿入口已去掉。
+- 新建按钮先弹出菜单，再选招聘猫咪或创建群聊。群聊走原来的群组和 `POST /conversations/{id}/messages`。猫咪用 `message_bot` 发私信时，双方和用户的单聊里按时间插入居中提示，点开只读查看 `bot_dm`。消息可以上传图片和文件，走原来的 `/api/v1/fs/upload` 和 `SendInput.Attachments`。导出草稿入口已去掉。
 
-私信在 tom 里是猫咪和猫咪之间的 `bot_dm` 会话，不是用户和一只猫咪的单聊。用户和一只猫咪的对话仍是 `direct`。这一批还没有桌面入口。
+私信在 tom 里是猫咪和猫咪之间的 `bot_dm` 会话，不是用户和一只猫咪的单聊。用户和一只猫咪的对话仍是 `direct`。
 
 ## 还没做
 
-- 群组对话、猫咪之间的私信、消息附件还没有桌面入口。服务端原有接口还在。
-- 审批表、用量账本和审计表还在。用量和审计只是去掉了 HTTP 入口。loose 的高风险动作仍会进审批。
 - 端到端没有点击「开始准备」，所以没有在测试里下载 Chrome。
 - 语音不动。
 - 默认 Bot 仍由原服务在初始化后准备，桌面侧栏不显示它。

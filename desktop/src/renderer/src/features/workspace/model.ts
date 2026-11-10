@@ -78,6 +78,13 @@ const attachmentSchema = z.object({
   kind: z.enum(['image', 'file']),
 })
 
+const dmNoticeSchema = z.object({
+  direction: z.enum(['sent', 'received']),
+  peerId: z.string().trim().min(1).max(80),
+  peerName: z.string().trim().min(1).max(80),
+  conversationId: z.string().trim().min(1).max(80),
+})
+
 const messageSchema = z
   .object({
     id: z.string().min(1),
@@ -89,6 +96,7 @@ const messageSchema = z
     replyTo: replySchema.optional(),
     reactions: z.array(reactionSchema).max(REACTION_EMOJIS.length),
     attachments: z.array(attachmentSchema).max(4).optional(),
+    dmNotice: dmNoticeSchema.optional(),
   })
   .superRefine((message, context) => {
     const emojis = message.reactions.map((reaction) => reaction.emoji)
@@ -206,6 +214,7 @@ export type Agent = z.infer<typeof agentSchema>
 export type Artifact = z.infer<typeof artifactSchema>
 export type ChatMessage = z.infer<typeof messageSchema>
 export type MessageAttachment = z.infer<typeof attachmentSchema>
+export type DmNotice = z.infer<typeof dmNoticeSchema>
 export type AppWorkspace = z.infer<typeof appWorkspaceSchema>
 export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
 export type ModelTurn = { role: 'user' | 'assistant'; content: string }
@@ -302,6 +311,40 @@ export function setAgentComputerUrl(
     ...workspace,
     agents: workspace.agents.map((agent) =>
       agent.id === agentId ? { ...agent, computerUrl: canonical } : agent,
+    ),
+  }
+}
+
+/** 把服务端已经写下的私信提示插进当前会话，同一条标识不重复。 */
+export function insertDmNotice(
+  workspace: AppWorkspace,
+  agentId: string,
+  notice: DmNotice & { id: string; createdAt: string },
+): AppWorkspace {
+  const agent = workspace.agents.find((item) => item.id === agentId)
+  if (!agent || agent.messages.some((message) => message.id === notice.id)) return workspace
+  const content =
+    notice.direction === 'received'
+      ? `收到 ${notice.peerName} 的消息`
+      : `已发消息给 ${notice.peerName}`
+  const message = messageSchema.parse({
+    id: notice.id,
+    role: 'assistant',
+    content,
+    createdAt: notice.createdAt,
+    status: 'sent',
+    reactions: [],
+    dmNotice: {
+      direction: notice.direction,
+      peerId: notice.peerId,
+      peerName: notice.peerName,
+      conversationId: notice.conversationId,
+    },
+  })
+  return {
+    ...workspace,
+    agents: workspace.agents.map((item) =>
+      item.id === agentId ? { ...item, messages: [...item.messages, message] } : item,
     ),
   }
 }

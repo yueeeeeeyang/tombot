@@ -169,7 +169,15 @@ export function useWorkspace() {
   function deliver(
     agentId: string,
     messageId: string,
-    onEvent?: (event: { type: string; text: string }) => void,
+    onEvent?: (event: {
+      type: string
+      text: string
+      messageId?: string
+      peerId?: string
+      peerName?: string
+      conversationId?: string
+      direction?: 'sent' | 'received'
+    }) => void,
   ): Promise<DeliveryResult> {
     return enqueue(async () => {
       try {

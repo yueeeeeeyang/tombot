@@ -3,7 +3,7 @@ import { Dialog } from '../../components/Dialog'
 import { Plus, X } from 'lucide-react'
 import type { ServerBubble } from '../desktop/backend'
 import { getBackend } from '../desktop/backend'
-import type { Agent, MessageAttachment } from '../workspace/model'
+import type { Agent, DmNotice, MessageAttachment } from '../workspace/model'
 import { replyExcerpt } from '../workspace/model'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
@@ -17,22 +17,20 @@ type GroupDetail = {
   members: Array<{ bot_id: string; name: string }>
 }
 
-/** 群聊和猫咪私信复用原来的气泡。私信只查看，群聊可以发言和管理成员。 */
+/** 群聊复用原来的气泡，可以发言和管理成员。猫咪之间的私信不在这里打开。 */
 export function ConversationPanel({
-  kind,
   id,
   agents,
   onNotice,
   onError,
 }: {
-  kind: 'group' | 'dm'
   id: string
   agents: Agent[]
   onNotice: (message: string) => void
   onError: (message: string) => void
 }) {
-  const [title, setTitle] = useState(kind === 'group' ? '群聊' : '私信')
-  const [conversationId, setConversationId] = useState(kind === 'dm' ? id : '')
+  const [title, setTitle] = useState('群聊')
+  const [conversationId, setConversationId] = useState('')
   const [group, setGroup] = useState<GroupDetail | null>(null)
   const [messages, setMessages] = useState<ServerBubble[]>([])
   const [draft, setDraft] = useState('')
@@ -48,19 +46,13 @@ export function ConversationPanel({
 
   const reload = useCallback(async () => {
     const backend = getBackend()
-    if (kind === 'group') {
-      const detail = await backend.groupDetail?.(id)
-      if (!detail) return
-      setGroup(detail)
-      setTitle(detail.name)
-      setConversationId(detail.conversation_id)
-      setMessages((await backend.listConversationMessages?.(detail.conversation_id)) ?? [])
-      return
-    }
-    const conversations = (await backend.listCatMessages?.()) ?? []
-    setTitle(conversations.find((item) => item.id === id)?.title || '私信')
-    setMessages((await backend.listConversationMessages?.(id)) ?? [])
-  }, [id, kind])
+    const detail = await backend.groupDetail?.(id)
+    if (!detail) return
+    setGroup(detail)
+    setTitle(detail.name)
+    setConversationId(detail.conversation_id)
+    setMessages((await backend.listConversationMessages?.(detail.conversation_id)) ?? [])
+  }, [id])
 
   useEffect(() => {
     let cancelled = false
@@ -68,37 +60,23 @@ export function ConversationPanel({
     const failed = (failure: Error) => {
       if (!cancelled) onError(failure.message)
     }
-    if (kind === 'group') {
-      void backend
-        ?.groupDetail?.(id)
-        .then((detail) => {
-          if (cancelled || !detail) return []
-          setGroup(detail)
-          setTitle(detail.name)
-          setConversationId(detail.conversation_id)
-          return backend.listConversationMessages?.(detail.conversation_id) ?? []
-        })
-        .then((rows) => {
-          if (!cancelled && rows) setMessages(rows)
-        })
-        .catch(failed)
-    } else {
-      void backend
-        ?.listCatMessages?.()
-        .then((conversations) => {
-          if (cancelled) return []
-          setTitle(conversations?.find((item) => item.id === id)?.title || '私信')
-          return backend.listConversationMessages?.(id) ?? []
-        })
-        .then((rows) => {
-          if (!cancelled && rows) setMessages(rows)
-        })
-        .catch(failed)
-    }
+    void backend
+      ?.groupDetail?.(id)
+      .then((detail) => {
+        if (cancelled || !detail) return []
+        setGroup(detail)
+        setTitle(detail.name)
+        setConversationId(detail.conversation_id)
+        return backend.listConversationMessages?.(detail.conversation_id) ?? []
+      })
+      .then((rows) => {
+        if (!cancelled && rows) setMessages(rows)
+      })
+      .catch(failed)
     return () => {
       cancelled = true
     }
-  }, [id, kind, onError])
+  }, [id, onError])
 
   function bubbleMessage(item: ServerBubble) {
     const reply = item.replyToId
@@ -194,22 +172,18 @@ export function ConversationPanel({
         <div className="chat-agent-pill" aria-current="page">
           <span>{title}</span>
         </div>
-        {kind === 'group' && (
-          <button
-            type="button"
-            className="text-button"
-            onClick={() => setMembersOpen((open) => !open)}
-          >
-            成员
-          </button>
-        )}
+        <button
+          type="button"
+          className="text-button"
+          onClick={() => setMembersOpen((open) => !open)}
+        >
+          成员
+        </button>
       </header>
       <section className="chat-log">
         <div className="saved-messages" role="log" aria-label={title}>
           {shown.length === 0 ? (
-            <p className="local-note">
-              {kind === 'dm' ? '这两只猫咪还没有说过话。' : '在下面说一句，群里的猫咪会一起回应。'}
-            </p>
+            <p className="local-note">在下面说一句，群里的猫咪会一起回应。</p>
           ) : null}
           {shown.map((item, index) => {
             const label = messageTimeSeparator(
@@ -266,126 +240,173 @@ export function ConversationPanel({
           onClose={() => setMenu(undefined)}
         />
       )}
-      {kind === 'group' && (
-        <div
-          className="composer-area"
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault()
-            void addFiles([...event.dataTransfer.files]).catch((failure: Error) =>
-              onError(failure.message),
-            )
-          }}
-        >
-          {membersOpen && group && (
-            <div className="member-panel">
-              {group.members.map((member) => (
-                <p key={member.bot_id}>
-                  <span>{member.name}</span>
-                  <button
-                    type="button"
-                    aria-label={`移出${member.name}`}
-                    onClick={() => {
-                      void getBackend()
-                        .removeGroupMember?.(group.id, group.revision, member.bot_id)
-                        .then(reload)
-                        .catch((failure: Error) => onError(failure.message))
-                    }}
-                  >
-                    移出
-                  </button>
-                </p>
-              ))}
-              <label>
-                加入猫咪
-                <select
-                  aria-label="加入猫咪"
-                  defaultValue=""
-                  onChange={(event) => {
-                    const botId = event.target.value
-                    event.target.value = ''
-                    if (!botId) return
+      <div
+        className="composer-area"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault()
+          void addFiles([...event.dataTransfer.files]).catch((failure: Error) =>
+            onError(failure.message),
+          )
+        }}
+      >
+        {membersOpen && group && (
+          <div className="member-panel">
+            {group.members.map((member) => (
+              <p key={member.bot_id}>
+                <span>{member.name}</span>
+                <button
+                  type="button"
+                  aria-label={`移出${member.name}`}
+                  onClick={() => {
                     void getBackend()
-                      .addGroupMembers?.(group.id, group.revision, [botId])
+                      .removeGroupMember?.(group.id, group.revision, member.bot_id)
                       .then(reload)
                       .catch((failure: Error) => onError(failure.message))
                   }}
                 >
-                  <option value="">选择</option>
-                  {agents
-                    .filter((agent) => !group.members.some((member) => member.bot_id === agent.id))
-                    .map((agent) => (
-                      <option key={agent.id} value={agent.id}>
-                        {agent.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
+                  移出
+                </button>
+              </p>
+            ))}
+            <label>
+              加入猫咪
+              <select
+                aria-label="加入猫咪"
+                defaultValue=""
+                onChange={(event) => {
+                  const botId = event.target.value
+                  event.target.value = ''
+                  if (!botId) return
+                  void getBackend()
+                    .addGroupMembers?.(group.id, group.revision, [botId])
+                    .then(reload)
+                    .catch((failure: Error) => onError(failure.message))
+                }}
+              >
+                <option value="">选择</option>
+                {agents
+                  .filter((agent) => !group.members.some((member) => member.bot_id === agent.id))
+                  .map((agent) => (
+                    <option key={agent.id} value={agent.id}>
+                      {agent.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
+        )}
+        {reply && (
+          <div className="composer-reply">
+            <div>
+              <strong>回复</strong>
+              <p>{replyExcerpt(reply.content)}</p>
             </div>
-          )}
-          {reply && (
-            <div className="composer-reply">
-              <div>
-                <strong>回复</strong>
-                <p>{replyExcerpt(reply.content)}</p>
-              </div>
-              <button type="button" aria-label="取消回复" onClick={() => setReplyToId(undefined)}>
-                <X size={14} />
-              </button>
-            </div>
-          )}
-          {pending.length > 0 && (
-            <div className="composer-files">
-              {pending.map((item) => (
-                <span key={item.path}>{item.name}</span>
-              ))}
-            </div>
-          )}
-          <form
-            className="composer"
-            onSubmit={(event) => {
-              event.preventDefault()
-              void send()
+            <button type="button" aria-label="取消回复" onClick={() => setReplyToId(undefined)}>
+              <X size={14} />
+            </button>
+          </div>
+        )}
+        {pending.length > 0 && (
+          <div className="composer-files">
+            {pending.map((item) => (
+              <span key={item.path}>{item.name}</span>
+            ))}
+          </div>
+        )}
+        <form
+          className="composer"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void send()
+          }}
+        >
+          <input
+            type="file"
+            hidden
+            id="group-file"
+            onChange={(event) => {
+              void addFiles([...(event.target.files ?? [])]).catch((failure: Error) =>
+                onError(failure.message),
+              )
+              event.target.value = ''
             }}
+          />
+          <button
+            className="composer-add"
+            type="button"
+            aria-label="添加附件"
+            onClick={() => document.getElementById('group-file')?.click()}
           >
-            <input
-              type="file"
-              hidden
-              id="group-file"
-              onChange={(event) => {
-                void addFiles([...(event.target.files ?? [])]).catch((failure: Error) =>
-                  onError(failure.message),
-                )
-                event.target.value = ''
-              }}
-            />
-            <button
-              className="composer-add"
-              type="button"
-              aria-label="添加附件"
-              onClick={() => document.getElementById('group-file')?.click()}
-            >
-              <Plus size={20} />
-            </button>
-            <textarea
-              value={draft}
-              rows={1}
-              aria-label={`给${title}发消息`}
-              placeholder={`给 ${title} 发消息`}
-              onChange={(event) => setDraft(event.target.value)}
-            />
-            <button
-              className="composer-send"
-              type="submit"
-              disabled={busy || (!draft.trim() && pending.length === 0)}
-              aria-label="发送"
-            >
-              发送
-            </button>
-          </form>
-        </div>
-      )}
+            <Plus size={20} />
+          </button>
+          <textarea
+            value={draft}
+            rows={1}
+            aria-label={`给${title}发消息`}
+            placeholder={`给 ${title} 发消息`}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          <button
+            className="composer-send"
+            type="submit"
+            disabled={busy || (!draft.trim() && pending.length === 0)}
+            aria-label="发送"
+          >
+            发送
+          </button>
+        </form>
+      </div>
     </main>
+  )
+}
+
+/** 只读查看两只猫咪之间的一段私信。用户不能在这里代发。 */
+export function DmThreadDialog({
+  notice,
+  agents,
+  onClose,
+  onError,
+}: {
+  notice: DmNotice
+  agents: Agent[]
+  onClose: () => void
+  onError: (message: string) => void
+}) {
+  const [lines, setLines] = useState<ServerBubble[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void getBackend()
+      .listConversationMessages?.(notice.conversationId)
+      .then((rows) => {
+        if (!cancelled) setLines(rows ?? [])
+      })
+      .catch((failure: Error) => {
+        if (!cancelled) onError(failure.message)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [notice.conversationId, onError])
+  const title =
+    notice.direction === 'received'
+      ? `收到 ${notice.peerName} 的消息`
+      : `已发消息给 ${notice.peerName}`
+  // 消息接口按序号倒序返回，这里改回从早到晚，方便顺着读。
+  const ordered = [...lines].reverse()
+  return (
+    <Dialog title={title} onClose={onClose}>
+      <div className="dm-thread" role="log" aria-label={title}>
+        {ordered.map((line) => (
+          <p key={line.id}>
+            <strong>
+              {agents.find((agent) => agent.id === line.speaker)?.name || notice.peerName}
+            </strong>
+            <span>{line.content}</span>
+          </p>
+        ))}
+      </div>
+    </Dialog>
   )
 }
 

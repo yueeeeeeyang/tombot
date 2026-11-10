@@ -74,6 +74,14 @@ type MessageAttachment struct {
 	Kind      string `json:"kind"`
 }
 
+// DmNotice 是消息流里的私信提示，不是猫咪代替用户发出的气泡。
+type DmNotice struct {
+	Direction      string `json:"direction"`
+	PeerID         string `json:"peerId"`
+	PeerName       string `json:"peerName"`
+	ConversationID string `json:"conversationId"`
+}
+
 // ChatMessage 是气泡。未配置模型时保持 unsent，调用失败才是 failed。
 type ChatMessage struct {
 	ID          string              `json:"id"`
@@ -85,6 +93,7 @@ type ChatMessage struct {
 	ReplyTo     *Reply              `json:"replyTo,omitempty"`
 	Reactions   []Reaction          `json:"reactions"`
 	Attachments []MessageAttachment `json:"attachments,omitempty"`
+	DmNotice    *DmNotice           `json:"dmNotice,omitempty"`
 }
 
 // Reply 保存被引用消息的标识和界面摘要。

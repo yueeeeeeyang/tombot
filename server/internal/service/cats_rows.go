@@ -110,26 +110,27 @@ func (s *Service) readAgents(ctx context.Context) ([]Agent, error) {
 }
 
 func (s *Service) readMessages(ctx context.Context, agentID string) ([]ChatMessage, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT messages.id, messages.sender_kind, messages.blocks_json, messages.status, messages.created_at, messages.request_id, COALESCE(messages.reply_to_id,'') FROM messages JOIN conversations ON conversations.id=messages.conversation_id JOIN bots ON bots.id=conversations.bot_id WHERE conversations.kind='direct' AND (bots.desktop_id=? OR bots.id=?) ORDER BY messages.created_at, messages.seq`, agentID, agentID)
+	rows, err := s.db.QueryContext(ctx, `SELECT messages.id, messages.sender_kind, messages.blocks_json, messages.status, messages.created_at, messages.request_id, COALESCE(messages.reply_to_id,''), bots.id FROM messages JOIN conversations ON conversations.id=messages.conversation_id JOIN bots ON bots.id=conversations.bot_id WHERE conversations.kind='direct' AND (bots.desktop_id=? OR bots.id=?) ORDER BY messages.created_at, messages.seq`, agentID, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	messages := []ChatMessage{}
 	for rows.Next() {
-		var id, sender, encoded, status, requestID, replyID string
+		var id, sender, encoded, status, requestID, replyID, botID string
 		var created int64
-		if err = rows.Scan(&id, &sender, &encoded, &status, &created, &requestID, &replyID); err != nil {
+		if err = rows.Scan(&id, &sender, &encoded, &status, &created, &requestID, &replyID, &botID); err != nil {
 			return nil, err
 		}
 		content := textFromBlocks(encoded)
 		attachments := attachmentsFromBlocks(encoded)
-		if strings.TrimSpace(content) == "" && len(attachments) == 0 {
+		notice := dmNoticeFromBlocks(encoded, botID)
+		if strings.TrimSpace(content) == "" && len(attachments) == 0 && notice == nil {
 			continue
 		}
 		message := ChatMessage{
 			ID: id, Role: "assistant", Content: content, CreatedAt: time.UnixMilli(created).UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-			Status: desktopStatus(status), Reactions: []Reaction{}, Attachments: attachments,
+			Status: desktopStatus(status), Reactions: []Reaction{}, Attachments: attachments, DmNotice: notice,
 		}
 		if sender == "user" {
 			message.Role = "user"
@@ -162,8 +163,42 @@ func (s *Service) readMessages(ctx context.Context, agentID string) ([]ChatMessa
 			return nil, err
 		}
 		messages[index].Reactions = reactions
+		if messages[index].DmNotice == nil || messages[index].DmNotice.PeerName != "" {
+			continue
+		}
+		var peerName string
+		if err = s.db.QueryRowContext(ctx, `SELECT name FROM bots WHERE id=?`, messages[index].DmNotice.PeerID).Scan(&peerName); err != nil {
+			peerName = messages[index].DmNotice.PeerID
+		}
+		messages[index].DmNotice.PeerName = peerName
+		if messages[index].DmNotice.Direction == "received" {
+			messages[index].Content = "收到 " + peerName + " 的消息"
+		} else {
+			messages[index].Content = "已发消息给 " + peerName
+		}
 	}
 	return messages, nil
+}
+
+func dmNoticeFromBlocks(encoded, botID string) *DmNotice {
+	var blocks []domain.MessageBlock
+	if json.Unmarshal([]byte(encoded), &blocks) != nil {
+		return nil
+	}
+	for _, block := range blocks {
+		if block.Kind != "handoff" || block.Handoff == nil || block.Handoff.ConversationID == "" || block.Handoff.ErrorCode != "" {
+			continue
+		}
+		notice := &DmNotice{Direction: "sent", PeerID: block.Handoff.ToBotID, ConversationID: block.Handoff.ConversationID}
+		if block.Handoff.ToBotID == botID {
+			notice.Direction = "received"
+			notice.PeerID = block.Handoff.FromBotID
+		} else if block.Handoff.FromBotID != botID {
+			return nil
+		}
+		return notice
+	}
+	return nil
 }
 
 func (s *Service) readReactions(ctx context.Context, messageID string) ([]Reaction, error) {

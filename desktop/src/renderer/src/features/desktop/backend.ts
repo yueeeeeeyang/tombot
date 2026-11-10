@@ -58,7 +58,15 @@ export interface DesktopBackend {
   deliverMessage: (
     agentId: string,
     messageId: string,
-    onEvent?: (event: { type: string; text: string }) => void,
+    onEvent?: (event: {
+      type: string
+      text: string
+      messageId?: string
+      peerId?: string
+      peerName?: string
+      conversationId?: string
+      direction?: 'sent' | 'received'
+    }) => void,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
   listMemories?: (
@@ -92,16 +100,21 @@ export interface DesktopBackend {
   }>
   addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>
   removeGroupMember?: (id: string, revision: number, botId: string) => Promise<void>
-  listCatMessages?: () => Promise<
-    Array<{ id: string; title: string; members: Array<{ bot_id: string; name: string }> }>
-  >
   listConversationMessages?: (conversationId: string) => Promise<ServerBubble[]>
   sendConversation?: (
     conversationId: string,
     content: string,
     attachments: Array<{ path: string; sha256: string }>,
     replyToId: string | undefined,
-    onEvent?: (event: { type: string; text: string }) => void,
+    onEvent?: (event: {
+      type: string
+      text: string
+      messageId?: string
+      peerId?: string
+      peerName?: string
+      conversationId?: string
+      direction?: 'sent' | 'received'
+    }) => void,
   ) => Promise<void>
   uploadAttachment?: (
     file: { name: string; type: string; bytes: Uint8Array },

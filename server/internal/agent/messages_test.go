@@ -131,6 +131,9 @@ func TestBotMessagesReusePairsLimitRateAndIntervene(t *testing.T) {
 	if err = r.deps.DB.QueryRow("SELECT COUNT(*) FROM conversations WHERE kind='bot_dm'").Scan(&count); err != nil || count != 1 {
 		t.Fatal("未复用成员对话", count, err)
 	}
+	if err = r.deps.DB.QueryRow("SELECT COUNT(DISTINCT c.bot_id) FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.kind='direct' AND m.blocks_json LIKE '%' || ? || '%'", conversationID).Scan(&count); err != nil || count != 2 {
+		t.Fatal("双方单聊都要留下私信提示", count, err)
+	}
 	if err = r.deps.DB.QueryRow("SELECT COUNT(*) FROM messages WHERE blocks_json LIKE '%BOT_MESSAGE_RATE_LIMIT%'").Scan(&count); err != nil || count < 1 {
 		t.Fatal("未提示限流", count, err)
 	}

@@ -246,18 +246,6 @@ export function registerDesktopIpc(): void {
         ),
       ),
   )
-  ipcMain.handle('desktop:cat-messages', () =>
-    handle(async () => {
-      const page = (await call('GET', '/conversations?kind=bot_dm&limit=50')) as {
-        items?: Array<{
-          id: string
-          title: string
-          members?: Array<{ bot_id: string; name: string }>
-        }>
-      }
-      return page.items ?? []
-    }),
-  )
   ipcMain.handle('desktop:conversation-messages', (_event, conversationId: string) =>
     handle(async () => {
       const rows = (await call(
@@ -384,9 +372,29 @@ async function readStream(
       .map((line) => line.slice(6))
       .join('\n')
     if (!name || !data) return
-    const parsed = JSON.parse(data) as { text?: string; code?: string; message?: string }
+    const parsed = JSON.parse(data) as {
+      text?: string
+      code?: string
+      message?: string
+      kind?: string
+      message_id?: string
+      to_bot_id?: string
+      to_name?: string
+      conversation_id?: string
+    }
     if (name === 'delta' || name === 'process') {
       event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
+    }
+    if (name === 'dm' && parsed.kind === 'bot_message' && parsed.message_id && parsed.to_bot_id) {
+      event.sender.send('desktop:stream-event', {
+        type: 'dm',
+        text: '',
+        messageId: parsed.message_id,
+        peerId: parsed.to_bot_id,
+        peerName: parsed.to_name ?? parsed.to_bot_id,
+        conversationId: parsed.conversation_id ?? '',
+        direction: 'sent',
+      })
     }
     if (name === 'done') donePayload = parsed
     if (name === 'error') {
@@ -579,9 +587,29 @@ async function readEventStream(event: IpcMainInvokeEvent, response: Response): P
       .map((line) => line.slice(6))
       .join('\n')
     if (!name || !data) return
-    const parsed = JSON.parse(data) as { text?: string; code?: string; message?: string }
+    const parsed = JSON.parse(data) as {
+      text?: string
+      code?: string
+      message?: string
+      kind?: string
+      message_id?: string
+      to_bot_id?: string
+      to_name?: string
+      conversation_id?: string
+    }
     if (name === 'delta' || name === 'process') {
       event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
+    }
+    if (name === 'dm' && parsed.kind === 'bot_message' && parsed.message_id && parsed.to_bot_id) {
+      event.sender.send('desktop:stream-event', {
+        type: 'dm',
+        text: '',
+        messageId: parsed.message_id,
+        peerId: parsed.to_bot_id,
+        peerName: parsed.to_name ?? parsed.to_bot_id,
+        conversationId: parsed.conversation_id ?? '',
+        direction: 'sent',
+      })
     }
     if (name === 'done') donePayload = parsed
     if (name === 'error') {

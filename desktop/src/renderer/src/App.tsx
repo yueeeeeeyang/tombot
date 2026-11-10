@@ -5,10 +5,15 @@ import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { CatSidePanel } from './features/chat/CatSidePanel'
 import { ChatPanel } from './features/chat/ChatPanel'
-import { ConversationPanel, GroupCreateDialog } from './features/chat/ConversationPanel'
+import {
+  ConversationPanel,
+  DmThreadDialog,
+  GroupCreateDialog,
+} from './features/chat/ConversationPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   addAgent,
+  insertDmNotice,
   saveMessage,
   setAgentComputerUrl,
   setAgentModel,
@@ -18,7 +23,7 @@ import {
 } from './features/workspace/model'
 import { RecruitCatDialog, WorkspaceDialog } from './features/workspace/WorkspaceDialogs'
 import { getBackend } from './features/desktop/backend'
-import type { MessageAttachment } from './features/workspace/model'
+import type { DmNotice, MessageAttachment } from './features/workspace/model'
 import {
   CatContextMenu,
   type CatMenuAction,
@@ -48,7 +53,7 @@ import { useSession } from './features/session/useSession'
 import { SessionGate } from './features/session/SessionGate'
 
 type OpenDialog = 'create' | 'search' | 'settings' | 'group' | 'workspace' | null
-type Surface = { kind: 'agent' | 'group' | 'dm'; id: string }
+type Surface = { kind: 'agent' | 'group'; id: string }
 
 /** 未验证身份时只显示初始化或密码页，避免把预设工作空间当成已连接。 */
 export default function App() {
@@ -82,7 +87,7 @@ function WorkspaceApp() {
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
   const [chatGroups, setChatGroups] = useState<Array<{ id: string; name: string }>>([])
-  const [catMessages, setCatMessages] = useState<Array<{ id: string; title: string }>>([])
+  const [dmThread, setDmThread] = useState<DmNotice>()
   const [liveReply, setLiveReply] = useState<{ agentId: string; content: string }>()
 
   function startDelivery(agentId: string, messageId: string, quietWhenUnconfigured: boolean): void {
@@ -92,9 +97,30 @@ function WorkspaceApp() {
     let processLine = ''
     let reply = ''
     void deliver(agentId, messageId, (streamEvent) => {
+      if (
+        streamEvent.type === 'dm' &&
+        streamEvent.messageId &&
+        streamEvent.peerId &&
+        streamEvent.conversationId
+      ) {
+        const notice: DmNotice = {
+          direction: streamEvent.direction ?? 'sent',
+          peerId: streamEvent.peerId,
+          peerName: streamEvent.peerName ?? streamEvent.peerId,
+          conversationId: streamEvent.conversationId,
+        }
+        commit((previous) =>
+          insertDmNotice(previous, agentId, {
+            ...notice,
+            id: streamEvent.messageId!,
+            createdAt: new Date().toISOString(),
+          }),
+        )
+        return
+      }
       if (!settingsDraft.isStreaming) return
       if (streamEvent.type === 'process') processLine = streamEvent.text
-      else reply += streamEvent.text
+      else if (streamEvent.type === 'delta') reply += streamEvent.text
       const content = [processLine, reply].filter((part) => part !== '').join('\n')
       setLiveReply({ agentId, content })
     }).then((result) => {
@@ -103,10 +129,6 @@ function WorkspaceApp() {
       void window.desktop?.backend
         .listGroups?.()
         .then(setChatGroups)
-        .catch(() => undefined)
-      void window.desktop?.backend
-        .listCatMessages?.()
-        .then(setCatMessages)
         .catch(() => undefined)
       if (result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) return
       if (result.message) setNotice(result.message)
@@ -136,10 +158,6 @@ function WorkspaceApp() {
     void backend
       ?.listGroups?.()
       .then((rows) => setChatGroups(rows))
-      .catch(() => undefined)
-    void backend
-      ?.listCatMessages?.()
-      .then((rows) => setCatMessages(rows))
       .catch(() => undefined)
   }, [])
   useEffect(() => {
@@ -363,16 +381,11 @@ function WorkspaceApp() {
         onCreate={() => setOpenDialog('create')}
         onSettings={() => openSettings()}
         chatGroups={chatGroups}
-        catMessages={catMessages}
         selected={
           surface.kind === 'agent' ? { kind: 'agent', id: workspace.activeAgentId } : surface
         }
         onOpenGroup={(id) => {
           setSurface({ kind: 'group', id })
-          setCatPanelOpen(false)
-        }}
-        onOpenCatMessage={(id) => {
-          setSurface({ kind: 'dm', id })
           setCatPanelOpen(false)
         }}
         onCreateGroup={() => setOpenDialog('group')}
@@ -381,8 +394,7 @@ function WorkspaceApp() {
       <div className="chat-stage">
         {surface.kind !== 'agent' ? (
           <ConversationPanel
-            key={`${surface.kind}-${surface.id}`}
-            kind={surface.kind}
+            key={surface.id}
             id={surface.id}
             agents={workspace.agents}
             onNotice={setNotice}
@@ -486,6 +498,8 @@ function WorkspaceApp() {
             onPreview={(attachment) =>
               getBackend().previewAttachment?.(attachment.path, agent.id) ?? Promise.resolve('')
             }
+            peers={workspace.agents}
+            onOpenDm={setDmThread}
           />
         )}
         {surface.kind === 'agent' && isCatPanelOpen && (
@@ -608,6 +622,14 @@ function WorkspaceApp() {
           hiddenAgents={hiddenAgents}
           onUnhide={showHiddenAgent}
           onClose={() => setOpenDialog(null)}
+        />
+      )}
+      {dmThread && (
+        <DmThreadDialog
+          notice={dmThread}
+          agents={workspace.agents}
+          onClose={() => setDmThread(undefined)}
+          onError={setNotice}
         />
       )}
       {openDialog === 'group' && (

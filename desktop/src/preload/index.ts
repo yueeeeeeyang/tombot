@@ -27,10 +27,28 @@ contextBridge.exposeInMainWorld(
       deliverMessage: (
         agentId: string,
         messageId: string,
-        onEvent?: (event: { type: string; text: string }) => void,
+        onEvent?: (event: {
+          type: string
+          text: string
+          messageId?: string
+          peerId?: string
+          peerName?: string
+          conversationId?: string
+          direction?: 'sent' | 'received'
+        }) => void,
       ) => {
-        const listener = (_event: IpcRendererEvent, payload: { type: string; text: string }) =>
-          onEvent?.(payload)
+        const listener = (
+          _event: IpcRendererEvent,
+          payload: {
+            type: string
+            text: string
+            messageId?: string
+            peerId?: string
+            peerName?: string
+            conversationId?: string
+            direction?: 'sent' | 'received'
+          },
+        ) => onEvent?.(payload)
         ipcRenderer.on('desktop:stream-event', listener)
         return invoke('desktop:deliver', { agentId, messageId }).finally(() => {
           ipcRenderer.removeListener('desktop:stream-event', listener)
@@ -52,7 +70,6 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:group-members', { id, revision, botIds }),
       removeGroupMember: (id: string, revision: number, botId: string) =>
         invoke('desktop:group-member-remove', { id, revision, botId }),
-      listCatMessages: () => invoke('desktop:cat-messages'),
       listConversationMessages: (conversationId: string) =>
         invoke('desktop:conversation-messages', conversationId),
       sendConversation: (
