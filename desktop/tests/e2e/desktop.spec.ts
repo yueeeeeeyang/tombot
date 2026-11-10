@@ -14,6 +14,19 @@ let window: Page
 let profilePath: string
 let browserErrors: string[]
 
+/**
+ * 把页面设成指定尺寸。Linux 标题栏在窗口外侧，setSize 会让页面少掉这一截，
+ * 最小布局仍按页面 640 像素验收。
+ */
+async function setPageSize(width: number, height: number): Promise<void> {
+  await application.evaluate(
+    ({ BrowserWindow }, size) => {
+      BrowserWindow.getAllWindows()[0]!.setContentSize(size.width, size.height)
+    },
+    { width, height },
+  )
+}
+
 /** 通过自定义下拉菜单选择对应文本。 */
 async function chooseOption(label: string, option: string): Promise<void> {
   await window.getByRole('combobox', { name: label, exact: true }).click()
@@ -85,7 +98,10 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
     app.getAppMetrics().filter((metric) => metric.type === 'Tab'),
   )
   expect(rendererProcesses.length).toBeGreaterThan(0)
-  expect(rendererProcesses.every((metric) => metric.sandboxed)).toBe(true)
+  // Electron 只在 macOS 和 Windows 的进程指标里提供操作系统级沙箱标记。
+  if (process.platform === 'darwin' || process.platform === 'win32') {
+    expect(rendererProcesses.every((metric) => metric.sandboxed)).toBe(true)
+  }
   expect(await window.evaluate(() => globalThis.window.desktop?.platform)).toBe(process.platform)
   expect(await window.evaluate(() => typeof (globalThis as Record<string, unknown>).require)).toBe(
     'undefined',
@@ -169,9 +185,7 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
   const sources = await sidebarAvatars
     .locator('img')
     .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
-  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(
-    true,
-  )
+  expect(sources.every((source, index) => source.includes(presets[index] ?? 'missing'))).toBe(true)
   expect(new Set(sources).size).toBe(8)
   await window.getByRole('button', { name: '搜索助手和消息' }).click()
   expect(
@@ -205,9 +219,7 @@ test('八款猫咪头像加载、搜索一致性及深浅主题选择器', async
     })
     await window.keyboard.press('Escape')
   }
-  await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0]!.setSize(860, 640),
-  )
+  await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
   await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   const dialog = window.getByRole('dialog', { name: '招聘猫咪' })
@@ -277,9 +289,7 @@ test('自定义选择器的顶层菜单、键盘操作、关闭与最小窗口�
     await window.keyboard.press('Escape')
   }
 
-  await application.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0]!.setSize(860, 640),
-  )
+  await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
   await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   await window.getByRole('combobox', { name: '模型', exact: true }).click()
@@ -338,9 +348,7 @@ test('搜索键盘操作与最小窗口布局', async () => {
   await window.keyboard.press('Escape')
   await expect(window.getByRole('dialog')).toHaveCount(0)
 
-  await application.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]!.setSize(860, 640)
-  })
+  await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => globalThis.innerHeight)).toBe(640)
   const input = window.getByRole('textbox', { name: '给游戏美术发消息' })
   await expect(input).toBeVisible()
@@ -417,9 +425,7 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   await searchInput.press('Enter')
   await expect(window.getByRole('combobox', { name: '主题' })).toHaveText('深色')
 
-  await application.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows()[0]!.setSize(860, 640)
-  })
+  await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
   await window.getByRole('button', { name: '模型设置', exact: true }).click()
   expect(
@@ -436,6 +442,46 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   })
 })
 
+/** 底栏齿轮必须和头像外框同尺寸，图标居中且保持一半比例，悬停和键盘焦点样式仍在。 */
+async function expectFooterControlsAligned(): Promise<void> {
+  const settings = window.getByRole('button', { name: '打开设置' })
+  const metrics = await window.locator('.sidebar-footer').evaluate((footer) => {
+    const avatar = footer.querySelector('.profile-avatar')!.getBoundingClientRect()
+    const button = footer.querySelector('.settings-button')!.getBoundingClientRect()
+    const icon = footer.querySelector('.settings-button svg')!.getBoundingClientRect()
+    return {
+      avatar: { width: avatar.width, height: avatar.height },
+      button: { width: button.width, height: button.height },
+      icon: { width: icon.width, height: icon.height, x: icon.x, y: icon.y },
+      buttonOrigin: { x: button.x, y: button.y },
+    }
+  })
+  expect(metrics.button.width).toBe(metrics.avatar.width)
+  expect(metrics.button.height).toBe(metrics.avatar.height)
+  expect(metrics.icon.width).toBeCloseTo(metrics.button.width / 2, 1)
+  expect(metrics.icon.height).toBeCloseTo(metrics.button.height / 2, 1)
+  expect(metrics.icon.x + metrics.icon.width / 2).toBeCloseTo(
+    metrics.buttonOrigin.x + metrics.button.width / 2,
+    1,
+  )
+  expect(metrics.icon.y + metrics.icon.height / 2).toBeCloseTo(
+    metrics.buttonOrigin.y + metrics.button.height / 2,
+    1,
+  )
+  const resting = await settings.evaluate((element) => getComputedStyle(element).backgroundColor)
+  await settings.hover()
+  // 背景色有 150ms 过渡，刚悬停时计算值仍是静止色。
+  await expect
+    .poll(() => settings.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .not.toBe(resting)
+  await settings.evaluate((element) => {
+    if (!(element instanceof HTMLElement)) throw new Error('设置按钮不可聚焦')
+    element.focus({ focusVisible: true })
+  })
+  expect(await settings.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe('solid')
+  await window.mouse.move(1, 1)
+}
+
 /** 在真实窗口中拖动分隔线，验证指针捕获在自动收缩后仍能连续工作。 */
 async function dragSidebarTo(width: number): Promise<void> {
   const separator = window.getByRole('separator', { name: '调整侧栏宽度' })
@@ -445,6 +491,17 @@ async function dragSidebarTo(width: number): Promise<void> {
   await window.mouse.move(width, 350, { steps: 12 })
   await window.mouse.up()
 }
+
+test('侧栏底栏设置按钮与工作空间头像同尺寸', async () => {
+  await expectFooterControlsAligned()
+  await dragSidebarTo(239)
+  await expect(window.getByRole('separator', { name: '调整侧栏宽度' })).toHaveAttribute(
+    'aria-valuenow',
+    '88',
+  )
+  await expect(window.locator('.profile-copy')).toBeHidden()
+  await expectFooterControlsAligned()
+})
 
 test('侧栏拖动上限、收缩阈值、头像栏操作及重新展开', async () => {
   const separator = window.getByRole('separator', { name: '调整侧栏宽度' })
@@ -765,10 +822,11 @@ for (const modal of [
     const trigger = window.getByRole('button', { name: modal.trigger, exact: true })
     const dialog = window.getByRole('dialog', { name: modal.title, exact: true })
     const backgroundRegions = window.locator('.sidebar-toolbar, .chat-header')
+    const viewport = await window.evaluate(() => ({ width: innerWidth, height: innerHeight }))
     for (const point of [
-      { x: 1030, y: 400 },
+      { x: viewport.width - 43, y: 400 },
       { x: 900, y: 20 },
-      { x: 700, y: 760 },
+      { x: 700, y: viewport.height - 20 },
       { x: 60, y: 400 },
     ]) {
       await trigger.click()

@@ -273,6 +273,7 @@ button:disabled {
   white-space: nowrap;
 }
 .sidebar-footer {
+  --footer-control-size: 36px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -294,8 +295,8 @@ button:disabled {
   border-radius: 50%;
   background: var(--border);
   color: var(--text-secondary);
-  width: 36px;
-  height: 36px;
+  width: var(--footer-control-size);
+  height: var(--footer-control-size);
   border: 1px solid var(--border-strong);
   display: grid;
   place-items: center;
@@ -322,9 +323,16 @@ button:disabled {
   background: var(--subtle);
   border-radius: 50%;
 }
+/* 底栏齿轮和工作空间头像共用外框，展开和收缩都保持这一尺寸。 */
 .settings-button {
+  width: var(--footer-control-size);
+  height: var(--footer-control-size);
   box-shadow: none;
   color: var(--text);
+}
+.settings-button svg {
+  width: calc(var(--footer-control-size) / 2);
+  height: calc(var(--footer-control-size) / 2);
 }
 
 .chat-panel {

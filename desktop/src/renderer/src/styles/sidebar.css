@@ -97,8 +97,6 @@
   order: 2;
 }
 .sidebar-is-collapsed .settings-button {
-  width: 28px;
-  height: 28px;
   background: transparent;
   border: 0;
 }
