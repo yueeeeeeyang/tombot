@@ -44,7 +44,7 @@ type Dependencies struct {
 	WorkspaceDir string
 }
 
-// Snapshot 是一次读取到的工作空间。Pristine 为真时才接受本机旧档导入。
+// Snapshot 是一次读取到的工作空间。Pristine 只表示还没有用户改动。
 type Snapshot struct {
 	Workspace Workspace `json:"workspace"`
 	Pristine  bool      `json:"pristine"`
@@ -178,30 +178,6 @@ func (s *Service) Save(ctx context.Context, workspace Workspace) (Snapshot, erro
 		return Snapshot{}, err
 	}
 	return Snapshot{Workspace: row.workspace, Pristine: false, Revision: row.revision}, nil
-}
-
-// Import 只在服务端还是预设、没有用户改动时接收本机旧档。之后拒绝覆盖。
-func (s *Service) Import(ctx context.Context, workspace Workspace) (Snapshot, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := validateWorkspace(&workspace); err != nil {
-		return Snapshot{}, err
-	}
-	row, err := s.ensureState(ctx)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	if !row.pristine {
-		return Snapshot{}, domain.NewError(409, "WORKSPACE_NOT_PRISTINE", "服务端已有工作空间，不能再用本机旧档覆盖。")
-	}
-	row.workspace = workspace
-	row.pristine = false
-	row.revision++
-	if err = s.writeState(ctx, row); err != nil {
-		return Snapshot{}, err
-	}
-	s.logger.Info("已导入桌面旧工作空间", "revision", row.revision)
-	return Snapshot{Workspace: workspace, Pristine: false, Revision: row.revision}, nil
 }
 
 // LoadModelForm 返回表单和密钥是否存在，不返回密钥本身。

@@ -78,7 +78,6 @@ export interface DesktopBackend {
   tryWorkspaceSync?: () => WorkspaceSnapshot
   loadWorkspace: () => Promise<WorkspaceSnapshot>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
-  importWorkspace: (workspace: AppWorkspace) => AppWorkspace | Promise<AppWorkspace>
   deliverMessage: (
     agentId: string,
     messageId: string,

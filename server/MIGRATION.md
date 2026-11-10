@@ -20,7 +20,7 @@
 | 是否已初始化 | `GET /api/v1/auth/status` |
 | 初始化 | `POST /api/v1/auth/setup`，正文 `{password, setupCode}` |
 | 验证密码 | `POST /api/v1/auth/login`，正文 `{password, deviceName, platform}` |
-| 读写八只猫咪的界面文档 | `GET` / `PUT /api/v1/workspace`，`POST /api/v1/workspace/import` |
+| 读写八只猫咪的界面文档 | `GET` / `PUT /api/v1/workspace` |
 | 模型表单 | `GET` / `PUT /api/v1/model-settings` |
 | 发送并观看 agent | `POST /api/v1/messages/stream` |
 | 打开这只猫咪的电脑 | `POST /api/v1/computer`，画面在 `GET /api/v1/computer/view` |
@@ -43,7 +43,7 @@
 | 表情 | `message_reactions` |
 | 资料库 | `bot_artifacts` |
 
-已有 `desktop_state` 会在删表前抄进这些列。和 agent 已经写过的同一条正文不会再插一遍。本机 v1–v5 旧档导入也走这套列，不再写 JSON。
+已有 `desktop_state` 会在删表前抄进这些列。和 agent 已经写过的同一条正文不会再插一遍。客户端不再读取或导入本机 v1–v5 旧档。服务第一次打开工作空间时种下和空界面一致的八只预设猫咪，之后侧栏只显示这份服务端数据。
 
 招聘时选中的模型名称写入这只猫咪的 `catalog_model_id`。发送时在原来的模型目录里找到或创建同名模型，`bots.model_id` 指向它，agent 运行时用这一行。
 
@@ -117,4 +117,4 @@ cd desktop && npm run check && npm run test:e2e
 
 ## 回滚
 
-`0018` 到 `0020` 都是向前迁移，不改历史脚本。`0020` 会删除 `desktop_state`。回滚程序前先停机备份 `TOM_DATA_DIR` 和 `TOM_WORKSPACE_DIR`。旧二进制打不开版本 20 的数据库，也不能把删掉的 JSON 找回来。客户端回滚后会重新读取本机旧档；已经导入到服务的内容不会自动写回 localStorage。
+`0018` 到 `0020` 都是向前迁移，不改历史脚本。`0020` 会删除 `desktop_state`。回滚程序前先停机备份 `TOM_DATA_DIR` 和 `TOM_WORKSPACE_DIR`。旧二进制打不开版本 20 的数据库，也不能把删掉的 JSON 找回来。客户端不再读取本机工作空间旧档。回滚到仍会导入旧档的客户端时，本机 localStorage 里如果还留着旧档，可能再次尝试导入；服务端已经有改动时会拒绝覆盖。

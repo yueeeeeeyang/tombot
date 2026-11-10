@@ -436,6 +436,10 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
   expect(await window.evaluate(() => typeof (globalThis as Record<string, unknown>).process)).toBe(
     'undefined',
   )
+  await expect(window.getByText('本地模式')).toHaveCount(0)
+  await expect(window.getByRole('button', { name: '我的工作空间' })).toContainText(
+    new URL(companion.url).host,
+  )
 
   await configureModel()
   await window.getByRole('button', { name: '新建', exact: true }).click()

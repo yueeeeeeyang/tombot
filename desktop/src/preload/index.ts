@@ -31,7 +31,6 @@ contextBridge.exposeInMainWorld(
       login: (password: string) => invoke('desktop:login', password),
       loadWorkspace: () => invoke('desktop:load-workspace'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
-      importWorkspace: (workspace: unknown) => invoke('desktop:import-workspace', workspace),
       deliverMessage: (
         agentId: string,
         messageId: string,

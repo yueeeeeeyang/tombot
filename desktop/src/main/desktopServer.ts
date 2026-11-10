@@ -20,7 +20,6 @@ const codeMessages: Record<string, string> = {
   BOOTSTRAP_RUNNING: '引导正在进行，请稍候。',
   MODEL_NOT_READY: '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
-  WORKSPACE_NOT_PRISTINE: '服务端已有工作空间，本机旧档没有导入。',
   OFFLINE: '无法连接服务。请确认地址和网络后重试。',
   SERVER_URL_MISSING: '还没有填写服务地址。',
 }
@@ -310,14 +309,6 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:load-workspace', () => handle(() => call('GET', '/workspace')))
   ipcMain.handle('desktop:save-workspace', (_event, workspace: unknown) =>
     handle(() => call('PUT', '/workspace', workspace)),
-  )
-  ipcMain.handle('desktop:import-workspace', (_event, workspace: unknown) =>
-    handle(async () => {
-      const snapshot = (await call('POST', '/workspace/import', workspace)) as {
-        workspace: unknown
-      }
-      return snapshot.workspace
-    }),
   )
   ipcMain.handle('desktop:deliver', (event, input: { agentId: string; messageId: string }) =>
     handle(async () => {

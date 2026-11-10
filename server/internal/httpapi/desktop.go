@@ -18,7 +18,6 @@ func (s *Server) workspaceRoutes(router chi.Router) {
 		protected.Use(s.authenticate)
 		protected.Get("/workspace", s.desktopLoadWorkspace)
 		protected.Put("/workspace", s.desktopSaveWorkspace)
-		protected.Post("/workspace/import", s.desktopImportWorkspace)
 		protected.Post("/messages/stream", s.streamWorkspaceMessage)
 		protected.Get("/conversations", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
 			limit, err := pageLimit(r, 50)
@@ -68,24 +67,6 @@ func (s *Server) desktopSaveWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	snapshot, err := s.Workspace.Save(r.Context(), workspace)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	s.respond(w, r, http.StatusOK, snapshot)
-}
-
-func (s *Server) desktopImportWorkspace(w http.ResponseWriter, r *http.Request) {
-	if err := s.requireDesktop(); err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	workspace, err := decodeWorkspace(w, r)
-	if err != nil {
-		s.fail(w, r, err)
-		return
-	}
-	snapshot, err := s.Workspace.Import(r.Context(), workspace)
 	if err != nil {
 		s.fail(w, r, err)
 		return

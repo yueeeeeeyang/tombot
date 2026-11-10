@@ -115,13 +115,6 @@ export class MemoryBackend implements DesktopBackend {
     this.pristine = false
   }
 
-  importWorkspace(workspace: AppWorkspace): AppWorkspace {
-    if (!this.pristine) throw new Error('服务端已有工作空间，不能再用本机旧档覆盖。')
-    this.workspace = workspace
-    this.pristine = false
-    return workspace
-  }
-
   listMemories(): Promise<Array<{ path: string; title: string; summary: string; sha256: string }>> {
     return Promise.resolve([])
   }

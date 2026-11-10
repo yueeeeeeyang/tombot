@@ -318,13 +318,19 @@ describe('客户端交互', () => {
     expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('不能丢失的想法')
   })
 
-  it('把本机旧工作空间导入尚未改动的服务', () => {
+  it('本机旧档不会导入，侧栏显示已连接服务的主机名', () => {
+    memoryBackend.serverUrl = 'https://tom.example.com:8443'
     const legacy = createWorkspace()
     legacy.agents[0]!.draft = '旧草稿'
     localStorage.setItem(STORAGE_KEY, JSON.stringify(legacy))
     render(<App />)
-    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('旧草稿')
-    expect(memoryBackend.tryWorkspaceSync().pristine).toBe(false)
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('')
+    expect(screen.queryByText('服务端已有工作空间，本机旧档没有导入。')).not.toBeInTheDocument()
+    expect(screen.queryByText('本地模式')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '我的工作空间' })).toHaveTextContent(
+      'tom.example.com:8443',
+    )
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('')
   })
 
   it('未初始化时先核对初始化码和密码，通过后才进入工作空间', async () => {
@@ -362,11 +368,11 @@ describe('客户端交互', () => {
     expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
   })
 
-  it('存储损坏时禁止输入，不覆盖原内容', () => {
+  it('损坏的本机旧档不会挡住服务端工作空间', () => {
     localStorage.setItem(STORAGE_KEY, '损坏内容')
     render(<App />)
-    expect(screen.getByRole('alert')).toHaveTextContent('原始内容已保留')
-    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeDisabled()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeEnabled()
     expect(localStorage.getItem(STORAGE_KEY)).toBe('损坏内容')
   })
 

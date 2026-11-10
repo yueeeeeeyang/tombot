@@ -60,11 +60,11 @@ export default function App() {
   const session = useSession()
   useTheme()
   if (session.phase !== 'ready') return <SessionGate session={session} />
-  return <WorkspaceApp />
+  return <WorkspaceApp serverUrl={session.serverUrl} />
 }
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
-function WorkspaceApp() {
+function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const { workspace, commit, deliver, error, isBlocked, ready } = useWorkspace()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
@@ -389,6 +389,7 @@ function WorkspaceApp() {
           setCatPanelOpen(false)
         }}
         onCreateGroup={() => setOpenDialog('group')}
+        serverUrl={serverUrl}
       />
       <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} onResizing={setResizing} />
       <div className="chat-stage">

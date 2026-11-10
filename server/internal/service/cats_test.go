@@ -15,7 +15,7 @@ import (
 	"io.yueyang/tom/internal/testkit"
 )
 
-func TestWorkspaceSeedSaveAndImport(t *testing.T) {
+func TestWorkspaceSeedAndSave(t *testing.T) {
 	service := newService(t)
 	ctx := context.Background()
 	first, err := service.Load(ctx)
@@ -43,17 +43,6 @@ func TestWorkspaceSeedSaveAndImport(t *testing.T) {
 	}
 	if _, err = service.db.Exec(`SELECT 1 FROM desktop_state`); err == nil {
 		t.Fatal("desktop_state 应该已经删除")
-	}
-	imported := SeedWorkspace()
-	imported.Agents[0].Name = "被拒绝的导入"
-	if _, err = service.Import(ctx, imported); err == nil {
-		t.Fatal("已有改动的工作空间不能被旧档覆盖")
-	}
-	fresh := newService(t)
-	imported.Agents[0].Name = "从旧档回来"
-	loaded, err := fresh.Import(ctx, imported)
-	if err != nil || loaded.Workspace.Agents[0].Name != "从旧档回来" || loaded.Pristine {
-		t.Fatal("空白服务应接受一次旧档导入", err)
 	}
 }
 
