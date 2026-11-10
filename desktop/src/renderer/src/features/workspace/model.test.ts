@@ -326,13 +326,15 @@ describe('工作空间领域规则', () => {
     expect(markdown).toContain('已存内容')
   })
 
-  it('可以更换猫咪模型，未知模型或猫咪不存在时不改原数据', () => {
+  it('可以更换猫咪模型，空模型或猫咪不存在时不改原数据', () => {
     const workspace = createWorkspace()
     const changed = setAgentModel(workspace, 'assistant', 'claude-sonnet')
     expect(changed.agents[0]?.modelId).toBe('claude-sonnet')
     expect(workspace.agents[0]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
     expect(changed.agents[1]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
-    expect(() => setAgentModel(workspace, 'assistant', '不存在的模型')).toThrow('列表中的模型')
+    const named = setAgentModel(workspace, 'assistant', '写作模型')
+    expect(named.agents[0]?.modelId).toBe('写作模型')
+    expect(() => setAgentModel(workspace, 'assistant', '   ')).toThrow('列表中的模型')
     expect(() => setAgentModel(workspace, 'missing', 'gpt-4o')).toThrow('助手不存在')
     expect(workspace.agents[0]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
   })

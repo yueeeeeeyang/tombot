@@ -36,6 +36,7 @@ func BotTemplates() []BotTemplate {
 }
 
 type BotInput struct {
+	ID              string                  `json:"-"`
 	Name            string                  `json:"name"`
 	RoleTitle       string                  `json:"role_title"`
 	Soul            string                  `json:"soul"`
@@ -186,7 +187,10 @@ func (s *Bots) Create(ctx context.Context, input BotInput, actor string) (bot do
 		}
 	}
 	now := time.Now().UTC()
-	id := ids.New()
+	id := input.ID
+	if id == "" {
+		id = ids.New()
+	}
 	digest := sha256.Sum256([]byte(id))
 	hue := (int(digest[0])*256 + int(digest[1])) % 360
 	if input.AccentHue != nil {

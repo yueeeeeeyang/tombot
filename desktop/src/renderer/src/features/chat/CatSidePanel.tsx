@@ -1,14 +1,20 @@
 import { Download, X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
-import { Select } from '../../components/Select'
-import { catModelOptions, type CatModelId } from '../models/catalog'
+import { Select, type SelectOption } from '../../components/Select'
+import { catModelOptions } from '../models/catalog'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'
 import { ComputerPane } from './ComputerPane'
 
 const PANEL_TABS = ['details', 'library', 'computer'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
+function modelOptions(modelId: string): readonly SelectOption[] {
+  const catalog = catModelOptions()
+  if (catalog.some((option) => option.value === modelId)) return catalog
+  return [{ value: modelId, label: modelId }, ...catalog]
+}
+
 const TAB_LABELS: Record<PanelTab, string> = {
   details: '详情',
   library: '资料库',
@@ -27,7 +33,7 @@ export function CatSidePanel({
 }: {
   agent: Agent
   onClose: () => void
-  onModelChange: (modelId: CatModelId) => void
+  onModelChange: (modelId: string) => void
   onComputerUrl: (computerUrl: string) => void
   onConnectComputer?: () => void
   onExport: () => void
@@ -118,10 +124,10 @@ export function CatSidePanel({
             <Select
               label="模型"
               value={agent.modelId}
-              options={catModelOptions()}
+              options={modelOptions(agent.modelId)}
               onChange={onModelChange}
             />
-            <small>选择会保存到服务。调用供应商时使用设置里的地址和模型名称。</small>
+            <small>选择会保存到服务。回复时使用这只猫咪自己的模型。</small>
           </section>
           <button type="button" className="secondary-button cat-panel-export" onClick={onExport}>
             <Download size={15} />

@@ -4,9 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 
 	"io.yueyang/tom/internal/domain"
-	"io.yueyang/tom/internal/store"
 )
 
 // syncModel 把桌面里填写的供应商写入原来的目录和密钥，返回模型标识。
@@ -35,6 +35,30 @@ func (s *Service) syncModel(ctx context.Context, form ModelForm, apiKey string) 
 		contextWindow = tokens
 	}
 	return s.ensureModel(ctx, providerID, form.ModelName, contextWindow, tokens)
+}
+
+// modelForAgent 先记下设置里的供应商，再让这只猫咪的 modelId 成为实际调用的模型。
+func (s *Service) modelForAgent(ctx context.Context, form ModelForm, apiKey, catalogID string) (string, error) {
+	if _, err := s.syncModel(ctx, form, apiKey); err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(catalogID)
+	if key == "" {
+		key = form.ModelName
+	}
+	var providerID string
+	if err := s.db.QueryRowContext(ctx, `SELECT id FROM providers WHERE display_name='桌面' ORDER BY created_at LIMIT 1`).Scan(&providerID); err != nil {
+		return "", err
+	}
+	tokens, _ := parseTokenLimit(form.MaxOutputTokens)
+	if tokens < 1 {
+		tokens = 1024
+	}
+	contextWindow := 8192
+	if tokens > contextWindow {
+		contextWindow = tokens
+	}
+	return s.ensureModel(ctx, providerID, key, contextWindow, tokens)
 }
 
 func (s *Service) ensureSecret(ctx context.Context, apiKey string) (*string, error) {
@@ -106,7 +130,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 		return "", domain.NewError(500, "AGENT_UNAVAILABLE", "服务端 agent 还没有启动。")
 	}
 	var botID, conversationID string
-	err := s.db.QueryRowContext(ctx, `SELECT bot_id, conversation_id FROM desktop_agent_link WHERE agent_id=?`, agent.ID).Scan(&botID, &conversationID)
+	err := s.db.QueryRowContext(ctx, `SELECT bots.id, conversations.id FROM bots JOIN conversations ON conversations.bot_id=bots.id AND conversations.kind='direct' AND conversations.source!='routine' WHERE bots.id=? OR bots.desktop_id=?`, agent.ID, agent.ID).Scan(&botID, &conversationID)
 	if err == nil {
 		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}}
 		if modelID != "" {
@@ -124,7 +148,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 		modelPtr = &modelID
 	}
 	created, err := s.bots.Create(ctx, BotInput{
-		Name: agent.Name, RoleTitle: role,
+		ID: agent.ID, Name: agent.Name, RoleTitle: role,
 		Soul:       "You are the user's cat assistant running on Tom. Think, use tools when they help, and stay inside your workspace. Reply in the user's language.",
 		ModelID:    modelPtr,
 		ToolPolicy: &domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search"}, Approval: "loose"},
@@ -132,10 +156,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	if err != nil {
 		return "", err
 	}
-	if err = store.Transact(ctx, s.db, func(tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, `INSERT INTO desktop_agent_link(agent_id, bot_id, conversation_id) VALUES(?,?,?)`, agent.ID, created.ID, created.ConversationID)
-		return execErr
-	}); err != nil {
+	if _, err = s.db.ExecContext(ctx, `UPDATE bots SET desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=? WHERE id=? AND desktop_id IS NULL`, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, created.ID); err != nil {
 		return "", err
 	}
 	return created.ConversationID, nil
@@ -159,7 +180,7 @@ func fitRole(description string) string {
 // BotID 返回猫咪对应的 Bot，电脑页要用它的工作区。
 func (s *Service) BotID(ctx context.Context, agentID string) (string, error) {
 	var botID string
-	err := s.db.QueryRowContext(ctx, `SELECT bot_id FROM desktop_agent_link WHERE agent_id=?`, agentID).Scan(&botID)
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM bots WHERE id=? OR desktop_id=?`, agentID, agentID).Scan(&botID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", domain.NewError(404, "AGENT_NOT_FOUND", "这只猫咪还没有电脑。")
 	}

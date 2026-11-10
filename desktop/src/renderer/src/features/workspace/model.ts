@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { CAT_AVATAR_IDS, DEFAULT_AGENT_AVATARS } from '../avatars/presets'
-import { CAT_MODEL_IDS, DEFAULT_CAT_MODEL_ID, isCatModelId } from '../models/catalog'
+import { CAT_MODEL_IDS, DEFAULT_CAT_MODEL_ID } from '../models/catalog'
 import { isReactionEmoji, REACTION_EMOJIS, type ReactionEmoji } from './reactions'
 
 export const MAX_MESSAGE_LENGTH = 10_000
@@ -169,7 +169,7 @@ export const agentSchema = z
     description: z.string().trim().max(120, '助手介绍最多 120 个字'),
     group: groupNameSchema,
     avatar: z.enum(CAT_AVATAR_IDS, { error: '请选择预设猫咪头像' }),
-    modelId: z.enum(CAT_MODEL_IDS, { error: '请选择列表中的模型' }),
+    modelId: z.string().trim().min(1, '请选择列表中的模型').max(120, '模型名称过长'),
     messages: z.array(messageSchema).max(MAX_MESSAGES),
     draft: z.string().max(MAX_MESSAGE_LENGTH),
     artifacts: z.array(artifactSchema).max(MAX_ARTIFACTS),
@@ -231,12 +231,17 @@ export function createWorkspace(): AppWorkspace {
 }
 
 /** 校验名称及容量后添加助手；冲突或输入无效时抛出中文错误。 */
-export function addAgent(workspace: AppWorkspace, profile: NewAgent, id: string): AppWorkspace {
+export function addAgent(
+  workspace: AppWorkspace,
+  profile: NewAgent,
+  id: string,
+  modelId: string = DEFAULT_CAT_MODEL_ID,
+): AppWorkspace {
   if (workspace.agents.length >= MAX_AGENTS) throw new Error(`最多创建 ${MAX_AGENTS} 个助手`)
   const result = agentSchema.safeParse({
     ...profile,
     id,
-    modelId: DEFAULT_CAT_MODEL_ID,
+    modelId,
     messages: [],
     draft: '',
     artifacts: [],
@@ -261,11 +266,14 @@ export function setAgentModel(
   agentId: string,
   modelId: string,
 ): AppWorkspace {
-  if (!isCatModelId(modelId)) throw new Error('请选择列表中的模型')
+  const trimmed = modelId.trim()
+  if (!trimmed || trimmed.length > 120) throw new Error('请选择列表中的模型')
   if (!workspace.agents.some((agent) => agent.id === agentId)) throw new Error('助手不存在')
   return {
     ...workspace,
-    agents: workspace.agents.map((agent) => (agent.id === agentId ? { ...agent, modelId } : agent)),
+    agents: workspace.agents.map((agent) =>
+      agent.id === agentId ? { ...agent, modelId: trimmed } : agent,
+    ),
   }
 }
 

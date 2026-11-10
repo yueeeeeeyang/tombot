@@ -172,9 +172,9 @@ function WorkspaceApp() {
     setSettingsSection(section)
     setOpenDialog('settings')
   }
-  function createAgent(profile: NewAgent): void {
+  function createAgent(profile: NewAgent, model: { label: string }): void {
     const id = crypto.randomUUID()
-    commit((previous) => addAgent(previous, profile, id))
+    commit((previous) => addAgent(previous, profile, id, model.label))
     setRecruitProfile(undefined)
     setOpenDialog(null)
   }

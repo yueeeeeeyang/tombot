@@ -194,7 +194,7 @@ func validateAgent(agent *Agent, messageIDs map[string]struct{}) error {
 	if _, ok := avatars[agent.Avatar]; !ok {
 		return invalidWorkspace("请选择预设猫咪头像")
 	}
-	if _, ok := catalogModels[agent.ModelID]; !ok {
+	if !validCatalogOrNamedModel(agent.ModelID) {
 		return invalidWorkspace("请选择列表中的模型")
 	}
 	if !validComputerURL(agent.ComputerURL) {
@@ -290,6 +290,13 @@ func validateArtifact(artifact Artifact) error {
 		return invalidWorkspace("产物预览无效")
 	}
 	return nil
+}
+
+func validCatalogOrNamedModel(id string) bool {
+	if _, ok := catalogModels[id]; ok {
+		return true
+	}
+	return id != "" && strings.TrimSpace(id) == id && utf16Len(id) <= 120 && !strings.ContainsAny(id, "\r\n")
 }
 
 func validComputerURL(value string) bool {

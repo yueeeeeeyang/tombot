@@ -132,7 +132,9 @@ export function RecruitCatDialog({
         <button className="primary-button" type="submit" disabled={modelOptions.length === 0}>
           招聘猫咪
         </button>
-        <p className="form-footnote">猫咪资料会保存到服务。这里的模型名称只决定能否招聘。</p>
+        <p className="form-footnote">
+          猫咪资料会保存到服务。这里选中的模型会写进这只猫咪，回复时使用它。
+        </p>
       </form>
     </Dialog>
   )

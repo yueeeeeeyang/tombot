@@ -35,7 +35,14 @@ func TestWorkspaceSeedSaveAndImport(t *testing.T) {
 	}
 	again, err := service.Load(ctx)
 	if err != nil || again.Workspace.Agents[0].Draft != "还没发送" || again.Pristine {
-		t.Fatal("重新读取没有保留草稿", err)
+		t.Fatalf("重新读取没有保留草稿 %+v %v", again.Workspace.Agents[0], err)
+	}
+	var draft string
+	if err = service.db.QueryRow(`SELECT draft FROM bots WHERE desktop_id='assistant'`).Scan(&draft); err != nil || draft != "还没发送" {
+		t.Fatal("草稿应写在 bots.draft", err, draft)
+	}
+	if _, err = service.db.Exec(`SELECT 1 FROM desktop_state`); err == nil {
+		t.Fatal("desktop_state 应该已经删除")
 	}
 	imported := SeedWorkspace()
 	imported.Agents[0].Name = "被拒绝的导入"

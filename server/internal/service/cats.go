@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -15,7 +14,6 @@ import (
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/secret"
-	"io.yueyang/tom/internal/store"
 )
 
 const apiKeyRecord = "desktop-settings"
@@ -118,7 +116,7 @@ func (s *Service) OpenComputer(ctx context.Context, agentID, base string) (strin
 			return "", keyErr
 		}
 		defer clearBytes(apiKey)
-		modelID, err = s.syncModel(ctx, row.settings, string(apiKey))
+		modelID, err = s.modelForAgent(ctx, row.settings, string(apiKey), agent.ModelID)
 		if err != nil {
 			return "", err
 		}
@@ -232,6 +230,7 @@ func (s *Service) SaveModelForm(ctx context.Context, settings ModelForm, apiKey 
 		return ModelFormView{}, err
 	}
 	row.settings = settings
+	// 模型表单和消息修订分开。保存设置不能让正在进行的发送被判成冲突。
 	switch {
 	case clearKey:
 		row.nonce, row.ciphertext = nil, nil
@@ -245,7 +244,6 @@ func (s *Service) SaveModelForm(ctx context.Context, settings ModelForm, apiKey 
 		}
 		row.ciphertext, row.nonce = ciphertext, nonce
 	}
-	row.revision++
 	if err = s.writeState(ctx, row); err != nil {
 		return ModelFormView{}, err
 	}
@@ -301,7 +299,7 @@ func (s *Service) PrepareDispatch(ctx context.Context, agentID, messageID string
 		return Dispatch{}, keyErr
 	}
 	defer clearBytes(apiKey)
-	modelID, err := s.syncModel(ctx, settings, string(apiKey))
+	modelID, err := s.modelForAgent(ctx, settings, string(apiKey), agent.ModelID)
 	if err != nil {
 		return Dispatch{}, err
 	}
@@ -321,18 +319,45 @@ func (s *Service) ApplyRun(ctx context.Context, agentID, messageID string, revis
 		return Delivery{}, err
 	}
 	if current.revision != revision {
-		return Delivery{}, domain.NewError(409, "WORKSPACE_CONFLICT", "工作空间刚被更新，请重新发送。")
+		s.logger.Info("发送期间工作空间有新的保存，结果写回最新版本", "agent_id", agentID, "message_id", messageID, "captured_revision", revision, "current_revision", current.revision)
 	}
 	agentIndex, messageIndex, findErr := findUserMessage(current.workspace, agentID, messageID)
 	if findErr != nil {
 		return Delivery{}, findErr
 	}
-	target := &current.workspace.Agents[agentIndex].Messages[messageIndex]
+	messages := current.workspace.Agents[agentIndex].Messages
+	target := messages[messageIndex]
 	if target.RequestID == "" {
 		target.RequestID = ids.New()
 	}
+	if twin, twinErr := s.findUserTwin(ctx, agentID, target.Content, target.ID); twinErr != nil {
+		return Delivery{}, twinErr
+	} else if twin != "" {
+		target.ID = twin
+		next := make([]ChatMessage, 0, len(messages))
+		for index, message := range messages {
+			if index == messageIndex {
+				next = append(next, target)
+				continue
+			}
+			if message.ID == twin {
+				continue
+			}
+			next = append(next, message)
+		}
+		messages = next
+		messageIndex = 0
+		for index, message := range messages {
+			if message.ID == target.ID {
+				messageIndex = index
+				break
+			}
+		}
+	}
+	current.workspace.Agents[agentIndex].Messages = messages
+	current.workspace.Agents[agentIndex].Messages[messageIndex].RequestID = target.RequestID
 	if runErr != nil && strings.TrimSpace(reply) == "" {
-		target.Status = "failed"
+		current.workspace.Agents[agentIndex].Messages[messageIndex].Status = "failed"
 		return s.storeRun(ctx, current, agentID, messageID, target.RequestID, "模型没有完成回复。", runErr)
 	}
 	status := "sent"
@@ -346,15 +371,33 @@ func (s *Service) ApplyRun(ctx context.Context, agentID, messageID string, revis
 		if errors.As(runErr, &failure) && failure.Message != "" {
 			notice = failure.Message
 		}
-		target.Status = "failed"
-	} else {
-		target.Status = "sent"
 	}
+	current.workspace.Agents[agentIndex].Messages[messageIndex].Status = status
 	if strings.TrimSpace(reply) != "" {
-		current.workspace.Agents[agentIndex].Messages = append(current.workspace.Agents[agentIndex].Messages, ChatMessage{
-			ID: ids.New(), Role: "assistant", Content: strings.TrimSpace(reply), CreatedAt: s.now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
-			Status: status, RequestID: target.RequestID, Reactions: []Reaction{},
-		})
+		assistantID, findErr := s.findAssistantMessage(ctx, agentID, strings.TrimSpace(reply))
+		if findErr != nil {
+			return Delivery{}, findErr
+		}
+		if assistantID == "" {
+			assistantID = ids.New()
+		}
+		replaced := false
+		for index := range current.workspace.Agents[agentIndex].Messages {
+			if current.workspace.Agents[agentIndex].Messages[index].ID != assistantID {
+				continue
+			}
+			current.workspace.Agents[agentIndex].Messages[index].Content = strings.TrimSpace(reply)
+			current.workspace.Agents[agentIndex].Messages[index].Status = status
+			current.workspace.Agents[agentIndex].Messages[index].Role = "assistant"
+			replaced = true
+			break
+		}
+		if !replaced {
+			current.workspace.Agents[agentIndex].Messages = append(current.workspace.Agents[agentIndex].Messages, ChatMessage{
+				ID: assistantID, Role: "assistant", Content: strings.TrimSpace(reply), CreatedAt: s.now().UTC().Format("2006-01-02T15:04:05.000Z07:00"),
+				Status: status, RequestID: target.RequestID, Reactions: []Reaction{},
+			})
+		}
 	}
 	if err = validateWorkspace(&current.workspace); err != nil {
 		return Delivery{}, err
@@ -410,87 +453,6 @@ func (s *Service) openAPIKey(row stateRow) ([]byte, error) {
 		return nil, domain.NewError(500, "KEY_UNAVAILABLE", "服务端主密钥不可用。")
 	}
 	return secure.Open(s.key, row.ciphertext, row.nonce, apiKeyRecord)
-}
-
-func (s *Service) ensureState(ctx context.Context) (stateRow, error) {
-	row, err := s.readState(ctx)
-	if err == nil {
-		return row, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return stateRow{}, err
-	}
-	workspace := SeedWorkspace()
-	settings := DefaultModelForm()
-	encodedWorkspace, err := json.Marshal(workspace)
-	if err != nil {
-		return stateRow{}, err
-	}
-	encodedModelForm, err := json.Marshal(settings)
-	if err != nil {
-		return stateRow{}, err
-	}
-	err = store.Transact(ctx, s.db, func(tx *sql.Tx) error {
-		_, execErr := tx.ExecContext(ctx, `INSERT INTO desktop_state(id,workspace_json,revision,pristine,settings_json,updated_at) VALUES(1,?,1,1,?,?)`, string(encodedWorkspace), string(encodedModelForm), s.now().UnixMilli())
-		return execErr
-	})
-	if err != nil {
-		// 并发首次读取时另一事务可能已经插入。
-		if row, readErr := s.readState(ctx); readErr == nil {
-			return row, nil
-		}
-		return stateRow{}, err
-	}
-	return stateRow{workspace: workspace, revision: 1, pristine: true, settings: settings}, nil
-}
-
-func (s *Service) readState(ctx context.Context) (stateRow, error) {
-	var workspaceJSON, settingsJSON string
-	var revision int64
-	var pristine int
-	var nonce, ciphertext []byte
-	err := s.db.QueryRowContext(ctx, `SELECT workspace_json,revision,pristine,settings_json,api_key_nonce,api_key_ciphertext FROM desktop_state WHERE id=1`).Scan(&workspaceJSON, &revision, &pristine, &settingsJSON, &nonce, &ciphertext)
-	if err != nil {
-		return stateRow{}, err
-	}
-	workspace, err := ParseWorkspace([]byte(workspaceJSON))
-	if err != nil {
-		return stateRow{}, domain.NewError(500, "WORKSPACE_CORRUPT", "服务端工作空间已损坏，原始内容已保留。")
-	}
-	settings, err := ParseModelForm([]byte(settingsJSON))
-	if err != nil {
-		return stateRow{}, domain.NewError(500, "SETTINGS_CORRUPT", "服务端模型设置已损坏，原始内容已保留。")
-	}
-	return stateRow{workspace: workspace, revision: revision, pristine: pristine == 1, settings: settings, nonce: nonce, ciphertext: ciphertext}, nil
-}
-
-func (s *Service) writeState(ctx context.Context, row stateRow) error {
-	encodedWorkspace, err := json.Marshal(row.workspace)
-	if err != nil {
-		return err
-	}
-	encodedModelForm, err := json.Marshal(row.settings)
-	if err != nil {
-		return err
-	}
-	pristine := 0
-	if row.pristine {
-		pristine = 1
-	}
-	return store.Transact(ctx, s.db, func(tx *sql.Tx) error {
-		result, execErr := tx.ExecContext(ctx, `UPDATE desktop_state SET workspace_json=?,revision=?,pristine=?,settings_json=?,api_key_nonce=?,api_key_ciphertext=?,updated_at=? WHERE id=1`, string(encodedWorkspace), row.revision, pristine, string(encodedModelForm), nullableBytes(row.nonce), nullableBytes(row.ciphertext), s.now().UnixMilli())
-		if execErr != nil {
-			return execErr
-		}
-		affected, execErr := result.RowsAffected()
-		if execErr != nil {
-			return execErr
-		}
-		if affected != 1 {
-			return domain.NewError(500, "WORKSPACE_MISSING", "桌面工作空间不存在。")
-		}
-		return nil
-	})
 }
 
 func messageCount(workspace Workspace) int {

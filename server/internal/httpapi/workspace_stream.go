@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -72,7 +73,12 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 		if s.Logger != nil {
 			s.Logger.Error("agent 结果没有写入工作空间", "agent_id", dispatch.AgentID, "message_id", dispatch.MessageID, "error", applyErr)
 		}
-		_ = write("error", fmt.Sprintf(`{"code":"WORKSPACE_CONFLICT","message":%q}`, applyErr.Error()))
+		code := "WORKSPACE_CONFLICT"
+		var failure *domain.Error
+		if errors.As(applyErr, &failure) && failure.Code != "" {
+			code = failure.Code
+		}
+		_ = write("error", fmt.Sprintf(`{"code":%q,"message":%q}`, code, applyErr.Error()))
 		return
 	}
 	encoded, err := json.Marshal(delivery)

@@ -258,7 +258,7 @@ test('桌面布局、沙盒、招聘猫咪、草稿恢复与导出', async () =>
   const input = window.getByRole('textbox', { name: '给写作搭档发消息' })
   await window.getByRole('button', { name: '查看写作搭档资料' }).click()
   const catPanel = window.getByRole('complementary', { name: '写作搭档' })
-  await expect(catPanel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('GPT-4o')
+  await expect(catPanel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('项目模型')
   await window.keyboard.press('Escape')
   await expect(catPanel).toHaveCount(0)
   await input.fill('把想法变成一篇好故事。')
@@ -457,6 +457,10 @@ test('招聘仅列出已配置模型，空状态配置后返回并保留表单',
   await window.getByRole('option', { name: '团队模型', exact: true }).click()
   await recruit.getByRole('button', { name: '招聘猫咪', exact: true }).click()
   await expect(window.getByRole('textbox', { name: '给我的猫咪发消息' })).toBeVisible()
+  await window.getByRole('button', { name: '查看我的猫咪资料', exact: true }).click()
+  const hired = window.getByRole('complementary', { name: '我的猫咪' })
+  await expect(hired.getByRole('combobox', { name: '模型' })).toHaveText('团队模型')
+  await window.screenshot({ path: '/opt/cursor/artifacts/recruit-model.png', scale: 'css' })
 })
 
 test('搜索键盘操作与最小窗口布局', async () => {

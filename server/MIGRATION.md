@@ -8,7 +8,7 @@
 
 - 初始化、Argon2id 密码和 `tomd_` 设备凭据（`internal/auth`）。初始化码仍只打印在标准输出。凭据只留在 Electron 主进程。
 - 模型目录、密钥和供应商（`internal/service` 的 Catalog / Secret）。桌面设置里的地址、模型名称和密钥写入原来的 provider、model、secret。
-- Bot、工作区目录和单聊（`Bots.Create` / `Update`）。每只猫咪通过 `desktop_agent_link` 对应一个 Bot。
+- Bot、工作区目录和单聊（`Bots.Create` / `Update`）。桌面猫咪就是这张表里的一行，`desktop_id` 用客户端原来的助手标识。
 - agent 循环、工具、审批策略和模型流式调用（`agent.Runtime.Submit`、`provider.HTTP.Stream`）。发送消息只把正文交给运行时，不再自带 chat/completions 客户端。
 - 运行过程事件（`text.delta`、`thinking.delta`、`tool.started`、`turn.finished`）。`/api/v1/messages/stream` 把这些事件转成桌面气泡能画的增量，客户端断开不会取消已经开始的运行。
 - 电脑页读取原来的引导阶段、文件树和持久浏览器状态（`Provision.Snapshot`、`Files.Tree`、`Browser.Status`）。终端仍由服务端 agent 持有。
@@ -29,9 +29,23 @@
 
 流式开关在客户端：打开时按 `delta` / `process` 逐段画进原来的气泡；关闭时忽略增量，等 `done` 后一次显示。失败时保留已经生成的正文，并把用户消息标为 `failed`，界面上的重试按钮继续可用。
 
-## 界面字段为什么还单独存放
+## 表结构
 
-agent 的消息是带工具和思考的 blocks，桌面气泡是 `role` / `content` / `status` / 表情 / 回复。头像预设、分组、草稿、资料库、电脑地址和目录里的 `modelId` 也没有对应的 Bot 列。这些界面字段放在 `desktop_state.workspace_json`（迁移 `0018`），执行身份放在 `desktop_agent_link`（迁移 `0019`）。历史迁移没有改写。这不是第二条 agent，也不是第二条模型调用。
+迁移 `0020_desktop_columns.sql` 把 `desktop_state` 拆进原来的表，然后删掉 `desktop_state` 和 `desktop_agent_link`。`0018`、`0019` 没有改。
+
+| 桌面字段 | 落点 |
+| --- | --- |
+| 名称、介绍、分组、头像预设、草稿、电脑地址、`modelId` | `bots` 的原有列和新列 `description`、`group_name`、`avatar_preset`、`draft`、`computer_url`、`catalog_model_id` |
+| 当前猫咪、修订号、是否还是预设 | `workspace_meta` 的标量列 |
+| 模型表单和加密后的 API 密钥 | `workspace_meta` 的标量列。真正调用仍写入原来的 provider、model、secret |
+| 消息正文 | `messages.blocks_json` 里的 text block。agent 的工具块和桌面气泡是同一行 |
+| 状态、请求标识、回复 | `messages.status`、`messages.request_id`、`messages.reply_to_id` |
+| 表情 | `message_reactions` |
+| 资料库 | `bot_artifacts` |
+
+已有 `desktop_state` 会在删表前抄进这些列。和 agent 已经写过的同一条正文不会再插一遍。本机 v1–v5 旧档导入也走这套列，不再写 JSON。
+
+招聘时选中的模型名称写入这只猫咪的 `catalog_model_id`。发送时在原来的模型目录里找到或创建同名模型，`bots.model_id` 指向它，agent 运行时用这一行。
 
 主题、侧栏宽度、置顶、未读和隐藏仍在本机。服务没有对应的界面状态。
 
@@ -39,7 +53,6 @@ agent 的消息是带工具和思考的 blocks，桌面气泡是 `role` / `conte
 
 ## 还没做
 
-- 把界面字段收成 bots / messages 的列，读的时候直接投影，不再保存一份工作空间 JSON。
 - 审批、例程、记忆、群组协作、Bot 私信、用量和审计还没有桌面页面。
 - 配套模式不下载 Chrome，所以电脑页里的持久浏览器在引导完成前是未就绪。引导由原来的 provision 负责，这一阶段没有在端到端里自动安装浏览器。
 - 语音、附件和云端分享。
@@ -83,4 +96,4 @@ cd desktop && npm run check && npm run test:e2e
 
 ## 回滚
 
-`0018` 和 `0019` 是新增表，不改历史迁移。回滚程序前先停机备份 `TOM_DATA_DIR` 和 `TOM_WORKSPACE_DIR`。旧二进制打不开版本 19 的数据库，不能只换回旧程序。客户端回滚后会重新读取本机旧档；已经导入到服务的内容不会自动写回 localStorage。
+`0018` 到 `0020` 都是向前迁移，不改历史脚本。`0020` 会删除 `desktop_state`。回滚程序前先停机备份 `TOM_DATA_DIR` 和 `TOM_WORKSPACE_DIR`。旧二进制打不开版本 20 的数据库，也不能把删掉的 JSON 找回来。客户端回滚后会重新读取本机旧档；已经导入到服务的内容不会自动写回 localStorage。
