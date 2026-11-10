@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -31,18 +31,37 @@ export async function buildCompanion(): Promise<string> {
   return binary
 }
 
-/** 为单个测试启动独立数据目录。初始化码只从标准输出读取，不写进日志文件。 */
-export async function startCompanion(binary: string): Promise<Companion> {
+const fixtureSteps = [
+  { id: 'detect_os', title: '检测操作系统', phase: 'detecting' },
+  { id: 'prepare_dirs', title: '准备数据与工作目录', phase: 'preparing' },
+  { id: 'install_fonts', title: '安装中文字体', phase: 'preparing' },
+  { id: 'ensure_browser', title: '准备托管浏览器', phase: 'preparing' },
+]
+
+/** 为单个测试启动独立数据目录。夹具只模拟引导进度，产品默认仍会安装字体和浏览器。 */
+export async function startCompanion(
+  binary: string,
+  options?: { failFirst?: boolean },
+): Promise<Companion> {
   const directory = await mkdtemp(join(tmpdir(), 'tombot-server-'))
+  const fixturePath = join(directory, 'bootstrap.json')
+  const steps = fixtureSteps.map((step) =>
+    options?.failFirst && step.id === 'ensure_browser'
+      ? { ...step, fail_first: true, detail: '夹具没有浏览器，测试不会下载 Chrome' }
+      : step,
+  )
+  await writeFile(fixturePath, JSON.stringify({ steps }))
   const port = await listenPort()
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    TOM_BOOTSTRAP_FIXTURE: fixturePath,
+    TOM_ADDR: `127.0.0.1:${port}`,
+    TOM_DATA_DIR: join(directory, 'data'),
+    TOM_WORKSPACE_DIR: join(directory, 'workspace'),
+  }
+  delete env.TOM_DESKTOP_COMPANION
   const child = spawn(binary, [], {
-    env: {
-      ...process.env,
-      TOM_DESKTOP_COMPANION: '1',
-      TOM_ADDR: `127.0.0.1:${port}`,
-      TOM_DATA_DIR: join(directory, 'data'),
-      TOM_WORKSPACE_DIR: join(directory, 'workspace'),
-    },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let stdout = ''
@@ -59,6 +78,7 @@ export async function startCompanion(binary: string): Promise<Companion> {
   try {
     const setupCode = await waitForSetupCode(child, () => stdout)
     await waitForSession(url, child, () => stderr)
+    await waitForBootstrap(url, child, () => stderr, options?.failFirst ? 'failed' : 'ready')
     return {
       url,
       setupCode,
@@ -125,6 +145,37 @@ async function waitForSession(
     await delay(50)
   }
   throw new Error(`等待服务就绪超时：${lastError}`)
+}
+
+async function waitForBootstrap(
+  url: string,
+  child: ChildProcess,
+  readStderr: () => string,
+  phase: string,
+): Promise<void> {
+  const started = Date.now()
+  let last = '尚未返回引导状态'
+  while (Date.now() - started < 15_000) {
+    if (child.exitCode !== null) {
+      throw new Error(`服务提前退出，代码 ${child.exitCode}，${readStderr().slice(-300)}`)
+    }
+    try {
+      const response = await fetch(`${url}/api/v1/bootstrap/status`, {
+        signal: AbortSignal.timeout(1_000),
+      })
+      if (response.ok) {
+        const body = (await response.json()) as { phase?: string }
+        if (body.phase === phase) return
+        last = body.phase ?? '没有阶段'
+      } else {
+        last = `HTTP ${response.status}`
+      }
+    } catch (error) {
+      last = error instanceof Error ? error.message : '连接失败'
+    }
+    await delay(50)
+  }
+  throw new Error(`等待引导进入${phase}超时：${last}`)
 }
 
 async function stopProcess(child: ChildProcess): Promise<void> {

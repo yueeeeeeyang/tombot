@@ -111,6 +111,63 @@ function launchApp(
   })
 }
 
+async function appRegion(selector: string): Promise<string> {
+  return window
+    .locator(selector)
+    .first()
+    .evaluate((element) => getComputedStyle(element).getPropertyValue('-webkit-app-region').trim())
+}
+
+/** 空白处可拖，红绿灯位置和表单控件不能拖。 */
+async function expectSessionDrag(): Promise<void> {
+  expect(await appRegion('.session-gate')).toBe('drag')
+  expect(await appRegion('.session-traffic-lights')).toBe('no-drag')
+  expect(await appRegion('.session-card')).toBe('no-drag')
+  const controls = window.locator('.session-card input, .session-card button')
+  expect(await controls.count()).toBeGreaterThan(0)
+  for (let index = 0; index < (await controls.count()); index += 1) {
+    expect(
+      await controls
+        .nth(index)
+        .evaluate((element) =>
+          getComputedStyle(element).getPropertyValue('-webkit-app-region').trim(),
+        ),
+    ).toBe('no-drag')
+  }
+}
+
+async function paintDragHints(): Promise<void> {
+  await window.evaluate(() => {
+    const gate = document.querySelector('.session-gate')
+    if (gate instanceof HTMLElement) gate.style.boxShadow = 'inset 0 0 0 6px #2f6fed'
+    const lights = document.querySelector('.session-traffic-lights')
+    if (lights instanceof HTMLElement) lights.style.background = '#d92d20'
+    const card = document.querySelector('.session-card')
+    if (card instanceof HTMLElement) card.style.outline = '4px solid #12805c'
+    document.querySelectorAll('.session-card input, .session-card button').forEach((element) => {
+      if (element instanceof HTMLElement) element.style.outline = '3px solid #d92d20'
+    })
+    const legend = document.createElement('p')
+    legend.id = 'drag-legend'
+    legend.textContent =
+      '蓝框空白可拖动。左上红块是红绿灯位置，不拖动。绿框是表单，红框是输入框和按钮，不拖动。'
+    legend.style.cssText =
+      'position:fixed;left:16px;right:16px;bottom:12px;z-index:6;margin:0;padding:8px 12px;background:#111;color:#fff;font-size:13px;line-height:1.5;border-radius:8px;-webkit-app-region:no-drag'
+    document.body.appendChild(legend)
+  })
+}
+
+async function clearDragHints(): Promise<void> {
+  await window.evaluate(() => {
+    document.getElementById('drag-legend')?.remove()
+    for (const element of document.querySelectorAll(
+      '.session-gate, .session-traffic-lights, .session-card, .session-card input, .session-card button',
+    )) {
+      if (element instanceof HTMLElement) element.removeAttribute('style')
+    }
+  })
+}
+
 /** 环境变量只预填地址。每个新配置目录都要先确认，才会去问服务是否已初始化。 */
 async function submitServerAddress(): Promise<void> {
   const address = window.getByLabel('服务地址')
@@ -121,11 +178,19 @@ async function submitServerAddress(): Promise<void> {
 
 /** 每个测试都有自己的新服务，所以这里走初始化。初始化码和密码只填进表单。 */
 async function unlock(): Promise<void> {
+  if (!setupShot) {
+    await expect(window.getByRole('heading', { name: '连接服务' })).toBeVisible()
+    await mkdir('/opt/cursor/artifacts', { recursive: true })
+    await expectSessionDrag()
+    await paintDragHints()
+    await window.screenshot({ path: '/opt/cursor/artifacts/session-connect.png', scale: 'css' })
+    await clearDragHints()
+    await expectSessionDrag()
+  }
   await submitServerAddress()
   const setupHeading = window.getByRole('heading', { name: '初始化 TomBot' })
   await expect(setupHeading).toBeVisible()
   if (!setupShot) {
-    await mkdir('/opt/cursor/artifacts', { recursive: true })
     await window.screenshot({ path: '/opt/cursor/artifacts/session-setup.png', scale: 'css' })
     setupShot = true
   }
@@ -270,10 +335,51 @@ test('已初始化后要验证密码才能进入工作空间', async () => {
   window.on('pageerror', (error) => browserErrors.push(error.message))
   await submitServerAddress()
   await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
+  await expectSessionDrag()
   await window.screenshot({ path: '/opt/cursor/artifacts/session-login.png', scale: 'css' })
   await window.getByLabel('密码', { exact: true }).fill(password)
   await window.getByRole('button', { name: '进入工作空间' }).click()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
+  expect(await appRegion('.sidebar-toolbar')).toBe('drag')
+  expect(await appRegion('.chat-header')).toBe('drag')
+})
+
+test('引导未完成时显示进度，重试成功后才进入工作空间', async () => {
+  await application.close()
+  await companion.stop()
+  companion = await startCompanion(companionBinary, { failFirst: true })
+  await rm(profilePath, { recursive: true, force: true })
+  profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-bootstrap-'))
+  application = await launchApp(profilePath)
+  window = await application.firstWindow()
+  window.on('pageerror', (error) => browserErrors.push(error.message))
+  await submitServerAddress()
+  await expect(window.getByRole('heading', { name: '初始化 TomBot' })).toBeVisible()
+  await window.getByLabel('初始化码').fill(companion.setupCode)
+  await window.getByLabel('密码', { exact: true }).fill(password)
+  await window.getByLabel('确认密码', { exact: true }).fill(password)
+  await window.getByRole('button', { name: '完成初始化' }).click()
+  await expect(window.getByRole('heading', { name: '正在准备服务' })).toBeVisible()
+  await expect(window.getByText('当前阶段：引导失败')).toBeVisible()
+  await expect(window.getByRole('progressbar', { name: '引导进度' })).toBeVisible()
+  await expect(window.getByText('准备托管浏览器')).toBeVisible()
+  await expect(window.getByRole('alert')).toHaveText('夹具没有浏览器，测试不会下载 Chrome')
+  await expect(window.getByRole('button', { name: '重新准备' })).toBeVisible()
+  await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toHaveCount(0)
+  await expectSessionDrag()
+  await mkdir('/opt/cursor/artifacts', { recursive: true })
+  await window.screenshot({ path: '/opt/cursor/artifacts/bootstrap-progress.png', scale: 'css' })
+  await window.getByRole('button', { name: '重新准备' }).click()
+  await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
+  expect(await appRegion('.sidebar-toolbar')).toBe('drag')
+  expect(await appRegion('.chat-header')).toBe('drag')
+})
+
+test('连接失败页的空白处可拖动，按钮不参与拖动', async () => {
+  await companion.stop()
+  await window.reload()
+  await expect(window.getByRole('heading', { name: '无法连接服务' })).toBeVisible()
+  await expectSessionDrag()
 })
 
 test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
@@ -1528,7 +1634,8 @@ test('连接电脑使用这只猫咪的工作区，断开后回到未连接', as
   await expect(panel.getByTitle('小黑的远端电脑')).toBeVisible()
   const view = window.frameLocator('[title="小黑的远端电脑"]')
   await expect(view.getByRole('heading', { name: '引导' })).toBeVisible()
-  await expect(view.getByText('尚未开始')).toBeVisible()
+  // 夹具会把引导跑完。电脑页应显示已就绪，不再是跳过引导时的尚未开始。
+  await expect(view.getByText('已就绪')).toBeVisible()
   await expect(view.getByRole('heading', { name: '文件' })).toBeVisible()
   await expect(view.getByRole('heading', { name: '终端' })).toBeVisible()
   await view.locator('body').screenshot({ path: `${artifacts}/computer-view.png` })

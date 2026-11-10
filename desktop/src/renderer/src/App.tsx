@@ -50,12 +50,12 @@ import { type SettingsSection } from './features/settings/settings'
 import { useServerSettings } from './features/settings/useServerSettings'
 import { getModelOptions } from './features/models/modelOptions'
 import { useSession } from './features/session/useSession'
-import { SessionGate } from './features/session/SessionGate'
+import { SessionFrame, SessionGate } from './features/session/SessionGate'
 
 type OpenDialog = 'create' | 'search' | 'settings' | 'group' | 'workspace' | null
 type Surface = { kind: 'agent' | 'group'; id: string }
 
-/** 未连接或未验证时只显示连接、初始化或密码页，避免把预设工作空间当成已连接。 */
+/** 未连接、未验证或主机引导未完成时只显示门禁页，避免把预设工作空间当成已连接。 */
 export default function App() {
   const session = useSession()
   useTheme()
@@ -353,9 +353,9 @@ function WorkspaceApp() {
 
   if (!ready) {
     return (
-      <main className="session-gate">
+      <SessionFrame>
         <p role="status">正在打开工作空间</p>
-      </main>
+      </SessionFrame>
     )
   }
 

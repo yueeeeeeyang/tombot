@@ -25,7 +25,7 @@
 | 发送并观看 agent | `POST /api/v1/messages/stream` |
 | 打开这只猫咪的电脑 | `POST /api/v1/computer`，画面在 `GET /api/v1/computer/view` |
 
-初始化、登录、工作空间和电脑页不要求主机引导完成。其余 `/api/v1` 业务仍要等引导。`TOM_DESKTOP_COMPANION=1` 跳过字体和浏览器安装，方便桌面在引导完成前工作。
+初始化、登录不要求主机引导完成，桌面才能在引导过程中验证身份并订阅进度。引导完成前，桌面停在进度页，不进入工作空间。工作空间和电脑页的接口本身仍不检查引导；其余 `/api/v1` 业务要等引导。默认启动会安装字体和浏览器，不再跳过这些步骤。
 
 流式开关在客户端：打开时按 `delta` / `process` 逐段画进原来的气泡；关闭时忽略增量，等 `done` 后一次显示。失败时保留已经生成的正文，并把用户消息标为 `failed`，界面上的重试按钮继续可用。
 
@@ -49,13 +49,13 @@
 
 主题、侧栏宽度、置顶、未读和隐藏仍在本机。服务没有对应的界面状态。
 
-新增页面有填写服务地址、初始化、验证密码和无法连接。样式沿用现有表单、主按钮和猫咪头像。电脑页沿用原来的未连接、全屏查看和断开；多了一个「连接电脑」，手动地址仍可作为备选。
+新增页面有填写服务地址、初始化、验证密码、无法连接，以及引导未完成时的进度页。样式沿用现有表单、主按钮和猫咪头像。进度页读取原来的 `GET /api/v1/bootstrap/status` 和 `GET /api/v1/bootstrap/events`，失败时调用原来的 `POST /api/v1/bootstrap/retry`。电脑页沿用原来的未连接、全屏查看和断开；多了一个「连接电脑」，手动地址仍可作为备选。
 
 ## 这一批新增
 
 - 猫咪面板的「记忆」只查看。记下、修改和忘掉由服务端 agent 在对话里调用原来的 `memory_search`、`memory_write`、`memory_delete`。读写的仍是同一批 `.tom/memory` 文件。删除不再等待审批。
 - 猫咪面板的「定时」没有新建和编辑表单。每个任务只有启用/暂停开关，右键菜单可以删除。创建、修改和删除由 agent 在对话里调用 `routine_list`、`routine_upsert`、`routine_delete`，这三个工具直接走原来的 `Routines.Commit`、`UpdateNow` 和 `Delete`，不等审批。到点仍由原来的调度器执行。
-- 电脑页增加「开始准备」。它调用原来的 `POST /api/v1/bootstrap/retry`，配套模式也可以在这时安装浏览器和字体并启动持久浏览器。端到端测试不会点击它，以免下载 Chrome。
+- 电脑页的「开始准备」仍调用原来的 `POST /api/v1/bootstrap/retry`。服务启动时已经做完整引导。端到端测试用引导夹具模拟进度，不会下载 Chrome，也不会点击「开始准备」。
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
 - 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
@@ -65,7 +65,7 @@
 
 ## 还没做
 
-- 端到端没有点击「开始准备」，所以没有在测试里下载 Chrome。
+- 端到端用 `TOM_BOOTSTRAP_FIXTURE` 模拟引导进度，不下载 Chrome。不设置这个变量时，`tomd` 会安装字体并准备浏览器。
 - 语音不动。
 - 默认 Bot 仍由原服务在初始化后准备，桌面侧栏不显示它。
 
@@ -76,13 +76,14 @@
 ```sh
 cd server
 export PATH="/usr/local/go/bin:$PATH"   # 需要 Go 1.26.5 或与 go.mod 一致的工具链
-export TOM_DESKTOP_COMPANION=1
 export TOM_ADDR=127.0.0.1:8787
 export TOM_DATA_DIR="$PWD/data"
 export TOM_WORKSPACE_DIR="$PWD/workspace"
 go build -o bin/tomd ./cmd/tomd
 ./bin/tomd
 ```
+
+默认会做完整主机引导，包括安装中文字体和准备浏览器。引导完成前，桌面显示进度；完成后才进入工作空间。不要设置 `TOM_BOOTSTRAP_FIXTURE`，它只让端到端测试模拟进度，避免下载 Chrome，不是启动方式。
 
 标准输出里的一次性初始化码只用于第一次初始化，不要转发。然后：
 
@@ -93,7 +94,7 @@ npm run setup
 TOMBOT_SERVER_URL=http://127.0.0.1:8787 npm run dev
 ```
 
-`TOMBOT_SERVER_URL` 只预填桌面连接页，确认后才会连接。不设置它时打开空白连接页，不会自己去连本机。不设置 `TOM_DESKTOP_COMPANION` 时，`tomd` 会按原来的方式做主机引导，包括准备浏览器。
+`TOMBOT_SERVER_URL` 只预填桌面连接页，确认后才会连接。不设置它时打开空白连接页，不会自己去连本机。确认地址并完成初始化或密码验证后，若主机引导还没结束，桌面停在进度页。
 
 ## 客户端服务地址
 
@@ -112,7 +113,7 @@ cd server && go test ./...
 cd desktop && npm run check && npm run test:e2e
 ```
 
-端到端测试会自己构建并启动配套服务，每个用例使用独立数据目录。
+端到端测试会自己构建并启动服务，每个用例使用独立数据目录，并用引导夹具模拟进度，避免下载 Chrome。
 
 ## 回滚
 

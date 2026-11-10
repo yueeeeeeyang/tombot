@@ -360,6 +360,8 @@ func (s *Server) startMaintenance(ctx context.Context, actor string, reset bool)
 		}()
 		if err := s.Provision.RunClaimed(s.RootContext, false); err != nil {
 			s.Logger.Error("引导修复失败", "request_id", requestID, "phase", s.Provision.Snapshot().Phase)
+		} else if provision.FixturePath() != "" {
+			s.Logger.Info("引导夹具已完成，不启动浏览器", "request_id", requestID)
 		} else if err := s.Browser.Start(s.RootContext); err != nil {
 			s.Logger.Error("引导完成但持久浏览器启动失败", "request_id", requestID, "component", "browser")
 		}

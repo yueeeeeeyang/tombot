@@ -1,6 +1,7 @@
 import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { normalizeStatus, parseEventBlock, type BootstrapStatus } from './bootstrapEvents'
 import {
   normalizeServerAddress,
   parseStoredSession,
@@ -16,6 +17,7 @@ const codeMessages: Record<string, string> = {
   AUTH_INVALID: '密码不正确。',
   AUTH_REQUIRED: '需要先验证密码。',
   AUTH_RATE_LIMITED: '尝试次数过多，请稍后再试。',
+  BOOTSTRAP_RUNNING: '引导正在进行，请稍候。',
   MODEL_NOT_READY: '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
   WORKSPACE_NOT_PRISTINE: '服务端已有工作空间，本机旧档没有导入。',
@@ -84,9 +86,10 @@ async function storeToken(next: string): Promise<void> {
 }
 
 async function inspectSession(): Promise<{
-  phase: 'address' | 'offline' | 'setup' | 'login' | 'ready'
+  phase: 'address' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
   message?: string
   serverUrl: string
+  bootstrap?: BootstrapStatus
 }> {
   await loadSession()
   const choice = selectServerAddress(savedServerAddress, process.env.TOMBOT_SERVER_URL)
@@ -96,10 +99,16 @@ async function inspectSession(): Promise<{
       initialized: boolean
       authenticated: boolean
     }
-    if (status.authenticated) return { phase: 'ready', serverUrl: choice.connect }
-    token = ''
-    await persistSession()
-    return { phase: status.initialized ? 'login' : 'setup', serverUrl: choice.connect }
+    if (!status.authenticated) {
+      token = ''
+      await persistSession()
+      return { phase: status.initialized ? 'login' : 'setup', serverUrl: choice.connect }
+    }
+    const bootstrap = normalizeStatus(await call('GET', '/bootstrap/status'))
+    if (bootstrap.phase !== 'ready') {
+      return { phase: 'bootstrap', serverUrl: choice.connect, bootstrap }
+    }
+    return { phase: 'ready', serverUrl: choice.connect }
   } catch (error) {
     const failed = failure(error)
     return { phase: 'offline', message: failed.message, serverUrl: choice.connect }
@@ -117,6 +126,7 @@ async function call(
   path: string,
   body?: unknown,
   timeout = 20_000,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   await loadSession()
   const base = requireServerAddress()
@@ -129,9 +139,13 @@ async function call(
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeout),
+      signal: combineSignals(signal, AbortSignal.timeout(timeout)),
     })
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw Object.assign(new Error('连接服务超时。'), { code: 'OFFLINE' })
+    }
     throw Object.assign(new Error(codeMessages.OFFLINE), { code: 'OFFLINE' })
   }
   const text = await response.text()
@@ -162,6 +176,113 @@ async function handle<T>(task: () => Promise<T>): Promise<CallResult<T>> {
   } catch (error) {
     return { ok: false, ...failure(error) }
   }
+}
+
+const bootstrapWatches = new Map<string, AbortController>()
+
+function combineSignals(parent: AbortSignal | undefined, timeout: AbortSignal): AbortSignal {
+  if (!parent) return timeout
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (parent.aborted || timeout.aborted) {
+    controller.abort()
+    return controller.signal
+  }
+  parent.addEventListener('abort', abort, { once: true })
+  timeout.addEventListener('abort', abort, { once: true })
+  return controller.signal
+}
+
+function sendBootstrap(event: IpcMainInvokeEvent, status: BootstrapStatus): void {
+  if (!event.sender.isDestroyed()) event.sender.send('desktop:bootstrap-status', status)
+}
+
+/** 先读状态，再从该游标订阅引导事件。连接断开时有限重试，取消订阅不算失败。 */
+async function followBootstrap(event: IpcMainInvokeEvent, signal: AbortSignal): Promise<void> {
+  let failures = 0
+  while (!signal.aborted) {
+    try {
+      const status = normalizeStatus(
+        await call('GET', '/bootstrap/status', undefined, 20_000, signal),
+      )
+      sendBootstrap(event, status)
+      const reason = await readBootstrapEvents(event, status.cursor, signal)
+      if (reason === 'abort' || signal.aborted) return
+      failures = 0
+    } catch (error) {
+      if (signal.aborted) return
+      failures += 1
+      if (failures >= 3) throw error
+      await waitForRetry(200 * failures, signal)
+    }
+  }
+}
+
+async function readBootstrapEvents(
+  event: IpcMainInvokeEvent,
+  cursor: number,
+  signal: AbortSignal,
+): Promise<'abort' | 'resync' | 'eof'> {
+  await loadSession()
+  const base = requireServerAddress()
+  let response: Response
+  try {
+    response = await fetch(`${base}/api/v1/bootstrap/events?after=${cursor}`, {
+      headers: {
+        accept: 'text/event-stream',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      signal,
+    })
+  } catch (error) {
+    if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) {
+      throw error
+    }
+    throw Object.assign(new Error('无法订阅引导进度。'), { code: 'OFFLINE' })
+  }
+  const type = response.headers.get('content-type') ?? ''
+  if (!response.ok || !type.includes('text/event-stream')) {
+    throw Object.assign(new Error('无法订阅引导进度。'), { code: 'RESPONSE_INVALID' })
+  }
+  const reader = response.body?.getReader()
+  if (!reader) throw Object.assign(new Error('无法订阅引导进度。'), { code: 'RESPONSE_INVALID' })
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let current = cursor
+  while (!signal.aborted) {
+    const chunk = await reader.read()
+    if (chunk.done) return 'eof'
+    buffer += decoder.decode(chunk.value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) {
+      const parsed = parseEventBlock(block, current)
+      if (parsed.kind === 'resync') return 'resync'
+      if (parsed.kind === 'status') {
+        current = parsed.status.cursor
+        sendBootstrap(event, parsed.status)
+      }
+    }
+  }
+  return 'abort'
+}
+
+function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new DOMException('aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer)
+        reject(new DOMException('aborted', 'AbortError'))
+      },
+      { once: true },
+    )
+  })
 }
 
 /** 注册渲染进程可调用的服务通道。令牌只留在主进程，页面拿不到。 */
@@ -213,6 +334,30 @@ export function registerDesktopIpc(): void {
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
   ipcMain.handle('desktop:bootstrap', () => handle(() => call('POST', '/bootstrap/retry')))
+  ipcMain.handle('desktop:bootstrap-watch', (event, watchID: unknown) =>
+    handle(async () => {
+      if (typeof watchID !== 'string' || !/^[0-9a-f-]{36}$/i.test(watchID)) {
+        throw Object.assign(new Error('无法订阅引导进度。'), { code: 'REQUEST_FAILED' })
+      }
+      const key = `${event.sender.id}:${watchID}`
+      bootstrapWatches.get(key)?.abort()
+      const controller = new AbortController()
+      bootstrapWatches.set(key, controller)
+      const detach = () => controller.abort()
+      event.sender.once('destroyed', detach)
+      try {
+        await followBootstrap(event, controller.signal)
+        return null
+      } finally {
+        event.sender.removeListener('destroyed', detach)
+        if (bootstrapWatches.get(key) === controller) bootstrapWatches.delete(key)
+      }
+    }),
+  )
+  ipcMain.on('desktop:bootstrap-unwatch', (event, watchID: unknown) => {
+    if (typeof watchID !== 'string') return
+    bootstrapWatches.get(`${event.sender.id}:${watchID}`)?.abort()
+  })
   ipcMain.handle('desktop:memories', (_event, agentId: string) =>
     handle(() => call('GET', `/bots/${encodeURIComponent(agentId)}/memory`)),
   )

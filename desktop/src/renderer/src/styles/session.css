@@ -5,6 +5,24 @@
   justify-content: center;
   background: var(--canvas);
   padding: 32px 16px;
+  -webkit-app-region: drag;
+}
+
+/* 红绿灯位于 trafficLightPosition (16, 16)，宽约三个按钮。拖动命中不能盖住它们。 */
+.session-traffic-lights {
+  position: fixed;
+  z-index: 4;
+  top: 0;
+  left: 0;
+  width: 80px;
+  height: 40px;
+  -webkit-app-region: no-drag;
+}
+
+/* app-region 不继承，卡片里的表单、输入框和按钮都要单独关掉拖动。 */
+.session-card,
+.session-card * {
+  -webkit-app-region: no-drag;
 }
 
 .session-card {
@@ -62,4 +80,40 @@
 
 .session-card .form-error {
   text-align: left;
+}
+
+.session-progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--text);
+}
+
+.session-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.session-step {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-align: left;
+}
+
+.session-step-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.session-step-detail {
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
