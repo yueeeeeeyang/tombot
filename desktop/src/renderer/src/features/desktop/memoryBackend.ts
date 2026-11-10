@@ -1,5 +1,6 @@
 import { createSettingsDraft, type SettingsDraft } from '../settings/settings'
 import { createWorkspace, type AppWorkspace, type ChatMessage } from '../workspace/model'
+import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
   BootstrapStatus,
   DeliveryResult,
@@ -16,6 +17,8 @@ const modelNotReady = '尚未配置可用模型，请先在设置中填写 API �
 export class MemoryBackend implements DesktopBackend {
   readonly savesSynchronously = true
   phase: SessionPhase = 'ready'
+  serverUrl = ''
+  connectError: string | null = null
   setupCode = 'memory-setup-code'
   password = ''
   failSave: Error | null = null
@@ -29,24 +32,47 @@ export class MemoryBackend implements DesktopBackend {
   private settings: SettingsDraft = createSettingsDraft()
   private apiKey = ''
 
-  trySessionSync(): SessionPhase | null {
-    if (this.phase === 'loading') return null
-    if (this.phase === 'setup' || this.phase === 'login' || this.phase === 'offline')
+  /** 地址、初始化和密码优先于引导。已验证且引导未完成时才停在进度页。 */
+  private gatePhase(): SessionPhase {
+    if (
+      this.phase === 'address' ||
+      this.phase === 'offline' ||
+      this.phase === 'setup' ||
+      this.phase === 'login' ||
+      this.phase === 'loading'
+    ) {
       return this.phase
+    }
     if (this.bootstrap.phase !== 'ready') return 'bootstrap'
     return 'ready'
   }
 
-  tryBootstrapSync(): BootstrapStatus | undefined {
-    if (this.trySessionSync() !== 'bootstrap') return undefined
-    return this.bootstrap
+  trySessionSync(): SessionSnapshot {
+    const phase = this.gatePhase()
+    return {
+      phase,
+      serverUrl: this.serverUrl,
+      ...(phase === 'offline' && this.connectError ? { message: this.connectError } : {}),
+      ...(phase === 'bootstrap' ? { bootstrap: this.bootstrap } : {}),
+    }
   }
 
   session(): Promise<SessionSnapshot> {
     if (this.sessionError) return Promise.reject(this.sessionError)
-    const phase = this.trySessionSync()
-    if (phase === 'bootstrap') return Promise.resolve({ phase, bootstrap: this.bootstrap })
-    return Promise.resolve({ phase: phase ?? 'loading' })
+    return Promise.resolve(this.trySessionSync())
+  }
+
+  async connect(input: string): Promise<SessionSnapshot> {
+    const serverUrl = normalizeServerAddress(input)
+    this.serverUrl = serverUrl
+    if (this.connectError) {
+      this.phase = 'offline'
+      return { phase: 'offline', message: this.connectError, serverUrl }
+    }
+    if (this.phase === 'address' || this.phase === 'offline' || this.phase === 'loading') {
+      this.phase = this.password ? 'login' : 'setup'
+    }
+    return this.trySessionSync()
   }
 
   watchBootstrap(onStatus: (status: BootstrapStatus) => void): () => void {
@@ -207,6 +233,8 @@ export class MemoryBackend implements DesktopBackend {
 
   reset(): void {
     this.phase = 'ready'
+    this.serverUrl = ''
+    this.connectError = null
     this.password = ''
     this.failSave = null
     this.sessionError = null

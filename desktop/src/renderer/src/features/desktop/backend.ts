@@ -1,7 +1,8 @@
 import type { SettingsDraft } from '../settings/settings'
 import type { AppWorkspace } from '../workspace/model'
 
-export type SessionPhase = 'loading' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
+export type SessionPhase =
+  'loading' | 'address' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
 
 export interface BootstrapStep {
   id: string
@@ -21,6 +22,7 @@ export interface BootstrapStatus {
 export interface SessionSnapshot {
   phase: SessionPhase
   message?: string
+  serverUrl?: string
   bootstrap?: BootstrapStatus
 }
 
@@ -63,9 +65,10 @@ export interface DeliveryResult {
  */
 export interface DesktopBackend {
   savesSynchronously?: boolean
-  trySessionSync?: () => SessionPhase | null
-  tryBootstrapSync?: () => BootstrapStatus | undefined
+  trySessionSync?: () => SessionSnapshot
   session: () => Promise<SessionSnapshot>
+  /** 保存用户确认的服务地址并检查是否已初始化。地址不合法时抛出。 */
+  connect: (serverUrl: string) => Promise<SessionSnapshot>
   watchBootstrap?: (
     onStatus: (status: BootstrapStatus) => void,
     onError: (error: Error) => void,

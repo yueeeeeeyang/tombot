@@ -29,26 +29,26 @@ function expectDragShell(): void {
 }
 
 describe('会话门禁', () => {
-  it('连接、失败、初始化和密码页都留出拖动区', async () => {
+  it('连接、失败、初始化和密码页都留出拖动区', () => {
     memoryBackend.phase = 'loading'
     const loading = render(<App />)
     expect(screen.getByRole('heading', { name: '正在连接服务' })).toBeInTheDocument()
     expectDragShell()
     loading.unmount()
 
-    memoryBackend.phase = 'loading'
-    memoryBackend.sessionError = new Error('无法连接本机服务。请确认服务已启动后重试。')
-    const user = userEvent.setup()
-    render(<App />)
-    expect(await screen.findByRole('heading', { name: '无法连接服务' })).toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('无法连接')
+    memoryBackend.phase = 'address'
+    const address = render(<App />)
+    expect(screen.getByRole('heading', { name: '连接服务' })).toBeInTheDocument()
+    expect(screen.getByLabelText('服务地址').closest('.session-card')).toBeTruthy()
     expectDragShell()
+    address.unmount()
+
+    memoryBackend.phase = 'offline'
+    memoryBackend.serverUrl = 'https://tom.example.com'
+    memoryBackend.connectError = '无法连接服务。请确认地址和网络后重试。'
+    render(<App />)
+    expect(screen.getByRole('heading', { name: '无法连接服务' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重新连接' }).closest('.session-card')).toBeTruthy()
-    memoryBackend.sessionError = null
-    memoryBackend.phase = 'setup'
-    await user.click(screen.getByRole('button', { name: '重新连接' }))
-    expect(await screen.findByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
-    expect(screen.getByLabelText('初始化码').closest('.session-card')).toBeTruthy()
     expectDragShell()
   })
 

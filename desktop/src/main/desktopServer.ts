@@ -2,6 +2,12 @@ import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { normalizeStatus, parseEventBlock, type BootstrapStatus } from './bootstrapEvents'
+import {
+  normalizeServerAddress,
+  parseStoredSession,
+  selectServerAddress,
+  serializeStoredSession,
+} from '../shared/serverAddress'
 
 const codeMessages: Record<string, string> = {
   SETUP_CODE_INVALID: '初始化码不正确。',
@@ -15,7 +21,8 @@ const codeMessages: Record<string, string> = {
   MODEL_NOT_READY: '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
   WORKSPACE_NOT_PRISTINE: '服务端已有工作空间，本机旧档没有导入。',
-  OFFLINE: '无法连接本机服务。请确认服务已启动后重试。',
+  OFFLINE: '无法连接服务。请确认地址和网络后重试。',
+  SERVER_URL_MISSING: '还没有填写服务地址。',
 }
 
 interface Failure {
@@ -26,10 +33,15 @@ interface Failure {
 type CallResult<T> = { ok: true; value: T } | ({ ok: false } & Failure)
 
 let token = ''
-let tokenLoaded = false
+let savedServerAddress = ''
+let sessionLoaded = false
 
-function serverUrl(): string {
-  return process.env.TOMBOT_SERVER_URL?.trim() || 'http://127.0.0.1:8787'
+// 服务通常在另一台机器上。没有已保存地址时不能猜一个本机端口。
+function requireServerAddress(): string {
+  if (!savedServerAddress) {
+    throw Object.assign(new Error(codeMessages.SERVER_URL_MISSING), { code: 'SERVER_URL_MISSING' })
+  }
+  return savedServerAddress
 }
 
 function devicePlatform(): string {
@@ -42,24 +54,65 @@ function sessionPath(): string {
   return join(app.getPath('userData'), 'desktop-session.json')
 }
 
-async function loadToken(): Promise<void> {
-  if (tokenLoaded) return
-  tokenLoaded = true
+async function loadSession(): Promise<void> {
+  if (sessionLoaded) return
+  sessionLoaded = true
   try {
-    const parsed = JSON.parse(await readFile(sessionPath(), 'utf8')) as { deviceToken?: unknown }
-    token = typeof parsed.deviceToken === 'string' ? parsed.deviceToken : ''
+    const stored = parseStoredSession(await readFile(sessionPath(), 'utf8'))
+    token = stored.deviceToken
+    savedServerAddress = stored.serverUrl
   } catch {
     token = ''
+    savedServerAddress = ''
   }
+}
+
+/** 凭据和地址写在同一个文件里，避免只更新令牌时把地址抹掉。 */
+async function persistSession(): Promise<void> {
+  const path = sessionPath()
+  await mkdir(app.getPath('userData'), { recursive: true })
+  await writeFile(
+    path,
+    serializeStoredSession({ deviceToken: token, serverUrl: savedServerAddress }),
+    { mode: 0o600 },
+  )
+  await chmod(path, 0o600)
 }
 
 async function storeToken(next: string): Promise<void> {
   token = next
-  tokenLoaded = true
-  const path = sessionPath()
-  await mkdir(app.getPath('userData'), { recursive: true })
-  await writeFile(path, JSON.stringify({ deviceToken: next }), { mode: 0o600 })
-  await chmod(path, 0o600)
+  sessionLoaded = true
+  await persistSession()
+}
+
+async function inspectSession(): Promise<{
+  phase: 'address' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
+  message?: string
+  serverUrl: string
+  bootstrap?: BootstrapStatus
+}> {
+  await loadSession()
+  const choice = selectServerAddress(savedServerAddress, process.env.TOMBOT_SERVER_URL)
+  if (!choice.connect) return { phase: 'address', serverUrl: choice.prefill }
+  try {
+    const status = (await call('GET', '/auth/status')) as {
+      initialized: boolean
+      authenticated: boolean
+    }
+    if (!status.authenticated) {
+      token = ''
+      await persistSession()
+      return { phase: status.initialized ? 'login' : 'setup', serverUrl: choice.connect }
+    }
+    const bootstrap = normalizeStatus(await call('GET', '/bootstrap/status'))
+    if (bootstrap.phase !== 'ready') {
+      return { phase: 'bootstrap', serverUrl: choice.connect, bootstrap }
+    }
+    return { phase: 'ready', serverUrl: choice.connect }
+  } catch (error) {
+    const failed = failure(error)
+    return { phase: 'offline', message: failed.message, serverUrl: choice.connect }
+  }
 }
 
 function failure(error: unknown): Failure {
@@ -75,10 +128,11 @@ async function call(
   timeout = 20_000,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  await loadToken()
+  await loadSession()
+  const base = requireServerAddress()
   let response: Response
   try {
-    response = await fetch(`${serverUrl()}/api/v1${path}`, {
+    response = await fetch(`${base}/api/v1${path}`, {
       method,
       headers: {
         'content-type': 'application/json',
@@ -169,10 +223,11 @@ async function readBootstrapEvents(
   cursor: number,
   signal: AbortSignal,
 ): Promise<'abort' | 'resync' | 'eof'> {
-  await loadToken()
+  await loadSession()
+  const base = requireServerAddress()
   let response: Response
   try {
-    response = await fetch(`${serverUrl()}/api/v1/bootstrap/events?after=${cursor}`, {
+    response = await fetch(`${base}/api/v1/bootstrap/events?after=${cursor}`, {
       headers: {
         accept: 'text/event-stream',
         ...(token ? { authorization: `Bearer ${token}` } : {}),
@@ -232,22 +287,18 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
 
 /** 注册渲染进程可调用的服务通道。令牌只留在主进程，页面拿不到。 */
 export function registerDesktopIpc(): void {
-  ipcMain.handle('desktop:session', () =>
+  ipcMain.handle('desktop:session', () => handle(() => inspectSession()))
+  ipcMain.handle('desktop:connect', (_event, input: unknown) =>
     handle(async () => {
-      const status = (await call('GET', '/auth/status')) as {
-        initialized: boolean
-        authenticated: boolean
+      await loadSession()
+      const next = normalizeServerAddress(typeof input === 'string' ? input : '')
+      if (next !== savedServerAddress) {
+        // 凭据属于上一台服务，换地址后不能继续带过去。
+        token = ''
+        savedServerAddress = next
+        await persistSession()
       }
-      if (status.authenticated) {
-        const bootstrap = normalizeStatus(await call('GET', '/bootstrap/status'))
-        if (bootstrap.phase !== 'ready') return { phase: 'bootstrap', bootstrap }
-        return { phase: 'ready' }
-      }
-      token = ''
-      await mkdir(app.getPath('userData'), { recursive: true })
-      await writeFile(sessionPath(), JSON.stringify({ deviceToken: '' }), { mode: 0o600 })
-      await chmod(sessionPath(), 0o600)
-      return { phase: status.initialized ? 'login' : 'setup' }
+      return inspectSession()
     }),
   )
   ipcMain.handle('desktop:setup', (_event, input: { setupCode: string; password: string }) =>
@@ -476,8 +527,8 @@ async function readStream(
   event: IpcMainInvokeEvent,
   input: { agentId: string; messageId: string },
 ): Promise<unknown> {
-  await loadToken()
-  const response = await fetch(`${serverUrl()}/api/v1/messages/stream`, {
+  await loadSession()
+  const response = await fetch(`${requireServerAddress()}/api/v1/messages/stream`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -629,7 +680,7 @@ async function uploadFile(input: {
   botId?: string
   shared?: boolean
 }): Promise<{ path: string; sha256: string }> {
-  await loadToken()
+  await loadSession()
   const form = new FormData()
   form.append(
     'file',
@@ -637,7 +688,7 @@ async function uploadFile(input: {
     input.name,
   )
   const query = input.shared ? 'scope=shared' : `bot_id=${encodeURIComponent(input.botId ?? '')}`
-  const response = await fetch(`${serverUrl()}/api/v1/fs/upload?${query}`, {
+  const response = await fetch(`${requireServerAddress()}/api/v1/fs/upload?${query}`, {
     method: 'POST',
     headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: form,
@@ -657,11 +708,11 @@ async function uploadFile(input: {
 }
 
 async function previewFile(path: string, botId?: string): Promise<string> {
-  await loadToken()
+  await loadSession()
   const query = path.startsWith('shared/')
     ? `scope=shared&path=${encodeURIComponent(path)}`
     : `bot_id=${encodeURIComponent(botId ?? '')}&path=${encodeURIComponent(path)}`
-  const response = await fetch(`${serverUrl()}/api/v1/fs/download?${query}`, {
+  const response = await fetch(`${requireServerAddress()}/api/v1/fs/download?${query}`, {
     headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
     signal: AbortSignal.timeout(20_000),
   })
@@ -683,9 +734,9 @@ async function readConversationStream(
   conversationId: string,
   body: unknown,
 ): Promise<unknown> {
-  await loadToken()
+  await loadSession()
   const response = await fetch(
-    `${serverUrl()}/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+    `${requireServerAddress()}/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       method: 'POST',
       headers: {

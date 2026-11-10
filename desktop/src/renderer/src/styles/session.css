@@ -74,6 +74,10 @@
   font-size: 14px;
 }
 
+.session-card input::placeholder {
+  color: var(--subtle);
+}
+
 .session-card .form-error {
   text-align: left;
 }

@@ -18,7 +18,7 @@ export function SessionFrame({ children }: { children: ReactNode }) {
   )
 }
 
-/** 初始化、密码验证、连接失败和引导进度。布局沿用现有表单和主按钮。 */
+/** 填写服务地址、初始化、密码验证、连接失败和引导进度。布局沿用现有表单和主按钮。 */
 export function SessionGate({ session }: { session: Session }) {
   if (session.phase === 'loading') {
     return (
@@ -30,33 +30,55 @@ export function SessionGate({ session }: { session: Session }) {
       </SessionFrame>
     )
   }
-  if (session.phase === 'offline') {
-    return (
-      <SessionFrame>
-        <section className="session-card">
-          <Avatar preset="bombay" size="large" />
-          <h1>无法连接服务</h1>
-          <p>TomBot 需要本机服务才能打开工作空间。</p>
-          {session.message && (
-            <p className="form-error" role="alert">
-              {session.message}
-            </p>
-          )}
-          <button
-            className="primary-button"
-            type="button"
-            disabled={session.pending}
-            onClick={() => void session.retry()}
-          >
-            重新连接
-          </button>
-        </section>
-      </SessionFrame>
-    )
+  if (session.phase === 'address' || session.phase === 'offline') {
+    return <ServerForm session={session} />
   }
   if (session.phase === 'login') return <LoginForm session={session} />
   if (session.phase === 'bootstrap') return <BootstrapView session={session} />
   return <SetupForm session={session} />
+}
+
+function ServerForm({ session }: { session: Session }) {
+  const [serverUrl, setServerUrl] = useState(session.serverUrl)
+  const isOffline = session.phase === 'offline'
+
+  function submit(event: FormEvent): void {
+    event.preventDefault()
+    void session.connect(serverUrl)
+  }
+
+  return (
+    <SessionFrame>
+      <form className="session-card" onSubmit={submit}>
+        <Avatar preset="bombay" size="large" />
+        <h1>{isOffline ? '无法连接服务' : '连接服务'}</h1>
+        <p>
+          {isOffline
+            ? '没有连上这台服务。可以修改地址后再试。'
+            : '桌面客户端只转发消息。请填写远端服务地址，例如 https://tom.example.com。'}
+        </p>
+        <label>
+          服务地址
+          <input
+            value={serverUrl}
+            autoFocus
+            autoComplete="url"
+            spellCheck={false}
+            placeholder="https://tom.example.com"
+            onChange={(event) => setServerUrl(event.target.value)}
+          />
+        </label>
+        {session.message && (
+          <p className="form-error" role="alert">
+            {session.message}
+          </p>
+        )}
+        <button className="primary-button" type="submit" disabled={session.pending}>
+          {isOffline ? '重新连接' : '连接'}
+        </button>
+      </form>
+    </SessionFrame>
+  )
 }
 
 function BootstrapView({ session }: { session: Session }) {

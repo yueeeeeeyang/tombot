@@ -7,7 +7,7 @@ import {
 } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildCompanion, startCompanion, type Companion } from './companionServer'
@@ -95,10 +95,19 @@ test.afterEach(async () => {
   expect(browserErrors).toEqual([])
 })
 
-function launchApp(profile: string): Promise<ElectronApplication> {
+function launchApp(
+  profile: string,
+  serverEnv: string | null = companion.url,
+): Promise<ElectronApplication> {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') env[key] = value
+  }
+  if (serverEnv === null) delete env.TOMBOT_SERVER_URL
+  else env.TOMBOT_SERVER_URL = serverEnv
   return electron.launch({
     args: ['.', `--user-data-dir=${profile}`, '--force-device-scale-factor=1'],
-    env: { ...process.env, TOMBOT_SERVER_URL: companion.url },
+    env,
   })
 }
 
@@ -159,18 +168,30 @@ async function clearDragHints(): Promise<void> {
   })
 }
 
+/** 环境变量只预填地址。每个新配置目录都要先确认，才会去问服务是否已初始化。 */
+async function submitServerAddress(): Promise<void> {
+  const address = window.getByLabel('服务地址')
+  await expect(address).toBeVisible()
+  await expect(address).toHaveValue(companion.url)
+  await window.getByRole('button', { name: '连接' }).click()
+}
+
 /** 每个测试都有自己的新服务，所以这里走初始化。初始化码和密码只填进表单。 */
 async function unlock(): Promise<void> {
-  const setupHeading = window.getByRole('heading', { name: '初始化 TomBot' })
-  await expect(setupHeading).toBeVisible()
   if (!setupShot) {
+    await expect(window.getByRole('heading', { name: '连接服务' })).toBeVisible()
     await mkdir('/opt/cursor/artifacts', { recursive: true })
     await expectSessionDrag()
-    await window.screenshot({ path: '/opt/cursor/artifacts/session-setup.png', scale: 'css' })
     await paintDragHints()
     await window.screenshot({ path: '/opt/cursor/artifacts/session-connect.png', scale: 'css' })
     await clearDragHints()
     await expectSessionDrag()
+  }
+  await submitServerAddress()
+  const setupHeading = window.getByRole('heading', { name: '初始化 TomBot' })
+  await expect(setupHeading).toBeVisible()
+  if (!setupShot) {
+    await window.screenshot({ path: '/opt/cursor/artifacts/session-setup.png', scale: 'css' })
     setupShot = true
   }
   await window.getByLabel('初始化码').fill(companion.setupCode)
@@ -251,6 +272,60 @@ async function updateServerWorkspace(
   await expect(window.getByRole('textbox', { name: /发消息/ })).toBeVisible()
 }
 
+test('首次打开要求填写服务地址，不会自己去连本机', async () => {
+  await application.close()
+  await rm(profilePath, { recursive: true, force: true })
+  profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-address-'))
+  application = await launchApp(profilePath, null)
+  window = await application.firstWindow()
+  window.on('pageerror', (error) => browserErrors.push(error.message))
+  await expect(window.getByRole('heading', { name: '连接服务' })).toBeVisible()
+  await expect(window.getByLabel('服务地址')).toHaveValue('')
+  await expect(window.getByRole('heading', { name: '正在连接服务' })).toHaveCount(0)
+  await expect(window.getByText('正在确认这台服务是否已经初始化。')).toHaveCount(0)
+  await mkdir('/opt/cursor/artifacts', { recursive: true })
+  await window.screenshot({ path: '/opt/cursor/artifacts/session-address.png', scale: 'css' })
+})
+
+test('连接失败后可以修改服务地址', async () => {
+  await application.close()
+  await rm(profilePath, { recursive: true, force: true })
+  profilePath = await mkdtemp(join(tmpdir(), 'tombot-desktop-offline-'))
+  application = await launchApp(profilePath, null)
+  window = await application.firstWindow()
+  window.on('pageerror', (error) => browserErrors.push(error.message))
+  await window.getByLabel('服务地址').fill('http://127.0.0.1:9')
+  await window.getByRole('button', { name: '连接' }).click()
+  await expect(window.getByRole('heading', { name: '无法连接服务' })).toBeVisible()
+  await expect(window.getByLabel('服务地址')).toHaveValue('http://127.0.0.1:9')
+  await expect(window.getByRole('alert')).toContainText('无法连接服务')
+  await window.getByLabel('服务地址').fill('https://tom.example.com')
+  await mkdir('/opt/cursor/artifacts', { recursive: true })
+  await window.screenshot({
+    path: '/opt/cursor/artifacts/session-connect-failed.png',
+    scale: 'css',
+  })
+  await window.getByLabel('服务地址').fill(companion.url)
+  await window.getByRole('button', { name: '重新连接' }).click()
+  await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
+})
+
+test('下次打开使用已保存的服务地址', async () => {
+  const saved = JSON.parse(await readFile(join(profilePath, 'desktop-session.json'), 'utf8')) as {
+    serverUrl?: string
+    deviceToken?: string
+  }
+  expect(saved.serverUrl).toBe(companion.url)
+  expect(typeof saved.deviceToken).toBe('string')
+  expect((saved.deviceToken ?? '').length).toBeGreaterThan(0)
+  await application.close()
+  application = await launchApp(profilePath, null)
+  window = await application.firstWindow()
+  window.on('pageerror', (error) => browserErrors.push(error.message))
+  await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
+  await expect(window.getByRole('heading', { name: '连接服务' })).toHaveCount(0)
+})
+
 test('已初始化后要验证密码才能进入工作空间', async () => {
   await application.close()
   await rm(profilePath, { recursive: true, force: true })
@@ -258,6 +333,7 @@ test('已初始化后要验证密码才能进入工作空间', async () => {
   application = await launchApp(profilePath)
   window = await application.firstWindow()
   window.on('pageerror', (error) => browserErrors.push(error.message))
+  await submitServerAddress()
   await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
   await expectSessionDrag()
   await window.screenshot({ path: '/opt/cursor/artifacts/session-login.png', scale: 'css' })
@@ -277,6 +353,7 @@ test('引导未完成时显示进度，重试成功后才进入工作空间', as
   application = await launchApp(profilePath)
   window = await application.firstWindow()
   window.on('pageerror', (error) => browserErrors.push(error.message))
+  await submitServerAddress()
   await expect(window.getByRole('heading', { name: '初始化 TomBot' })).toBeVisible()
   await window.getByLabel('初始化码').fill(companion.setupCode)
   await window.getByLabel('密码', { exact: true }).fill(password)
