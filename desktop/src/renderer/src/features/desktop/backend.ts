@@ -1,11 +1,12 @@
 import type { SettingsDraft } from '../settings/settings'
 import type { AppWorkspace } from '../workspace/model'
 
-export type SessionPhase = 'loading' | 'offline' | 'setup' | 'login' | 'ready'
+export type SessionPhase = 'loading' | 'address' | 'offline' | 'setup' | 'login' | 'ready'
 
 export interface SessionSnapshot {
   phase: SessionPhase
   message?: string
+  serverUrl?: string
 }
 
 export interface WorkspaceSnapshot {
@@ -47,8 +48,10 @@ export interface DeliveryResult {
  */
 export interface DesktopBackend {
   savesSynchronously?: boolean
-  trySessionSync?: () => SessionPhase
+  trySessionSync?: () => SessionSnapshot
   session: () => Promise<SessionSnapshot>
+  /** 保存用户确认的服务地址并检查是否已初始化。地址不合法时抛出。 */
+  connect: (serverUrl: string) => Promise<SessionSnapshot>
   setup: (input: { setupCode: string; password: string }) => Promise<void>
   login: (password: string) => Promise<void>
   tryWorkspaceSync?: () => WorkspaceSnapshot

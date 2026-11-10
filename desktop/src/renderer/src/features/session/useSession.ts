@@ -1,26 +1,42 @@
-import { useEffect, useState } from 'react'
-import { getBackend, type SessionPhase } from '../desktop/backend'
+import { useCallback, useEffect, useState } from 'react'
+import { normalizeServerAddress } from '../../../../shared/serverAddress'
+import { getBackend, type SessionPhase, type SessionSnapshot } from '../desktop/backend'
 
-/** 管理初始化、密码验证和离线重试。工作空间只在验证通过后挂载。 */
+/** 没有已保存地址时停在连接页。连不上必须离开加载，不能停在「正在连接服务」。 */
 export function useSession() {
   const backend = getBackend()
-  const peeked = backend.trySessionSync?.() ?? null
-  const [phase, setPhase] = useState<SessionPhase>(peeked ?? 'loading')
-  const [message, setMessage] = useState('')
+  const syncSession = backend.trySessionSync?.() ?? null
+  const [phase, setPhase] = useState<SessionPhase>(syncSession?.phase ?? 'loading')
+  const [serverUrl, setServerUrl] = useState(syncSession?.serverUrl ?? '')
+  const [message, setMessage] = useState(syncSession?.message ?? '')
   const [pending, setPending] = useState(false)
+  const apply = useCallback((result: SessionSnapshot) => {
+    setPhase(result.phase)
+    setMessage(result.message ?? '')
+    if (result.serverUrl !== undefined) setServerUrl(result.serverUrl)
+  }, [])
 
   useEffect(() => {
-    if (peeked) return
+    // 内存测试用同步会话，避免首屏闪一下加载。真实客户端没有这个方法，必须自己接住失败。
+    if (backend.trySessionSync) return
     let cancelled = false
-    void backend.session().then((result) => {
-      if (cancelled) return
-      setPhase(result.phase)
-      setMessage(result.message ?? '')
-    })
+    void backend
+      .session()
+      .then((result) => {
+        if (cancelled) return
+        apply(result)
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return
+        setPhase('offline')
+        setMessage(
+          error instanceof Error ? error.message : '无法连接服务。请确认地址和网络后重试。',
+        )
+      })
     return () => {
       cancelled = true
     }
-  }, [backend, peeked])
+  }, [apply, backend])
 
   async function submitSetup(input: { setupCode: string; password: string }): Promise<void> {
     setPending(true)
@@ -49,21 +65,33 @@ export function useSession() {
     }
   }
 
-  async function retry(): Promise<void> {
-    setPending(true)
-    setPhase('loading')
-    setMessage('')
+  async function connect(input: string): Promise<void> {
+    let normalized: string
     try {
-      const result = await backend.session()
-      setPhase(result.phase)
-      setMessage(result.message ?? '')
+      normalized = normalizeServerAddress(input)
     } catch (error) {
-      setPhase('offline')
-      setMessage((error as Error).message)
+      setMessage(error instanceof Error ? error.message : '请输入服务地址。')
+      return
+    }
+    setPending(true)
+    setMessage('')
+    setServerUrl(normalized)
+    setPhase('loading')
+    try {
+      apply(await backend.connect(normalized))
+    } catch (error) {
+      const coded = error as { code?: string; message?: string }
+      if (coded.code === 'SERVER_URL_INVALID') {
+        setPhase('address')
+        setMessage(coded.message ?? '请输入服务地址。')
+      } else {
+        setPhase('offline')
+        setMessage(coded.message || '无法连接服务。请确认地址和网络后重试。')
+      }
     } finally {
       setPending(false)
     }
   }
 
-  return { phase, message, pending, submitSetup, submitLogin, retry }
+  return { phase, serverUrl, message, pending, submitSetup, submitLogin, connect }
 }

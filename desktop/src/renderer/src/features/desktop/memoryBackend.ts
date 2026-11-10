@@ -1,9 +1,11 @@
 import { createSettingsDraft, type SettingsDraft } from '../settings/settings'
 import { createWorkspace, type AppWorkspace, type ChatMessage } from '../workspace/model'
+import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
   DeliveryResult,
   DesktopBackend,
   SessionPhase,
+  SessionSnapshot,
   SettingsView,
   WorkspaceSnapshot,
 } from './backend'
@@ -14,6 +16,8 @@ const modelNotReady = '尚未配置可用模型，请先在设置中填写 API �
 export class MemoryBackend implements DesktopBackend {
   readonly savesSynchronously = true
   phase: SessionPhase = 'ready'
+  serverUrl = ''
+  connectError: string | null = null
   setupCode = 'memory-setup-code'
   password = ''
   failSave: Error | null = null
@@ -22,12 +26,29 @@ export class MemoryBackend implements DesktopBackend {
   private settings: SettingsDraft = createSettingsDraft()
   private apiKey = ''
 
-  trySessionSync(): SessionPhase {
-    return this.phase
+  trySessionSync(): SessionSnapshot {
+    return {
+      phase: this.phase,
+      serverUrl: this.serverUrl,
+      ...(this.phase === 'offline' && this.connectError ? { message: this.connectError } : {}),
+    }
   }
 
-  session(): Promise<{ phase: SessionPhase }> {
-    return Promise.resolve({ phase: this.phase })
+  session(): Promise<SessionSnapshot> {
+    return Promise.resolve(this.trySessionSync())
+  }
+
+  async connect(input: string): Promise<SessionSnapshot> {
+    const serverUrl = normalizeServerAddress(input)
+    this.serverUrl = serverUrl
+    if (this.connectError) {
+      this.phase = 'offline'
+      return { phase: 'offline', message: this.connectError, serverUrl }
+    }
+    if (this.phase === 'address' || this.phase === 'offline' || this.phase === 'loading') {
+      this.phase = this.password ? 'login' : 'setup'
+    }
+    return { phase: this.phase, serverUrl }
   }
 
   async setup(input: { setupCode: string; password: string }): Promise<void> {
@@ -162,6 +183,8 @@ export class MemoryBackend implements DesktopBackend {
 
   reset(): void {
     this.phase = 'ready'
+    this.serverUrl = ''
+    this.connectError = null
     this.password = ''
     this.failSave = null
     this.workspace = createWorkspace()
