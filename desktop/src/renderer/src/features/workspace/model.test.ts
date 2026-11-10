@@ -46,7 +46,7 @@ describe('工作空间领域规则', () => {
   })
 
   it('拒绝未知头像和远程头像地址', () => {
-    for (const avatar of ['', 'black', 'https://example.test/avatar.png']) {
+    for (const avatar of ['', 'black', 'https://example.test/avatar.png', 'workspace-cat']) {
       const workspace = createWorkspace()
       expect(
         currentWorkspaceSchema.safeParse({

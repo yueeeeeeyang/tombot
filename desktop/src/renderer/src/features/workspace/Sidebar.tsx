@@ -1,5 +1,6 @@
 import { Plus, Search, Settings } from 'lucide-react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
+import workspaceCat from '../../assets/cats/workspace-cat.png'
 import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
 import type { CatMenuAnchor } from './CatContextMenu'
@@ -180,7 +181,9 @@ export function Sidebar({
           aria-label="我的工作空间"
           title="我的工作空间"
         >
-          <span className="profile-avatar">T</span>
+          <span className="profile-avatar">
+            <img src={workspaceCat} alt="" draggable={false} />
+          </span>
           <span className="profile-copy">
             <span>我的工作空间</span>
             <small>
