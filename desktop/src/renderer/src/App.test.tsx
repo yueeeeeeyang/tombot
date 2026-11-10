@@ -61,7 +61,7 @@ describe('客户端交互', () => {
       screen.getByRole('button', { name: /^游戏程序/ }).querySelector('.avatar'),
     ).toHaveAttribute('data-pose', 'idle')
     const workspaceButton = screen.getByRole('button', { name: '我的工作空间' })
-    const workspaceCat = workspaceButton.querySelector('.profile-avatar')
+    const workspaceCat = workspaceButton.querySelector('.profile-avatar img')
     expect(workspaceCat?.tagName).toBe('IMG')
     expect(workspaceCat).toHaveAttribute('src', expect.stringContaining('workspace-cat'))
     expect(workspaceButton.querySelector('.avatar')).toBeNull()

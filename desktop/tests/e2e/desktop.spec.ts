@@ -447,17 +447,44 @@ async function expectFooterControlsAligned(): Promise<void> {
   const settings = window.getByRole('button', { name: '打开设置' })
   const metrics = await window.locator('.sidebar-footer').evaluate((footer) => {
     const avatar = footer.querySelector('.profile-avatar')!.getBoundingClientRect()
+    const portrait = footer.querySelector('.profile-avatar img')!.getBoundingClientRect()
     const button = footer.querySelector('.settings-button')!.getBoundingClientRect()
     const icon = footer.querySelector('.settings-button svg')!.getBoundingClientRect()
+    const frame = getComputedStyle(footer.querySelector('.profile-avatar')!)
+    const image = getComputedStyle(footer.querySelector('.profile-avatar img')!)
     return {
-      avatar: { width: avatar.width, height: avatar.height },
+      avatar: { x: avatar.x, y: avatar.y, width: avatar.width, height: avatar.height },
+      portrait: { x: portrait.x, y: portrait.y, width: portrait.width, height: portrait.height },
       button: { width: button.width, height: button.height },
       icon: { width: icon.width, height: icon.height, x: icon.x, y: icon.y },
       buttonOrigin: { x: button.x, y: button.y },
+      clip: {
+        overflow: frame.overflow,
+        radius: frame.borderTopLeftRadius,
+        border: frame.borderTopWidth,
+        fit: image.objectFit,
+        animation: image.animationName,
+      },
     }
   })
   expect(metrics.button.width).toBe(metrics.avatar.width)
   expect(metrics.button.height).toBe(metrics.avatar.height)
+  expect(metrics.clip.overflow).toBe('hidden')
+  expect(metrics.clip.fit).toBe('cover')
+  expect(metrics.clip.border).toBe('1px')
+  expect(metrics.clip.animation).toBe('none')
+  expect(
+    metrics.clip.radius === '50%' ||
+      Math.abs(parseFloat(metrics.clip.radius) - metrics.avatar.width / 2) < 0.5,
+  ).toBe(true)
+  expect(metrics.portrait.x).toBeGreaterThanOrEqual(metrics.avatar.x)
+  expect(metrics.portrait.y).toBeGreaterThanOrEqual(metrics.avatar.y)
+  expect(metrics.portrait.x + metrics.portrait.width).toBeLessThanOrEqual(
+    metrics.avatar.x + metrics.avatar.width,
+  )
+  expect(metrics.portrait.y + metrics.portrait.height).toBeLessThanOrEqual(
+    metrics.avatar.y + metrics.avatar.height,
+  )
   expect(metrics.icon.width).toBeCloseTo(metrics.button.width / 2, 1)
   expect(metrics.icon.height).toBeCloseTo(metrics.button.height / 2, 1)
   expect(metrics.icon.x + metrics.icon.width / 2).toBeCloseTo(
@@ -867,7 +894,7 @@ for (const modal of [
 
 test('工作空间头像是静止图片，悬停不播放猫咪动画', async () => {
   const button = window.getByRole('button', { name: '我的工作空间' })
-  const image = button.locator('.profile-avatar')
+  const image = button.locator('.profile-avatar img')
   await expect(button.locator('.avatar')).toHaveCount(0)
   await expect(image).toHaveAttribute('src', /workspace-cat/)
   expect(

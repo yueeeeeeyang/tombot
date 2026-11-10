@@ -181,7 +181,9 @@ export function Sidebar({
           aria-label="我的工作空间"
           title="我的工作空间"
         >
-          <img className="profile-avatar" src={workspaceCat} alt="" draggable={false} />
+          <span className="profile-avatar">
+            <img src={workspaceCat} alt="" draggable={false} />
+          </span>
           <span className="profile-copy">
             <span>我的工作空间</span>
             <small>
