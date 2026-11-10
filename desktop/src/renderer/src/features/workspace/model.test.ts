@@ -3,7 +3,6 @@ import { DEFAULT_CAT_MODEL_ID } from '../models/catalog'
 import {
   addAgent,
   createWorkspace,
-  exportConversation,
   MAX_AGENTS,
   MAX_MESSAGE_LENGTH,
   MAX_MESSAGES,
@@ -152,24 +151,6 @@ describe('工作空间领域规则', () => {
     expect(searchAgents(workspace.agents, '  ')).toHaveLength(8)
   })
 
-  it('导出仅包含用户草稿，并明确标注未发送', () => {
-    const workspace = updateDraft(
-      saveMessage(
-        updateDraft(createWorkspace(), 'assistant', '已存内容'),
-        'assistant',
-        'message-one',
-        timestamp,
-      ),
-      'assistant',
-      '未完成输入',
-    )
-    const markdown = exportConversation(workspace.agents[0]!)
-    expect(markdown).toContain('未发送')
-    expect(markdown).toContain('已存内容')
-    expect(markdown).toContain('未完成输入')
-    expect(markdown).not.toContain('你的想法，有了一个新家')
-  })
-
   it('拒绝损坏的活动助手引用和重复标识', () => {
     expect(
       appWorkspaceSchema.safeParse({ ...createWorkspace(), activeAgentId: 'missing' }).success,
@@ -301,29 +282,6 @@ describe('工作空间领域规则', () => {
     expect(assistantReply[0]?.content).toContain(
       'This assistant message replies to an earlier message.',
     )
-  })
-
-  it('导出保留回复摘要、表情和失败状态', () => {
-    const workspace = saveMessage(
-      updateDraft(createWorkspace(), 'assistant', '已存内容'),
-      'assistant',
-      'message-one',
-      timestamp,
-    )
-    workspace.agents[0]!.messages[0] = {
-      ...workspace.agents[0]!.messages[0]!,
-      status: 'failed',
-      reactions: [
-        { emoji: '👍', count: 2 },
-        { emoji: '🎉', count: 1 },
-      ],
-      replyTo: { messageId: 'origin', excerpt: '上一句' },
-    }
-    const markdown = exportConversation(workspace.agents[0]!)
-    expect(markdown).toContain('发送失败')
-    expect(markdown).toContain('> 上一句')
-    expect(markdown).toContain('表情：👍×2 🎉')
-    expect(markdown).toContain('已存内容')
   })
 
   it('可以更换猫咪模型，空模型或猫咪不存在时不改原数据', () => {

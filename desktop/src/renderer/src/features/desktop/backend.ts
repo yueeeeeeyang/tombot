@@ -17,6 +17,23 @@ export interface SettingsView extends SettingsDraft {
   hasApiKey: boolean
 }
 
+export type ServerBubble = {
+  id: string
+  role: 'user' | 'assistant'
+  speaker: string
+  content: string
+  createdAt: string
+  replyToId?: string
+  reactions: Array<{ emoji: string; count: number }>
+  attachments: Array<{
+    name: string
+    path: string
+    sha256: string
+    mediaType: string
+    kind: 'image' | 'file'
+  }>
+}
+
 /** 投递结果。模型未配置时不改消息，只带回说明。 */
 export interface DeliveryResult {
   workspace?: AppWorkspace
@@ -59,6 +76,40 @@ export interface DesktopBackend {
   >
   setRoutineEnabled?: (id: string, revision: number, enabled: boolean) => Promise<void>
   deleteRoutine?: (id: string, revision: number) => Promise<void>
+  listGroups?: () => Promise<
+    Array<{ id: string; name: string; revision: number; conversation_id: string }>
+  >
+  createGroup?: (
+    name: string,
+    memberIds: string[],
+  ) => Promise<{ id: string; name: string; revision: number; conversation_id: string }>
+  groupDetail?: (id: string) => Promise<{
+    id: string
+    name: string
+    revision: number
+    conversation_id: string
+    members: Array<{ bot_id: string; name: string }>
+  }>
+  addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>
+  removeGroupMember?: (id: string, revision: number, botId: string) => Promise<void>
+  listCatMessages?: () => Promise<
+    Array<{ id: string; title: string; members: Array<{ bot_id: string; name: string }> }>
+  >
+  listConversationMessages?: (conversationId: string) => Promise<ServerBubble[]>
+  sendConversation?: (
+    conversationId: string,
+    content: string,
+    attachments: Array<{ path: string; sha256: string }>,
+    replyToId: string | undefined,
+    onEvent?: (event: { type: string; text: string }) => void,
+  ) => Promise<void>
+  uploadAttachment?: (
+    file: { name: string; type: string; bytes: Uint8Array },
+    destination: { botId?: string; shared?: boolean },
+  ) => Promise<{ path: string; sha256: string }>
+  previewAttachment?: (path: string, botId?: string) => Promise<string>
+  toggleReaction?: (messageId: string, emoji: string) => Promise<void>
+  ensureAgent?: (agentId: string) => Promise<void>
   startBootstrap?: () => Promise<void>
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>

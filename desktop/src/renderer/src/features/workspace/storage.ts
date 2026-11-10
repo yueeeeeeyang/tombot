@@ -71,7 +71,7 @@ export function loadWorkspace(storage: WorkspaceStorage): AppWorkspace {
 export function persistWorkspace(storage: WorkspaceStorage, workspace: AppWorkspace): void {
   const serialized = JSON.stringify(appWorkspaceSchema.parse(workspace))
   if (new Blob([serialized]).size > MAX_STORAGE_BYTES) {
-    throw new Error('本地草稿空间已满，请先导出并删除不需要的草稿。')
+    throw new Error('本地草稿空间已满，请先删除不需要的草稿。')
   }
   try {
     storage.setItem(STORAGE_KEY, serialized)

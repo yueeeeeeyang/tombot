@@ -114,6 +114,47 @@
   min-width: 0;
 }
 .routine-row strong,
+.message-speaker {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+.message-image {
+  display: block;
+  max-width: 220px;
+  margin-top: 8px;
+  border-radius: 10px;
+}
+.message-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.composer-files span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 12px;
+}
+.member-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+}
 .memory-list strong {
   display: block;
   overflow: hidden;

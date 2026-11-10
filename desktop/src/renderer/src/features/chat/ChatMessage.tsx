@@ -1,24 +1,33 @@
-import { Ellipsis, Reply, Smile } from 'lucide-react'
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import type { ChatMessage as ChatMessageModel } from '../workspace/model'
+import { Ellipsis, FileText, Reply, Smile } from 'lucide-react'
+import {
+  useEffect,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
+import type { ChatMessage as ChatMessageModel, MessageAttachment } from '../workspace/model'
 
 /** 用户气泡在右侧，助手气泡在左侧；快捷按钮放在朝向会话中央的一侧。 */
 export function ChatMessage({
   message,
+  speaker,
   isHighlighted,
   onOpenMenu,
   onReply,
   onRetry,
   onReact,
   onReveal,
+  onPreview,
 }: {
   message: ChatMessageModel
+  speaker?: string
   isHighlighted: boolean
   onOpenMenu: (messageId: string, x: number, y: number, trigger: HTMLElement) => void
   onReply: (messageId: string) => void
   onRetry: (messageId: string) => void
   onReact: (messageId: string, emoji: string) => void
   onReveal: (messageId: string) => void
+  onPreview?: (attachment: MessageAttachment) => Promise<string>
 }) {
   const needsStatus = message.status === 'unsent' || message.status === 'failed'
   const statusLabel = message.status === 'failed' ? '发送失败，点击重试' : '未发送，点击重试'
@@ -87,7 +96,13 @@ export function ChatMessage({
                 <span aria-hidden="true">{message.replyTo.excerpt}</span>
               </button>
             )}
+            {speaker && message.role === 'assistant' ? (
+              <span className="message-speaker">{speaker}</span>
+            ) : null}
             <div className="message-text">{message.content}</div>
+            {message.attachments?.map((attachment) => (
+              <MessageFile key={attachment.path} attachment={attachment} onPreview={onPreview} />
+            ))}
             {message.reactions.length > 0 && (
               <div className="reaction-pills">
                 {message.reactions.map((reaction) => (
@@ -115,5 +130,37 @@ export function ChatMessage({
         </div>
       </div>
     </div>
+  )
+}
+
+function MessageFile({
+  attachment,
+  onPreview,
+}: {
+  attachment: MessageAttachment
+  onPreview?: (attachment: MessageAttachment) => Promise<string>
+}) {
+  const [preview, setPreview] = useState('')
+  useEffect(() => {
+    if (attachment.kind !== 'image' || !onPreview) return
+    let cancelled = false
+    void onPreview(attachment).then(
+      (url) => {
+        if (!cancelled) setPreview(url)
+      },
+      () => undefined,
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [attachment, onPreview])
+  if (attachment.kind === 'image' && preview) {
+    return <img className="message-image" src={preview} alt={attachment.name} />
+  }
+  return (
+    <p className="message-file">
+      <FileText size={14} />
+      <span>{attachment.name}</span>
+    </p>
   )
 }

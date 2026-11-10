@@ -264,7 +264,7 @@ describe('消息气泡操作', () => {
     expect(screen.getByText('回复').closest('.composer-reply')).toHaveTextContent('你好')
     await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
     expect(screen.getByText('回复').closest('.composer-reply')).toBeInTheDocument()
-    expect(failed.onSave).toHaveBeenCalledWith('message-one')
+    expect(failed.onSave).toHaveBeenCalledWith('message-one', [])
     await user.click(screen.getByRole('button', { name: '取消回复' }))
     expect(screen.queryByText('回复')).not.toBeInTheDocument()
   })

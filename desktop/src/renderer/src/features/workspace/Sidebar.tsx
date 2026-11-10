@@ -24,6 +24,12 @@ export function Sidebar({
   onSearch,
   onCreate,
   onSettings,
+  chatGroups,
+  catMessages,
+  selected,
+  onOpenGroup,
+  onOpenCatMessage,
+  onCreateGroup,
 }: {
   workspace: Workspace
   preferences: SidebarPreferences
@@ -40,6 +46,12 @@ export function Sidebar({
   onSearch: () => void
   onCreate: () => void
   onSettings: () => void
+  chatGroups: Array<{ id: string; name: string }>
+  catMessages: Array<{ id: string; title: string }>
+  selected: { kind: 'agent' | 'group' | 'dm'; id: string }
+  onOpenGroup: (id: string) => void
+  onOpenCatMessage: (id: string) => void
+  onCreateGroup: () => void
 }) {
   const assistant = workspace.agents.find((agent) => agent.id === 'assistant')!
   const { hiddenIds, pinnedIds, unreadIds } = preferences
@@ -101,6 +113,9 @@ export function Sidebar({
             >
               <Plus size={21} strokeWidth={1.6} />
             </button>
+            <button className="text-button" type="button" onClick={onCreateGroup}>
+              群聊
+            </button>
           </>
         )}
       </div>
@@ -110,7 +125,7 @@ export function Sidebar({
             key={agent.id}
             agent={agent}
             isAssistant={agent.id === assistant.id}
-            isActive={workspace.activeAgentId === agent.id}
+            isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
             isUnread={isUnread(agent)}
             isRenaming={agent.id === renamingAgentId}
             onSelect={onSelect}
@@ -141,7 +156,7 @@ export function Sidebar({
                 <AgentButton
                   key={agent.id}
                   agent={agent}
-                  isActive={workspace.activeAgentId === agent.id}
+                  isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
                   isUnread={isUnread(agent)}
                   isRenaming={agent.id === renamingAgentId}
                   onSelect={onSelect}
@@ -153,6 +168,42 @@ export function Sidebar({
               ))}
           </section>
         ))}
+        {chatGroups.length > 0 && (
+          <section className="agent-group">
+            <h2>群聊</h2>
+            {chatGroups.map((group) => (
+              <button
+                key={group.id}
+                type="button"
+                className={`agent-button ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
+                onClick={() => onOpenGroup(group.id)}
+              >
+                <span className="agent-copy">
+                  <span className="agent-name">{group.name}</span>
+                  <span className="agent-preview">多只猫咪一起聊</span>
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
+        {catMessages.length > 0 && (
+          <section className="agent-group">
+            <h2>私信</h2>
+            {catMessages.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={`agent-button ${selected.kind === 'dm' && selected.id === item.id ? 'is-active' : ''}`}
+                onClick={() => onOpenCatMessage(item.id)}
+              >
+                <span className="agent-copy">
+                  <span className="agent-name">{item.title}</span>
+                  <span className="agent-preview">猫咪之间的对话</span>
+                </span>
+              </button>
+            ))}
+          </section>
+        )}
       </nav>
       <div className="sidebar-footer">
         {isCollapsed && (

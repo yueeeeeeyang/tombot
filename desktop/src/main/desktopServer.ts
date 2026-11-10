@@ -198,6 +198,125 @@ export function registerDesktopIpc(): void {
       call('DELETE', `/routines/${encodeURIComponent(input.id)}?revision=${input.revision}`),
     ),
   )
+  ipcMain.handle('desktop:groups', () =>
+    handle(async () => {
+      const rows = (await call('GET', '/groups?limit=50')) as Array<{
+        id: string
+        name: string
+        revision: number
+        conversation_id: string
+      }>
+      return Array.isArray(rows) ? rows : []
+    }),
+  )
+  ipcMain.handle('desktop:group-create', (_event, input: { name: string; memberIds: string[] }) =>
+    handle(async () => {
+      for (const id of input.memberIds)
+        await call('POST', `/workspace/agents/${encodeURIComponent(id)}/ready`)
+      return call('POST', '/groups', {
+        name: input.name,
+        purpose: '',
+        routing: 'all',
+        members: input.memberIds,
+      })
+    }),
+  )
+  ipcMain.handle('desktop:group', (_event, id: string) =>
+    handle(() => call('GET', `/groups/${encodeURIComponent(id)}`)),
+  )
+  ipcMain.handle(
+    'desktop:group-members',
+    (_event, input: { id: string; revision: number; botIds: string[] }) =>
+      handle(async () => {
+        for (const id of input.botIds)
+          await call('POST', `/workspace/agents/${encodeURIComponent(id)}/ready`)
+        return call('POST', `/groups/${encodeURIComponent(input.id)}/members`, {
+          revision: input.revision,
+          bot_ids: input.botIds,
+        })
+      }),
+  )
+  ipcMain.handle(
+    'desktop:group-member-remove',
+    (_event, input: { id: string; revision: number; botId: string }) =>
+      handle(() =>
+        call(
+          'DELETE',
+          `/groups/${encodeURIComponent(input.id)}/members/${encodeURIComponent(input.botId)}?revision=${input.revision}`,
+        ),
+      ),
+  )
+  ipcMain.handle('desktop:cat-messages', () =>
+    handle(async () => {
+      const page = (await call('GET', '/conversations?kind=bot_dm&limit=50')) as {
+        items?: Array<{
+          id: string
+          title: string
+          members?: Array<{ bot_id: string; name: string }>
+        }>
+      }
+      return page.items ?? []
+    }),
+  )
+  ipcMain.handle('desktop:conversation-messages', (_event, conversationId: string) =>
+    handle(async () => {
+      const rows = (await call(
+        'GET',
+        `/conversations/${encodeURIComponent(conversationId)}/messages?limit=80`,
+      )) as ServerMessage[]
+      return (Array.isArray(rows) ? rows : [])
+        .flatMap((row) => {
+          const bubble = toBubble(row)
+          return bubble ? [bubble] : []
+        })
+        .reverse()
+    }),
+  )
+  ipcMain.handle(
+    'desktop:conversation-send',
+    (
+      event,
+      input: {
+        conversationId: string
+        content: string
+        attachments: Array<{ path: string; sha256: string }>
+        replyToId?: string
+      },
+    ) =>
+      handle(() =>
+        readConversationStream(event, input.conversationId, {
+          content: input.content,
+          attachments: input.attachments,
+          ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
+        }),
+      ),
+  )
+  ipcMain.handle(
+    'desktop:upload',
+    (
+      _event,
+      input: {
+        name: string
+        type: string
+        bytes: Uint8Array
+        botId?: string
+        shared?: boolean
+      },
+    ) => handle(() => uploadFile(input)),
+  )
+  ipcMain.handle('desktop:preview', (_event, input: { path: string; botId?: string }) =>
+    handle(() => previewFile(input.path, input.botId)),
+  )
+  ipcMain.handle('desktop:reaction', (_event, input: { messageId: string; emoji: string }) =>
+    handle(() =>
+      call('PUT', `/messages/${encodeURIComponent(input.messageId)}/reaction`, {
+        emoji: input.emoji,
+      }),
+    ),
+  )
+  ipcMain.handle('desktop:ensure-agent', (_event, agentId: string) =>
+    handle(() => call('POST', `/workspace/agents/${encodeURIComponent(agentId)}/ready`)),
+  )
   ipcMain.handle('desktop:computer', (_event, agentId: string) =>
     handle(async () => {
       const result = (await call('POST', '/computer', { agentId })) as { url: string }
@@ -251,6 +370,201 @@ async function readStream(
     }
     return payload
   }
+  const reader = response.body?.getReader()
+  if (!reader)
+    throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let donePayload: unknown
+  const push = async (block: string) => {
+    const name = /^event: (\S+)/m.exec(block)?.[1]
+    const data = block
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6))
+      .join('\n')
+    if (!name || !data) return
+    const parsed = JSON.parse(data) as { text?: string; code?: string; message?: string }
+    if (name === 'delta' || name === 'process') {
+      event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
+    }
+    if (name === 'done') donePayload = parsed
+    if (name === 'error') {
+      throw Object.assign(new Error(parsed.message ?? 'agent 运行失败。'), {
+        code: parsed.code ?? 'MODEL_FAILED',
+      })
+    }
+  }
+  while (true) {
+    const chunk = await reader.read()
+    if (chunk.done) break
+    buffer += decoder.decode(chunk.value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() ?? ''
+    for (const block of blocks) await push(block)
+  }
+  if (buffer.trim()) await push(buffer)
+  if (!donePayload)
+    throw Object.assign(new Error('agent 没有返回结果。'), { code: 'RESPONSE_INVALID' })
+  return donePayload
+}
+
+type ServerMessage = {
+  id: string
+  sender_kind: string
+  sender_bot_id?: string
+  created_at: string
+  blocks?: Array<{
+    kind: string
+    text?: string
+    artifact?: { path?: string; sha256?: string; media_type?: string }
+  }>
+  reply_to_id?: string
+  reactions?: Array<{ emoji: string; count: number }>
+}
+
+function toBubble(message: ServerMessage): {
+  id: string
+  role: 'user' | 'assistant'
+  speaker: string
+  content: string
+  createdAt: string
+  replyToId?: string
+  reactions: Array<{ emoji: string; count: number }>
+  attachments: Array<{
+    name: string
+    path: string
+    sha256: string
+    mediaType: string
+    kind: 'image' | 'file'
+  }>
+} | null {
+  const content = (message.blocks ?? [])
+    .filter((block) => block.kind === 'text')
+    .map((block) => block.text ?? '')
+    .join('')
+  const attachments = (message.blocks ?? []).flatMap((block) => {
+    if (block.kind !== 'artifact' || !block.artifact?.path || !block.artifact.sha256) return []
+    const name = block.artifact.path.split('/').pop() || block.artifact.path
+    const mediaType = block.artifact.media_type ?? ''
+    return [
+      {
+        name,
+        path: block.artifact.path,
+        sha256: block.artifact.sha256,
+        mediaType,
+        kind:
+          mediaType === 'image/png' || mediaType === 'image/jpeg'
+            ? ('image' as const)
+            : ('file' as const),
+      },
+    ]
+  })
+  if (!content.trim() && attachments.length === 0) return null
+  return {
+    id: message.id,
+    role: message.sender_kind === 'user' ? 'user' : 'assistant',
+    speaker: message.sender_bot_id ?? '',
+    content: content.trim() || attachments.map((item) => item.name).join('、'),
+    createdAt: message.created_at,
+    ...(message.reply_to_id ? { replyToId: message.reply_to_id } : {}),
+    reactions: message.reactions ?? [],
+    attachments,
+  }
+}
+
+async function uploadFile(input: {
+  name: string
+  type: string
+  bytes: Uint8Array
+  botId?: string
+  shared?: boolean
+}): Promise<{ path: string; sha256: string }> {
+  await loadToken()
+  const form = new FormData()
+  form.append(
+    'file',
+    new Blob([Buffer.from(input.bytes)], { type: input.type || 'application/octet-stream' }),
+    input.name,
+  )
+  const query = input.shared ? 'scope=shared' : `bot_id=${encodeURIComponent(input.botId ?? '')}`
+  const response = await fetch(`${serverUrl()}/api/v1/fs/upload?${query}`, {
+    method: 'POST',
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: form,
+    signal: AbortSignal.timeout(60_000),
+  })
+  const payload = (await response.json()) as {
+    path?: string
+    sha256?: string
+    error?: { message?: string }
+  }
+  if (!response.ok || !payload.path || !payload.sha256) {
+    throw Object.assign(new Error(payload.error?.message ?? '文件没有上传成功。'), {
+      code: 'UPLOAD_FAILED',
+    })
+  }
+  return { path: payload.path, sha256: payload.sha256 }
+}
+
+async function previewFile(path: string, botId?: string): Promise<string> {
+  await loadToken()
+  const query = path.startsWith('shared/')
+    ? `scope=shared&path=${encodeURIComponent(path)}`
+    : `bot_id=${encodeURIComponent(botId ?? '')}&path=${encodeURIComponent(path)}`
+  const response = await fetch(`${serverUrl()}/api/v1/fs/download?${query}`, {
+    headers: { ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    signal: AbortSignal.timeout(20_000),
+  })
+  if (!response.ok) throw Object.assign(new Error('附件暂时无法显示。'), { code: 'PREVIEW_FAILED' })
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (bytes.length > 1_500_000)
+    throw Object.assign(new Error('图片太大，无法在气泡里预览。'), { code: 'PREVIEW_FAILED' })
+  const lower = path.toLowerCase()
+  const type = lower.endsWith('.png')
+    ? 'image/png'
+    : lower.endsWith('.jpg') || lower.endsWith('.jpeg')
+      ? 'image/jpeg'
+      : 'application/octet-stream'
+  return `data:${type};base64,${bytes.toString('base64')}`
+}
+
+async function readConversationStream(
+  event: IpcMainInvokeEvent,
+  conversationId: string,
+  body: unknown,
+): Promise<unknown> {
+  await loadToken()
+  const response = await fetch(
+    `${serverUrl()}/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
+    {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90_000),
+    },
+  )
+  const type = response.headers.get('content-type') ?? ''
+  if (!type.includes('text/event-stream')) {
+    const text = await response.text()
+    const payload = text
+      ? (JSON.parse(text) as { error?: { code?: string; message?: string } })
+      : {}
+    if (!response.ok) {
+      throw Object.assign(new Error(payload.error?.message ?? '服务暂时无法完成这个操作。'), {
+        code: payload.error?.code ?? 'REQUEST_FAILED',
+      })
+    }
+    return payload
+  }
+  return readEventStream(event, response)
+}
+
+async function readEventStream(event: IpcMainInvokeEvent, response: Response): Promise<unknown> {
   const reader = response.body?.getReader()
   if (!reader)
     throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })

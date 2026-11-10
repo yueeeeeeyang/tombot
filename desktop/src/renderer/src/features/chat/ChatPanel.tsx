@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUp, AudioLines, ChevronRight, Mic, Plus, X, FileText } from 'lucide-react'
+import { ArrowUp, AudioLines, ChevronRight, Mic, Plus, X } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
-import { MAX_MESSAGE_LENGTH, replyExcerpt, type Agent } from '../workspace/model'
+import {
+  MAX_MESSAGE_LENGTH,
+  replyExcerpt,
+  type Agent,
+  type MessageAttachment,
+} from '../workspace/model'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
 import { messageTimeSeparator } from './messageTime'
@@ -10,7 +15,7 @@ type ChatPanelProps = {
   agent: Agent
   isBlocked: boolean
   onDraft: (draft: string) => void
-  onSave: (replyToId?: string) => boolean
+  onSave: (replyToId?: string, attachments?: MessageAttachment[]) => boolean
   onDelete: (messageId: string) => void
   onReact: (messageId: string, emoji: string) => void
   onRetry: (messageId: string) => void
@@ -18,6 +23,8 @@ type ChatPanelProps = {
   isDetailsOpen: boolean
   onNotice: (message: string) => void
   onError: (message: string) => void
+  onUpload?: (file: File) => Promise<MessageAttachment>
+  onPreview?: (attachment: MessageAttachment) => Promise<string>
 }
 
 /** 渲染当前助手的使用指南、本地消息和输入区；不生成或伪造模型回复。 */
@@ -33,11 +40,15 @@ export function ChatPanel({
   isDetailsOpen,
   onNotice,
   onError,
+  onUpload,
+  onPreview,
 }: ChatPanelProps) {
   const messagesEnd = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
+  const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([])
+  const fileInput = useRef<HTMLInputElement>(null)
   const [menu, setMenu] = useState<MessageMenuAnchor>()
   const [replyToId, setReplyToId] = useState<string>()
   const [highlightedId, setHighlightedId] = useState('')
@@ -88,10 +99,33 @@ export function ChatPanel({
     }
   }
   function submitDraft(): void {
-    if (!agent.draft.trim() || isBlocked) return
-    if (onSave(replyMessage?.id)) {
+    if ((!agent.draft.trim() && pendingAttachments.length === 0) || isBlocked) return
+    if (onSave(replyMessage?.id, pendingAttachments)) {
+      setPendingAttachments([])
       setReplyToId(undefined)
       composer.current?.focus()
+    }
+  }
+  async function addFiles(files: File[]): Promise<void> {
+    if (!onUpload) {
+      onError('还不能添加附件。')
+      return
+    }
+    for (const file of files) {
+      if (pendingAttachments.length >= 4) {
+        onError('一条消息最多 4 个附件。')
+        return
+      }
+      try {
+        const uploaded = await onUpload(file)
+        setPendingAttachments((current) =>
+          current.length >= 4 || current.some((item) => item.path === uploaded.path)
+            ? current
+            : [...current, uploaded],
+        )
+      } catch (failure) {
+        onError((failure as Error).message)
+      }
     }
   }
   function handleSubmit(event: FormEvent): void {
@@ -183,6 +217,7 @@ export function ChatPanel({
                     onRetry={onRetry}
                     onReact={onReact}
                     onReveal={revealMessage}
+                    onPreview={onPreview}
                   />
                 </div>
               )
@@ -204,17 +239,37 @@ export function ChatPanel({
           onClose={closeMenu}
         />
       )}
-      <div className="composer-area">
-        {isAttachmentOpen && (
-          <div className="attachment-popover">
-            <FileText size={18} />
-            <div>
-              <strong>文件与附件</strong>
-              <p>连接服务端后，即可添加文件到对话。</p>
-            </div>
-            <button className="text-button" onClick={() => setAttachmentOpen(false)}>
-              知道了
-            </button>
+      <div
+        className={`composer-area ${isAttachmentOpen ? 'is-dropping' : ''}`}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setAttachmentOpen(true)
+        }}
+        onDragLeave={() => setAttachmentOpen(false)}
+        onDrop={(event) => {
+          event.preventDefault()
+          setAttachmentOpen(false)
+          void addFiles([...event.dataTransfer.files])
+        }}
+      >
+        {pendingAttachments.length > 0 && (
+          <div className="composer-files">
+            {pendingAttachments.map((item) => (
+              <span key={item.path}>
+                {item.name}
+                <button
+                  type="button"
+                  aria-label={`移除${item.name}`}
+                  onClick={() =>
+                    setPendingAttachments((current) =>
+                      current.filter((candidate) => candidate.path !== item.path),
+                    )
+                  }
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ))}
           </div>
         )}
         {replyMessage && (
@@ -229,12 +284,21 @@ export function ChatPanel({
           </div>
         )}
         <form className="composer" onSubmit={handleSubmit}>
+          <input
+            ref={fileInput}
+            type="file"
+            hidden
+            multiple
+            onChange={(event) => {
+              void addFiles([...(event.target.files ?? [])])
+              event.target.value = ''
+            }}
+          />
           <button
             className={`composer-add ${isAttachmentOpen ? 'is-open' : ''}`}
             type="button"
             aria-label="添加附件"
-            aria-expanded={isAttachmentOpen}
-            onClick={() => setAttachmentOpen(!isAttachmentOpen)}
+            onClick={() => fileInput.current?.click()}
           >
             <Plus size={20} strokeWidth={1.7} />
           </button>
@@ -268,7 +332,7 @@ export function ChatPanel({
           >
             <Mic size={18} strokeWidth={1.8} />
           </button>
-          {agent.draft.trim() ? (
+          {agent.draft.trim() || pendingAttachments.length > 0 ? (
             <button
               className="composer-send"
               type="submit"

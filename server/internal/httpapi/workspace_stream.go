@@ -280,7 +280,7 @@ func (s *Server) followRun(ctx context.Context, conversationID, turnID string, c
 				if payload.Code == "" {
 					payload.Code = payload.Status
 				}
-				return reply, domain.NewError(502, payload.Code, "agent 运行没有完成。")
+				return reply, domain.NewError(502, payload.Code, "agent 运行没有完成："+payload.Code)
 			}
 		}
 		select {

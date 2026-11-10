@@ -368,22 +368,6 @@ describe('客户端交互', () => {
     expect(localStorage.getItem(STORAGE_KEY)).toBe('损坏内容')
   })
 
-  it('剪贴板失败明确提示，空会话禁止导出', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await user.click(screen.getByRole('button', { name: '查看小黑资料' }))
-    await user.click(screen.getByRole('button', { name: '导出草稿' }))
-    expect(screen.getByRole('button', { name: '复制内容' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '关闭弹窗' }))
-    fireEvent.change(screen.getByRole('textbox', { name: '给小黑发消息' }), {
-      target: { value: '待导出内容' },
-    })
-    await user.click(screen.getByRole('button', { name: '导出草稿' }))
-    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('拒绝剪贴板访问'))
-    await user.click(screen.getByRole('button', { name: '复制内容' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('复制失败')
-  })
-
   it('消息纯文本呈现，不执行输入中的 HTML', async () => {
     const user = userEvent.setup()
     render(<App />)

@@ -70,6 +70,14 @@ const reactionSchema = z.object({
   count: z.number().int().min(1).max(999),
 })
 
+const attachmentSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  path: z.string().trim().min(1).max(500),
+  sha256: z.string().trim().length(64),
+  mediaType: z.string().trim().max(120),
+  kind: z.enum(['image', 'file']),
+})
+
 const messageSchema = z
   .object({
     id: z.string().min(1),
@@ -80,6 +88,7 @@ const messageSchema = z
     requestId: z.string().trim().min(1).max(128).optional(),
     replyTo: replySchema.optional(),
     reactions: z.array(reactionSchema).max(REACTION_EMOJIS.length),
+    attachments: z.array(attachmentSchema).max(4).optional(),
   })
   .superRefine((message, context) => {
     const emojis = message.reactions.map((reaction) => reaction.emoji)
@@ -196,6 +205,7 @@ export const appWorkspaceSchema = z
 export type Agent = z.infer<typeof agentSchema>
 export type Artifact = z.infer<typeof artifactSchema>
 export type ChatMessage = z.infer<typeof messageSchema>
+export type MessageAttachment = z.infer<typeof attachmentSchema>
 export type AppWorkspace = z.infer<typeof appWorkspaceSchema>
 export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
 export type ModelTurn = { role: 'user' | 'assistant'; content: string }
@@ -321,6 +331,7 @@ export function saveMessage(
   id: string,
   createdAt: string,
   replyToId?: string,
+  attachments: MessageAttachment[] = [],
 ): AppWorkspace {
   const agent = workspace.agents.find((candidate) => candidate.id === agentId)
   if (!agent) throw new Error('助手不存在')
@@ -328,20 +339,22 @@ export function saveMessage(
     ? agent.messages.find((message) => message.id === replyToId)
     : undefined
   if (replyToId && !replyTarget) throw new Error('回复的消息不存在')
+  const content = agent.draft.trim() || attachments.map((item) => item.name).join('、')
   const result = messageSchema.safeParse({
     id,
     role: 'user',
-    content: agent.draft,
+    content,
     createdAt,
     status: 'unsent',
     reactions: [],
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(replyTarget
       ? { replyTo: { messageId: replyTarget.id, excerpt: replyExcerpt(replyTarget.content) } }
       : {}),
   })
   if (!result.success) throw new Error('请输入有效内容，消息最多 10000 个字')
   if (workspace.agents.reduce((count, item) => count + item.messages.length, 0) >= MAX_MESSAGES) {
-    throw new Error('本地消息已达 500 条上限，请先导出并删除不需要的草稿')
+    throw new Error('本地消息已达 500 条上限，请先删除不需要的草稿')
   }
   if (workspace.agents.some((item) => item.messages.some((message) => message.id === id))) {
     throw new Error('这条消息已经保存，请勿重复提交')
@@ -435,26 +448,4 @@ export function searchAgents(agents: Agent[], query: string): Agent[] {
       ...agent.messages.map((message) => message.content),
     ].some((text) => text.toLocaleLowerCase().includes(normalized)),
   )
-}
-
-/** 导出用户创建的本地内容，明确标注尚未发送；不包含界面的使用指南。 */
-export function exportConversation(agent: Agent): string {
-  const messages = agent.messages.map((message) => {
-    const status =
-      message.status === 'failed' ? '发送失败' : message.status === 'sent' ? '已发送' : '未发送'
-    const speaker = message.role === 'assistant' ? '助手' : '我'
-    const quote = message.replyTo ? `> ${message.replyTo.excerpt}\n\n` : ''
-    const reactionLabel = message.reactions
-      .map((reaction) =>
-        reaction.count > 1 ? `${reaction.emoji}×${reaction.count}` : reaction.emoji,
-      )
-      .join(' ')
-    const reactions = reactionLabel ? `\n\n表情：${reactionLabel}` : ''
-    return `### ${new Date(message.createdAt).toLocaleString('zh-CN')} · ${speaker} · ${status}\n\n${quote}${message.content}${reactions}`
-  })
-  return [
-    `# ${agent.name}\n\nTomBot 草稿 · 尚未交给模型`,
-    ...messages,
-    ...(agent.draft.trim() ? [`### 正在编辑\n\n${agent.draft}`] : []),
-  ].join('\n\n')
 }

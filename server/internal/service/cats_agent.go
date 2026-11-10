@@ -30,9 +30,9 @@ func (s *Service) syncModel(ctx context.Context, form ModelForm, apiKey string) 
 	if tokens < 1 {
 		tokens = 1024
 	}
-	contextWindow := 8192
-	if tokens > contextWindow {
-		contextWindow = tokens
+	contextWindow := 32768
+	if tokens >= contextWindow {
+		contextWindow = tokens + 1024
 	}
 	return s.ensureModel(ctx, providerID, form.ModelName, contextWindow, tokens)
 }
@@ -54,9 +54,9 @@ func (s *Service) modelForAgent(ctx context.Context, form ModelForm, apiKey, cat
 	if tokens < 1 {
 		tokens = 1024
 	}
-	contextWindow := 8192
-	if tokens > contextWindow {
-		contextWindow = tokens
+	contextWindow := 32768
+	if tokens >= contextWindow {
+		contextWindow = tokens + 1024
 	}
 	return s.ensureModel(ctx, providerID, key, contextWindow, tokens)
 }

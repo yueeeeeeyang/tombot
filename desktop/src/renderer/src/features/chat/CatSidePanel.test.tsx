@@ -11,14 +11,12 @@ describe('猫咪侧栏面板', () => {
     const user = userEvent.setup()
     const onModelChange = vi.fn()
     const onClose = vi.fn()
-    const onExport = vi.fn()
     render(
       <CatSidePanel
         agent={agent}
         onClose={onClose}
         onModelChange={onModelChange}
         onComputerUrl={vi.fn()}
-        onExport={onExport}
       />,
     )
     expect(screen.getByRole('heading', { name: '小黑' })).toHaveTextContent('小黑')
@@ -35,8 +33,7 @@ describe('猫咪侧栏面板', () => {
     await user.click(screen.getByRole('combobox', { name: '模型' }))
     await user.click(screen.getByRole('option', { name: 'Claude Sonnet' }))
     expect(onModelChange).toHaveBeenCalledWith('claude-sonnet')
-    await user.click(screen.getByRole('button', { name: '导出草稿' }))
-    expect(onExport).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: '导出草稿' })).not.toBeInTheDocument()
     const close = screen.getByRole('button', { name: '关闭猫咪面板' })
     expect(close).toHaveClass('round-button')
     await user.click(close)
@@ -51,7 +48,6 @@ describe('猫咪侧栏面板', () => {
         onClose={onClose}
         onModelChange={vi.fn()}
         onComputerUrl={vi.fn()}
-        onExport={vi.fn()}
       />,
     )
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
@@ -79,7 +75,6 @@ describe('猫咪侧栏面板', () => {
         onClose={vi.fn()}
         onModelChange={vi.fn()}
         onComputerUrl={vi.fn()}
-        onExport={vi.fn()}
         now={now}
       />,
     )
