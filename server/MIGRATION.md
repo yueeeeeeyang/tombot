@@ -25,7 +25,7 @@
 | 发送并观看 agent | `POST /api/v1/messages/stream` |
 | 打开这只猫咪的电脑 | `POST /api/v1/computer`，画面在 `GET /api/v1/computer/view` |
 
-初始化、登录不要求主机引导完成，桌面才能在引导过程中验证身份并订阅进度。引导完成前，桌面停在进度页，不进入工作空间。工作空间和电脑页的接口本身仍不检查引导；其余 `/api/v1` 业务要等引导。默认启动会安装字体和浏览器，不再跳过这些步骤。
+初始化、登录不要求主机引导完成，桌面才能在引导过程中验证身份并订阅进度。引导完成前，桌面停在进度页，不进入工作空间。工作空间和电脑页的接口本身仍不检查引导；其余 `/api/v1` 业务要等引导。默认启动会安装字体，并用仓库 `server/browser/` 里的官方离线 zip 准备托管浏览器，不从网络下载，也不跳过这些步骤。
 
 流式开关在客户端：打开时按 `delta` / `process` 逐段画进原来的气泡；关闭时忽略增量，等 `done` 后一次显示。失败时保留已经生成的正文，并把用户消息标为 `failed`，界面上的重试按钮继续可用。
 
@@ -55,7 +55,7 @@
 
 - 猫咪面板的「记忆」只查看。记下、修改和忘掉由服务端 agent 在对话里调用原来的 `memory_search`、`memory_write`、`memory_delete`。读写的仍是同一批 `.tom/memory` 文件。删除不再等待审批。
 - 猫咪面板的「定时」没有新建和编辑表单。每个任务只有启用/暂停开关，右键菜单可以删除。创建、修改和删除由 agent 在对话里调用 `routine_list`、`routine_upsert`、`routine_delete`，这三个工具直接走原来的 `Routines.Commit`、`UpdateNow` 和 `Delete`，不等审批。到点仍由原来的调度器执行。
-- 电脑页的「开始准备」仍调用原来的 `POST /api/v1/bootstrap/retry`。服务启动时已经做完整引导。端到端测试用引导夹具模拟进度，不会下载 Chrome，也不会点击「开始准备」。
+- 电脑页的「开始准备」仍调用原来的 `POST /api/v1/bootstrap/retry`。服务启动时已经做完整引导，浏览器来自仓库里的官方离线 zip。端到端测试用引导夹具模拟进度，不会安装浏览器，也不会点击「开始准备」。
 - 记忆、例程、群组和文件接口不再等主机引导完成。
 - 用量和审计的 HTTP 入口已去掉。导出对话框不再承诺云端分享。
 - 桌面猫咪的系统提示和工具列表包含记忆、例程和 `message_bot`。工具执行不再等待审批。`0021_drop_approval_usage_audit.sql` 删除 `approvals`、`policy_rules`、`audit_log`、`usage_events`、`monthly_budget_alerts`、`routine_changes`。路径越界和密钥不进入响应这些检查还在。
@@ -65,7 +65,7 @@
 
 ## 还没做
 
-- 端到端用 `TOM_BOOTSTRAP_FIXTURE` 模拟引导进度，不下载 Chrome。不设置这个变量时，`tomd` 会安装字体并准备浏览器。
+- 端到端用 `TOM_BOOTSTRAP_FIXTURE` 模拟引导进度，不安装字体和浏览器。不设置这个变量时，`tomd` 会安装字体，并用仓库里的官方离线 zip 准备浏览器。
 - 语音不动。
 - 默认 Bot 仍由原服务在初始化后准备，桌面侧栏不显示它。
 
@@ -83,7 +83,7 @@ go build -o bin/tomd ./cmd/tomd
 ./bin/tomd
 ```
 
-默认会做完整主机引导，包括安装中文字体和准备浏览器。引导完成前，桌面显示进度；完成后才进入工作空间。不要设置 `TOM_BOOTSTRAP_FIXTURE`，它只让端到端测试模拟进度，避免下载 Chrome，不是启动方式。
+四个平台的官方包已经在 `server/browser/`，由 Git LFS 提供。若克隆后只看到指针文本，先在仓库根目录执行 `git lfs install` 和 `git lfs pull`。默认会做完整主机引导，包括安装中文字体，并从这里复制、校验、解压浏览器，不会访问浏览器分发地址，也不会跳过安装。换位置时再设置 `TOM_BROWSER_ARCHIVE`。平台文件名见 [server/README.md](README.md)。引导完成前，桌面显示进度；完成后才进入工作空间。不要设置 `TOM_BOOTSTRAP_FIXTURE`，它只让端到端测试模拟进度，不是启动方式。
 
 标准输出里的一次性初始化码只用于第一次初始化，不要转发。然后：
 
@@ -113,7 +113,7 @@ cd server && go test ./...
 cd desktop && npm run check && npm run test:e2e
 ```
 
-端到端测试会自己构建并启动服务，每个用例使用独立数据目录，并用引导夹具模拟进度，避免下载 Chrome。
+端到端测试会自己构建并启动服务，每个用例使用独立数据目录，并用引导夹具模拟进度，因此不会安装浏览器。
 
 ## 回滚
 

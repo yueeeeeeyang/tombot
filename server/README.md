@@ -27,6 +27,17 @@ make build
 
 默认监听 `:8787`，数据和工作区位于二进制旁的 `data/`、`workspace/`。Linux 首次启动会安装系统运行库与中文字体，需要 root 或免密 sudo 权限。所有阻塞检查完成后才允许初始化与登录；健康页为 `/health`，引导进度为 `/api/v1/bootstrap/status`。
 
+准备托管浏览器时使用仓库自带的官方离线 zip，不从网络下载。四个平台的 Chrome for Testing 157.0.8103.38 包放在 `server/browser/`，用 Git LFS 保存（每个约 190–200MB，超过普通 Git 的单文件上限）：
+
+| 平台 | 文件 |
+| --- | --- |
+| linux/amd64 | `server/browser/chrome-linux64.zip` |
+| linux/arm64 | `server/browser/chrome-linux-arm64.zip` |
+| darwin/amd64 | `server/browser/chrome-mac-x64.zip` |
+| darwin/arm64 | `server/browser/chrome-mac-arm64.zip` |
+
+克隆后如果这些文件只有几行指针文本，在仓库根目录执行 `git lfs install` 和 `git lfs pull`。在 `server/` 下执行 `./bin/tomd` 时，引导会找到上一级 `server/browser/` 里的当前平台包；`TOM_DATA_DIR` 设为 `server/data` 时，这个目录正好是数据目录的同级 `browser/`。引导会复制、核对 SHA-256 并解压，不会跳过安装。把服务装到仓库以外时，从 `server/browser/` 复制当前平台的包到数据目录同级的 `browser/`，不必再访问官方分发地址。`TOM_BROWSER_ARCHIVE` 只用于改路径。摘要不匹配或文件缺失时，引导失败并写出应放置的路径。
+
 引导失败时，在连接页选择“重新体检与修复”。已登录设备也可从“已授权设备 → 服务器环境与修复”查看进度。“重置引导记录”会清除环境检测结果并重新执行全部检查，保留业务数据。环境修复使用 `POST /api/v1/bootstrap/repair`，重置使用 `POST /api/v1/bootstrap/reset`，二者在后台执行。接受后返回 202，同时发起的维护返回 409。首次初始化前需提供初始化码，之后需提供有效设备授权。`GET /api/v1/bootstrap/status` 返回的 `cursor` 可直接用于订阅 `/api/v1/bootstrap/events?after=…`。引导检查期间，新业务请求返回 503，例程调度在每轮领取前等待就绪。已经接受的任务继续执行，环境维护宜安排在活动任务结束后。
 
 在客户端填写服务器地址、一次性初始化码和管理员密码。初始化请求体只接受 `password`，初始化码通过 `X-Tom-Setup-Code` 请求头传递。请仅在本机终端查看初始化码，不将控制台输出上传到公共日志。生产环境可通过 HTTPS 反向代理或配置证书后直连；客户端仅对环回地址允许 HTTP。
@@ -126,8 +137,8 @@ Bot 私信、委派、旁观／介入、调用链护栏、父子费用和迁移 
 | `TOM_TLS_CERT_FILE`、`TOM_TLS_KEY_FILE` | 同时配置证书链和私钥 PEM 文件时开启 HTTPS 直连，更新证书后重启 |
 | `TOM_DATA_DIR` | 数据目录的绝对或相对路径 |
 | `TOM_WORKSPACE_DIR` | 工作区路径 |
-| `TOM_BROWSER_ARCHIVE` | 官方固定版本 Chrome for Testing zip 离线归档 |
-| `TOM_CLOCK_URL` | 可选 HTTPS 时间参照地址。默认对固定浏览器分发地址发起 HEAD，最长 5 秒。偏差达到 10 分钟或无法取得时间时记录告警。离线部署可指定内网 HTTPS 端点 |
+| `TOM_BROWSER_ARCHIVE` | 可选。覆盖默认官方离线 zip。不设置时使用仓库 `server/browser/` 里当前平台的包；数据目录离开仓库时，使用数据目录同级的 `browser/chrome-<平台>.zip` |
+| `TOM_CLOCK_URL` | 可选 HTTPS 时间参照地址。默认对固定浏览器分发地址发起 HEAD，最长 5 秒，只读取响应时间，不下载浏览器。偏差达到 10 分钟或无法取得时间时记录告警。离线部署可指定内网 HTTPS 端点 |
 | `TOM_DEEPSEEK_BASE_URL` | DeepSeek 基础地址，默认 `https://api.deepseek.com`；支持 HTTPS 或环回 HTTP 覆盖 |
 | `TOM_DEEPSEEK_CONTEXT_LIMIT` / `TOM_DEEPSEEK_OUTPUT_LIMIT` | 模型发现未返回完整规格时使用的应用运行限额，默认 `8192` / `4096`，不是厂商规格；详见 [DeepSeek 快速接入](docs/provider-connect.md) |
 | `TOM_MASTER_KEY` | 通过运行环境注入的 base64 编码 32 字节主密钥；不设置时在私有文件中生成 |
@@ -137,7 +148,7 @@ Bot 私信、委派、旁观／介入、调用链护栏、父子费用和迁移 
 | `TOM_RUN_TIMEOUT` | 单次执行墙钟上限，默认 `30m`，范围 `1s`–`24h` |
 | `TOM_RUN_BUDGET_MICRO` | 单次执行费用上限，默认 2000000 微美元 |
 
-固定浏览器版本及四种架构 SHA-256 记录在 `internal/provision/browser.go`。离线包仍必须通过相同校验；解包会拒绝路径逃逸和软链接链逃逸。Linux 要求 glibc；musl 环境明确阻断并提示迁移至支持的系统。
+固定浏览器版本及四种架构 SHA-256 记录在 `internal/provision/browser.go`，对应文件已在 `server/browser/`。默认路径和 `TOM_BROWSER_ARCHIVE` 都要通过同一校验；解包会拒绝路径逃逸和软链接链逃逸。数据目录里已经还原、且摘要匹配的运行时归档可以继续用。升级浏览器版本时要同时更换这四个 LFS 文件和代码里的摘要。Linux 要求 glibc；musl 环境明确阻断并提示迁移至支持的系统。
 
 ```sh
 ./bin/tomd doctor

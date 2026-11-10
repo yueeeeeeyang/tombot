@@ -29,7 +29,7 @@ tomd
 
 从原文件密钥恢复时，移除进程环境中冲突的 `TOM_MASTER_KEY`。从环境密钥恢复时，先通过部署的机密注入方式设置原值。即使数据库尚无加密记录，也会验证环境密钥。还原同时检查归档内容、SQLite 完整性、外键、迁移账本与现存密文。使用原设备访问工作区并验证历史会话，确认健康页已就绪后再切换流量。使用 systemd 时，在服务环境文件中切换两个目录并重启。
 
-普通文件保留内容、权限和修改时间，相对符号链接必须能在自己的目录树内解析。硬链接按独立文件恢复。文件归属为运行还原命令的账户，需用服务账户执行。这种可移植归档只保存普通 Unix 权限，另行管理 ACL、扩展属性等主机策略。设备文件、FIFO、断链、指向树外或排除文件的链接会导致备份失败。跨平台恢复时，引导会检查本机架构对应的运行时，可用 `TOM_BROWSER_ARCHIVE` 提供相应平台的官方 Chromium 包。
+普通文件保留内容、权限和修改时间，相对符号链接必须能在自己的目录树内解析。硬链接按独立文件恢复。文件归属为运行还原命令的账户，需用服务账户执行。这种可移植归档只保存普通 Unix 权限，另行管理 ACL、扩展属性等主机策略。设备文件、FIFO、断链、指向树外或排除文件的链接会导致备份失败。跨平台恢复时，引导会检查本机架构对应的运行时。归档里摘要已经匹配的浏览器包会直接使用；否则从仓库 `server/browser/` 复制当前平台的 zip 到数据目录同级的 `browser/`，或用 `TOM_BROWSER_ARCHIVE` 指向仓库里的那一份。引导不会从网络下载浏览器。
 
 ## 容量、停机与回滚
 
@@ -50,13 +50,15 @@ sudo apt-get install --no-install-recommends ca-certificates fontconfig fonts-no
   libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 libpango-1.0-0 libcairo2
 sudo useradd --system --user-group --home-dir /var/lib/tom --shell /usr/sbin/nologin tom
 sudo install -m 0755 bin/tomd-linux-arm64 /usr/local/bin/tomd
+sudo install -d -o tom -g tom -m 0755 /var/lib/tom/browser
+sudo install -o tom -g tom -m 0644 browser/chrome-linux-arm64.zip /var/lib/tom/browser/chrome-linux-arm64.zip
 sudo install -m 0644 deploy/tomd.service /etc/systemd/system/tomd.service
 sudo install -d -m 0700 /etc/tom
 sudo systemctl daemon-reload
 sudo systemctl enable --now tomd
 ```
 
-上例二进制适用于 arm64，amd64 主机使用对应的发布文件。服务仅监听 `127.0.0.1:8787`。持久状态位于 `/var/lib/tom`，可选环境文件为 `/etc/tom/tom.env`，由管理员以 0600 权限保管。在服务器本机通过私有文件 `/run/tom/console` 取得一次性初始化码，服务诊断写入 journal。配置 `TOM_MASTER_KEY` 的部署必须让停机备份命令也从同一安全渠道获得该值。初始化、备份、还原和代理验证过程均无需在命令行参数中传递密钥。
+上例二进制适用于 arm64，amd64 主机改用对应的发布文件，并把复制来源换成仓库里的 `browser/chrome-linux64.zip`。这些包已在仓库 `browser/`，由 Git LFS 提供。安装前确认文件是完整 zip；若只有指针文本，先在仓库根目录执行 `git lfs pull`。服务不会自己下载浏览器。跨平台恢复时，若归档里的浏览器包与本机架构不符，同样从仓库 `browser/` 复制当前平台的包。服务仅监听 `127.0.0.1:8787`。持久状态位于 `/var/lib/tom`，可选环境文件为 `/etc/tom/tom.env`，由管理员以 0600 权限保管。在服务器本机通过私有文件 `/run/tom/console` 取得一次性初始化码，服务诊断写入 journal。配置 `TOM_MASTER_KEY` 的部署必须让停机备份命令也从同一安全渠道获得该值。初始化、备份、还原和代理验证过程均无需在命令行参数中传递密钥。
 
 安装 Caddy 2 后，复制示例到 Caddy 的活动配置路径，在 **Caddy 进程**的环境中设置 `TOM_PUBLIC_HOST` 为自己的域名。让域名指向该主机，并确保签发证书所需的网络条件满足。先在相同环境下运行 `caddy validate --config /etc/caddy/Caddyfile`，再重载 Caddy。变更服务的环回端口时同步更新代理上游。代理使用默认的 SSE 刷新与 WebSocket 升级行为。[Caddy 反向代理文档](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#streaming)
 
