@@ -37,35 +37,37 @@ export function ArtifactLibrary({
         return (
           <section className="artifact-group" key={group.label} aria-label={group.label}>
             <h3>{group.label}</h3>
-            <ul>
-              {visible.map((artifact) => {
-                const preview = imagePreview(artifact)
-                return (
-                  <li key={artifact.id}>
-                    {preview ? (
-                      <img src={preview} alt="" />
-                    ) : artifact.kind === 'video' ? (
-                      <Film size={16} aria-hidden="true" />
-                    ) : artifact.kind === 'image' ? (
-                      <ImageIcon size={16} aria-hidden="true" />
-                    ) : (
-                      <FileText size={16} aria-hidden="true" />
-                    )}
-                    <span>{artifact.title}</span>
-                  </li>
-                )
-              })}
-            </ul>
-            {hiddenCount > 0 && (
-              <button
-                type="button"
-                onClick={() =>
-                  setExpanded((current) => ({ ...current, [group.label]: !isExpanded }))
-                }
-              >
-                {isExpanded ? '收起' : '展开'}
-              </button>
-            )}
+            <div className="artifact-card">
+              <ul>
+                {visible.map((artifact) => {
+                  const preview = imagePreview(artifact)
+                  return (
+                    <li key={artifact.id}>
+                      {preview ? (
+                        <img src={preview} alt="" />
+                      ) : artifact.kind === 'video' ? (
+                        <Film size={16} aria-hidden="true" />
+                      ) : artifact.kind === 'image' ? (
+                        <ImageIcon size={16} aria-hidden="true" />
+                      ) : (
+                        <FileText size={16} aria-hidden="true" />
+                      )}
+                      <span>{artifact.title}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+              {hiddenCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpanded((current) => ({ ...current, [group.label]: !isExpanded }))
+                  }
+                >
+                  {isExpanded ? '收起' : '展开'}
+                </button>
+              )}
+            </div>
           </section>
         )
       })}

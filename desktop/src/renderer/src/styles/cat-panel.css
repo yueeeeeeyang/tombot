@@ -133,17 +133,23 @@
 .cat-panel-export {
   align-self: flex-start;
 }
-.artifact-group {
-  padding: 10px 12px 8px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
+.artifact-library {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 .artifact-group h3 {
   margin: 0 0 8px;
   color: var(--muted);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+.artifact-card {
+  padding: 6px 10px 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
 }
 .artifact-group ul {
   display: flex;
@@ -181,7 +187,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.artifact-group > button {
+.artifact-card > button {
   display: block;
   width: 100%;
   margin-top: 4px;
@@ -192,8 +198,8 @@
   color: var(--muted);
   font-size: 12px;
 }
-.artifact-group > button:hover,
-.artifact-group > button:focus-visible {
+.artifact-card > button:hover,
+.artifact-card > button:focus-visible {
   background: var(--hover);
   color: var(--text);
 }

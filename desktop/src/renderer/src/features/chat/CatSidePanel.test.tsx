@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { createWorkspace, type Artifact } from '../workspace/model'
@@ -82,7 +82,11 @@ describe('猫咪侧栏面板', () => {
       />,
     )
     await user.click(screen.getByRole('tab', { name: '资料库' }))
-    expect(screen.getByRole('region', { name: '今天' })).toBeInTheDocument()
+    const today = screen.getByRole('region', { name: '今天' })
+    const heading = within(today).getByRole('heading', { name: '今天' })
+    expect(heading.closest('.artifact-card')).toBeNull()
+    expect(heading.nextElementSibling).toHaveClass('artifact-card')
+    expect(today.querySelector('.artifact-card button')).toHaveTextContent('展开')
     expect(screen.queryByText('今天的文件 1')).not.toBeInTheDocument()
     expect(screen.getByText('今天的文件 6')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '展开' }))
