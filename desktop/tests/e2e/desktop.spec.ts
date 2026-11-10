@@ -1584,9 +1584,18 @@ test('猫咪主动发的私信出现在侧栏', async () => {
     await expect(dialog).toBeVisible()
     await expect(dialog.getByText('晨会我先看了')).toBeVisible()
     await expect(dialog.getByText('好的')).toBeVisible()
-    await expect(dialog.locator('.assistant-bubble')).toContainText('晨会我先看了')
-    await expect(dialog.locator('.user-bubble')).toContainText('好的')
+    await expect(dialog.locator('.dm-capsule')).toContainText('小黑')
+    await expect(dialog.locator('.dm-capsule')).toContainText('游戏程序')
+    await expect(dialog.locator('.dm-bubble')).toHaveCount(2)
+    await expect(dialog.locator('.user-bubble, .dialog-heading')).toHaveCount(0)
     await expect(dialog.getByRole('textbox')).toHaveCount(0)
+    const thread = dialog.locator('.dm-thread')
+    await expect
+      .poll(() => thread.evaluate((element) => element.scrollHeight - element.clientHeight))
+      .toBeGreaterThan(40)
+    await thread.evaluate((element) => {
+      element.scrollTop = 56
+    })
     await window.screenshot({ path: `${artifacts}/cat-dm-open.png`, scale: 'css' })
   } finally {
     await model.close()
@@ -1760,7 +1769,7 @@ function startDmModel(): Promise<{ url: string; close: () => Promise<void> }> {
             response,
             'call-dm',
             'message_bot',
-            '{"bot_id":"developer","message":"晨会我先看了"}',
+            '{"bot_id":"developer","message":"晨会我先看了。倒地保持最后一帧，移动改成爬行，倒地开火不要再把整段动作锁死。副武器走自己的一套键，按侧向速度选择左右并加上角度滞回，避免来回跳切。缺片先标清楚，不要静默。等用户说合再合，资源先留在当前版本上，不要提前开合。静止时末帧停住，移动只播爬行，开火从瞄准接射击，不要整段锁死。沙鹰只用手枪那一组动作，步枪的射击和战斗待机都不要混进来。侧向速度过了阈值再换左右，并留一点滞回，免得准星附近来回跳。缺的片段先写明，等用户确认后再接。"}',
           )
           return
         }

@@ -39,7 +39,7 @@ export function Dialog({
       }}
     >
       <div className="dialog-content">
-        {(variant === 'default' || variant === 'recruit' || variant === 'dm') && (
+        {(variant === 'default' || variant === 'recruit') && (
           <div className="dialog-heading">
             <h2>{title}</h2>
             <button className="icon-button" aria-label="关闭弹窗" onClick={onClose}>

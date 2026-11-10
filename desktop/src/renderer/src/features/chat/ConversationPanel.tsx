@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
-import { Plus, X } from 'lucide-react'
+import { ArrowLeftRight, Plus, X } from 'lucide-react'
 import type { CatAvatarId } from '../avatars/presets'
 import type { ServerBubble } from '../desktop/backend'
 import { getBackend } from '../desktop/backend'
@@ -363,7 +363,7 @@ export function ConversationPanel({
   )
 }
 
-/** 用主聊天的气泡只读查看两只猫咪的私信。这里不能代发，也不能回复。 */
+/** 用靠左的浅色气泡只读查看两只猫咪的私信。这里不能代发，也不能回复。 */
 export function DmThreadDialog({
   notice,
   self,
@@ -393,43 +393,60 @@ export function DmThreadDialog({
     }
   }, [notice.conversationId, onError])
   const peer = agents.find((agent) => agent.id === notice.peerId)
-  const title = `${self.name} ↔ ${peer?.name || notice.peerName}`
+  const peerName = peer?.name || notice.peerName
+  const title = `${self.name} ↔ ${peerName}`
   // 消息接口按序号倒序返回，阅读时从早到晚。
   const ordered = [...(lines ?? [])].reverse()
-  const now = new Date()
   return (
     <Dialog title={title} onClose={onClose} variant="dm">
-      <div className="dm-thread" role="log" aria-label={title}>
-        {lines !== null && ordered.length === 0 ? (
-          <p className="dm-thread-empty">这段私信还没有文字。</p>
-        ) : null}
-        {ordered.map((line, index) => {
-          const speaker = agents.find((agent) => agent.id === line.speaker)
-          const mine = line.speaker === self.id
-          const name = mine ? self.name : (speaker?.name ?? notice.peerName)
-          const avatar: CatAvatarId = mine
-            ? self.avatar
-            : (speaker?.avatar ?? peer?.avatar ?? 'bombay')
-          const label = messageTimeSeparator(line.createdAt, ordered[index - 1]?.createdAt, now)
-          return (
-            <div className="message-entry" key={line.id}>
-              {label ? (
-                <div className="time-separator">
-                  <time dateTime={line.createdAt}>{label}</time>
-                </div>
-              ) : null}
-              <div className={`dm-line ${mine ? '' : 'dm-line--peer'}`}>
-                <Avatar preset={avatar} agentId={mine ? self.id : line.speaker || notice.peerId} />
-                <div className="dm-line-body">
-                  <span className="message-speaker">{name}</span>
-                  <div className={`message-bubble ${mine ? 'assistant-bubble' : 'user-bubble'}`}>
+      <div className="dm-modal">
+        <div className="dm-thread" role="log" aria-label={title}>
+          <div className="dm-thread-inner">
+            {lines !== null && ordered.length === 0 ? (
+              <p className="dm-thread-empty">这段私信还没有文字。</p>
+            ) : null}
+            {ordered.map((line) => {
+              const speaker = agents.find((agent) => agent.id === line.speaker)
+              const mine = line.speaker === self.id
+              const name = mine ? self.name : (speaker?.name ?? peerName)
+              const avatar: CatAvatarId = mine
+                ? self.avatar
+                : (speaker?.avatar ?? peer?.avatar ?? 'bombay')
+              return (
+                <div className="dm-line" key={line.id}>
+                  <Avatar
+                    preset={avatar}
+                    agentId={mine ? self.id : line.speaker || notice.peerId}
+                    size="small"
+                  />
+                  <span className={`dm-name ${mine ? 'dm-name--self' : 'dm-name--peer'}`}>
+                    {name}
+                  </span>
+                  <div className="dm-bubble">
                     <div className="message-text">{line.content}</div>
                   </div>
                 </div>
-              </div>
-            </div>
-          )
-        })}
+              )
+            })}
+          </div>
+        </div>
+        <div className="dm-top">
+          <div className="dm-capsule">
+            <Avatar preset={self.avatar} agentId={self.id} size="small" />
+            <span>{self.name}</span>
+            <ArrowLeftRight size={15} aria-hidden="true" />
+            <Avatar preset={peer?.avatar ?? 'bombay'} agentId={notice.peerId} size="small" />
+            <span>{peerName}</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="dm-close icon-button"
+          aria-label="关闭弹窗"
+          onClick={onClose}
+        >
+          <X size={16} />
+        </button>
       </div>
     </Dialog>
   )

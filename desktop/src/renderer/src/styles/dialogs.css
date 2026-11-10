@@ -18,7 +18,13 @@
   width: min(480px, calc(100vw - 32px));
 }
 .dialog--dm {
-  width: min(560px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - 64px));
+  overflow: hidden;
+  border-radius: 22px;
+  background: var(--canvas);
+}
+.dialog--dm .dialog-content {
+  padding: 0;
 }
 .dialog--recruit .dialog-content {
   padding: 22px;
