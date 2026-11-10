@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -22,12 +25,17 @@ func TestWorkspaceSeedAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !first.Pristine || len(first.Workspace.Agents) != 8 || first.Workspace.Agents[0].Name != "小黑" || first.Workspace.Agents[0].Avatar != "bombay" {
-		t.Fatalf("预设工作空间不正确: %+v", first.Workspace.Agents[0])
+	if !first.Pristine || len(first.Workspace.Agents) != 0 || first.Workspace.ActiveAgentID != "" {
+		t.Fatalf("首次工作空间应为空: %+v", first.Workspace)
 	}
-	if len(first.Workspace.Agents[0].Messages) != 0 || first.Workspace.Agents[0].ComputerURL != "" {
-		t.Fatal("预设猫咪不应带有消息或电脑地址")
+	created := Workspace{Version: 5, ActiveAgentID: "cat-1", Agents: []Agent{{
+		ID: "cat-1", Name: "阿花", Description: "一起写", Group: "未分组", Avatar: "calico", ModelID: "写作模型",
+		Messages: []ChatMessage{}, Artifacts: []Artifact{},
+	}}}
+	if _, err = service.Save(ctx, created); err != nil {
+		t.Fatal("没有样例标识的猫咪应能保存", err)
 	}
+	first.Workspace = SeedWorkspace()
 	first.Workspace.Agents[0].Draft = "还没发送"
 	saved, err := service.Save(ctx, first.Workspace)
 	if err != nil || saved.Pristine || saved.Workspace.Agents[0].Draft != "还没发送" {
@@ -79,6 +87,7 @@ func TestPrepareDispatchWithoutModelKeepsUnsent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot.Workspace = SeedWorkspace()
 	snapshot.Workspace.Agents[0].Messages = []ChatMessage{{
 		ID: "draft-1", Role: "user", Content: "你好", CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Status: "unsent", Reactions: []Reaction{},
@@ -104,6 +113,7 @@ func TestApplyRunPersistsAssistantReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot.Workspace = SeedWorkspace()
 	snapshot.Workspace.Agents[0].Messages = []ChatMessage{{
 		ID: "draft-2", Role: "user", Content: "在吗", CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Status: "unsent", Reactions: []Reaction{},
@@ -144,6 +154,7 @@ func TestApplyRunFailureKeepsPartialReply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	snapshot.Workspace = SeedWorkspace()
 	snapshot.Workspace.Agents[0].Messages = []ChatMessage{{
 		ID: "draft-3", Role: "user", Content: "试一次", CreatedAt: time.Now().UTC().Format(time.RFC3339),
 		Status: "unsent", Reactions: []Reaction{},
@@ -158,6 +169,37 @@ func TestApplyRunFailureKeepsPartialReply(t *testing.T) {
 	}
 	if applied.Workspace.Agents[0].Messages[1].Content != "说到一半" || applied.Workspace.Agents[0].Messages[1].Status != "failed" {
 		t.Fatal("已生成的正文应保留")
+	}
+}
+
+func TestBuiltinProviderListsModelsFromMock(t *testing.T) {
+	credential := "test-key"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/models" || r.Header.Get("Authorization") != "Bearer "+credential {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := fmt.Fprint(w, `{"object":"list","data":[{"id":"deepseek-chat","object":"model","name":"DeepSeek Chat"}]}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	service := newService(t)
+	models, err := service.ListBuiltinModels(context.Background(), credential, server.URL)
+	if err != nil || len(models) != 1 || models[0].ID != "deepseek-chat" {
+		t.Fatal("内置提供商没有从模拟接口拉取模型", err, models)
+	}
+	if _, err = service.ListBuiltinModels(context.Background(), "", server.URL); err == nil {
+		t.Fatal("没有密钥时不应假装拉到模型")
+	}
+	rejected := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer rejected.Close()
+	_, err = service.ListBuiltinModels(context.Background(), credential, rejected.URL)
+	var domainError *domain.Error
+	if !errors.As(err, &domainError) || domainError.Message != "API Key 验证失败，请检查后重试。" || strings.Contains(domainError.Message, credential) {
+		t.Fatal("无效密钥应返回不含密钥的中文错误", err)
 	}
 }
 

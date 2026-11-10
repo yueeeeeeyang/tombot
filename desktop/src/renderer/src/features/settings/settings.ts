@@ -6,6 +6,7 @@ export type ModelProvider = 'openai' | 'anthropic' | 'deepseek' | 'google' | 'cu
 export interface SettingsDraft {
   language: LanguagePreference
   provider: ModelProvider
+  providerName: string
   baseUrl: string
   modelName: string
   temperature: number
@@ -24,7 +25,8 @@ export const MODEL_PARAMETER_LIMITS = {
 export function createSettingsDraft(): SettingsDraft {
   return {
     language: 'system',
-    provider: 'openai',
+    provider: 'deepseek',
+    providerName: 'DeepSeek',
     baseUrl: '',
     modelName: '',
     temperature: 0.7,

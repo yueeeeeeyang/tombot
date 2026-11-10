@@ -7,6 +7,7 @@ function settingsDraftFrom(view: SettingsDraft): SettingsDraft {
   return {
     language: view.language,
     provider: view.provider,
+    providerName: view.providerName ?? '',
     baseUrl: view.baseUrl,
     modelName: view.modelName,
     temperature: view.temperature,

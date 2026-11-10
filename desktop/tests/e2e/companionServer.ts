@@ -41,7 +41,7 @@ const fixtureSteps = [
 /** 为单个测试启动独立数据目录。夹具只模拟引导进度，产品默认仍会安装字体和浏览器。 */
 export async function startCompanion(
   binary: string,
-  options?: { failFirst?: boolean },
+  options?: { failFirst?: boolean; env?: Record<string, string> },
 ): Promise<Companion> {
   const directory = await mkdtemp(join(tmpdir(), 'tombot-server-'))
   const fixturePath = join(directory, 'bootstrap.json')
@@ -54,6 +54,7 @@ export async function startCompanion(
   const port = await listenPort()
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...options?.env,
     TOM_BOOTSTRAP_FIXTURE: fixturePath,
     TOM_ADDR: `127.0.0.1:${port}`,
     TOM_DATA_DIR: join(directory, 'data'),

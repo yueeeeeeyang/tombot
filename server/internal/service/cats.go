@@ -13,6 +13,7 @@ import (
 	"io.yueyang/tom/internal/domain"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/provider"
 	"io.yueyang/tom/internal/secret"
 )
 
@@ -149,7 +150,7 @@ func (s *Service) ComputerAccess(agentID, ticket string) (string, error) {
 	return entry.botID, nil
 }
 
-// Load 返回工作空间。第一次读取时写入与桌面一致的预设猫咪。
+// Load 返回工作空间。第一次读取时写入空工作空间，不种样例猫咪。
 func (s *Service) Load(ctx context.Context) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -178,6 +179,29 @@ func (s *Service) Save(ctx context.Context, workspace Workspace) (Snapshot, erro
 		return Snapshot{}, err
 	}
 	return Snapshot{Workspace: row.workspace, Pristine: false, Revision: row.revision}, nil
+}
+
+// ListBuiltinModels 用内置地址和密钥拉取模型。密钥只用于这次请求，不会出现在结果里。
+func (s *Service) ListBuiltinModels(ctx context.Context, apiKey, baseURL string) ([]provider.DiscoveredModel, error) {
+	key := strings.TrimSpace(apiKey)
+	if key == "" {
+		s.mu.Lock()
+		row, err := s.readState(ctx)
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		opened, openErr := s.openAPIKey(row)
+		if openErr != nil {
+			return nil, openErr
+		}
+		key = strings.TrimSpace(string(opened))
+		clearBytes(opened)
+	}
+	if key == "" {
+		return nil, domain.NewError(400, "PROVIDER_AUTH_FAILED", "请填写 API Key。")
+	}
+	return provider.DiscoverDeepSeek(ctx, baseURL, []byte(key), 20*time.Second)
 }
 
 // LoadModelForm 返回表单和密钥是否存在，不返回密钥本身。

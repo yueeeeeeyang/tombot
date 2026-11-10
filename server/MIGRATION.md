@@ -1,6 +1,6 @@
 # 桌面服务迁移
 
-本文件记录把 [tom](https://github.com/yueeeeeeyang/tom) 的 Go 服务端迁入 `server/`，并和现有 `desktop/` 界面对齐的范围。界面以 desktop 为准：字段名、八只预设猫咪、侧栏、聊天和猫咪面板都不为了迁就原来的 Bot 协议而改样。Flutter 客户端不再保留兼容。
+本文件记录把 [tom](https://github.com/yueeeeeeyang/tom) 的 Go 服务端迁入 `server/`，并和现有 `desktop/` 界面对齐的范围。界面以 desktop 为准：字段名、侧栏、聊天和猫咪面板都不为了迁就原来的 Bot 协议而改样。八只预设猫咪只留在测试夹具里，服务第一次打开工作空间时不再写入。Flutter 客户端不再保留兼容。
 
 ## 复用了什么
 
@@ -20,8 +20,10 @@
 | 是否已初始化 | `GET /api/v1/auth/status` |
 | 初始化 | `POST /api/v1/auth/setup`，正文 `{password, setupCode}` |
 | 验证密码 | `POST /api/v1/auth/login`，正文 `{password, deviceName, platform}` |
-| 读写八只猫咪的界面文档 | `GET` / `PUT /api/v1/workspace` |
+| 读写工作空间里的猫咪 | `GET` / `PUT /api/v1/workspace` |
 | 模型表单 | `GET` / `PUT /api/v1/model-settings` |
+| 内置提供商 | `GET /api/v1/model-providers` |
+| 用内置地址拉取模型 | `POST /api/v1/model-providers/{id}/models`，正文只含 `apiKey` |
 | 发送并观看 agent | `POST /api/v1/messages/stream` |
 | 打开这只猫咪的电脑 | `POST /api/v1/computer`，画面在 `GET /api/v1/computer/view` |
 
@@ -43,7 +45,15 @@
 | 表情 | `message_reactions` |
 | 资料库 | `bot_artifacts` |
 
-已有 `desktop_state` 会在删表前抄进这些列。和 agent 已经写过的同一条正文不会再插一遍。客户端不再读取或导入本机 v1–v5 旧档。服务第一次打开工作空间时种下和空界面一致的八只预设猫咪，之后侧栏只显示这份服务端数据。
+已有 `desktop_state` 会在删表前抄进这些列。和 agent 已经写过的同一条正文不会再插一遍。客户端不再读取或导入本机 v1–v5 旧档。服务第一次打开工作空间时写入空列表，不种样例猫咪。侧栏只显示这份服务端数据。
+
+`0022_drop_untouched_sample_cats.sql` 只删除仍与八只样例逐字段一致、且没有消息、资料、草稿、电脑地址、群组、例程、运行、浏览器或终端痕迹的猫咪。改过的、有对话的、以及用户自己招聘的都保留。当前猫咪如果被删掉，改到仍存在的第一只，没有则留空。
+
+`0023_provider_name.sql` 给 `workspace_meta` 增加 `provider_name`，用来保存自定义提供商的显示名称。内置提供商的接口地址不放在这一列，也不交给客户端填写。
+
+内置提供商目前只有 DeepSeek。官方 OpenAI 兼容根地址是 `https://api.deepseek.com`，模型列表是 `GET /models`。服务端用已保存或本次提交的 API Key 调用原来的 `provider.DiscoverDeepSeek`，密钥加密后只留在服务端，响应里只有 `hasApiKey` 和模型标识。测试可以把 `TOM_DEEPSEEK_BASE_URL` 指到本机模拟接口，产品默认仍是官方地址。自定义提供商的名称、接口地址、API Key 和模型名称都由用户填写。
+
+桌面在引导完成后，没有默认模型时停在模型初始化页；还没有猫咪时停在招聘第一只猫咪页。两页都配好才能进入主界面。
 
 招聘时选中的模型名称写入这只猫咪的 `catalog_model_id`。发送时在原来的模型目录里找到或创建同名模型，`bots.model_id` 指向它，agent 运行时用这一行。
 

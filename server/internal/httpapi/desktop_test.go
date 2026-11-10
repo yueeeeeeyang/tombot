@@ -77,7 +77,7 @@ func TestDesktopAPIWorksBeforeBootstrap(t *testing.T) {
 		t.Fatal("登录没有返回设备凭据", err)
 	}
 	loaded := request(t, handler, http.MethodGet, "/api/v1/workspace", nil, map[string]string{"Authorization": "Bearer " + sessionBody.Token})
-	if loaded.Code != http.StatusOK || !json.Valid(loaded.Body.Bytes()) || !strings.Contains(loaded.Body.String(), "小黑") {
-		t.Fatalf("登录后应看到预设猫咪: %d %s", loaded.Code, loaded.Body.String())
+	if loaded.Code != http.StatusOK || !json.Valid(loaded.Body.Bytes()) || !strings.Contains(loaded.Body.String(), `"agents":[]`) || strings.Contains(loaded.Body.String(), "小黑") {
+		t.Fatalf("登录后应看到空工作空间: %d %s", loaded.Code, loaded.Body.String())
 	}
 }

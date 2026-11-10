@@ -4,24 +4,27 @@ import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { Select, type SelectOption } from '../../components/Select'
 import { CAT_AVATARS } from '../avatars/presets'
+import { SessionFrame } from '../session/SessionGate'
 import { type Agent, type NewAgent, type AppWorkspace as Workspace } from './model'
 
-/** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
-export function RecruitCatDialog({
-  onClose,
-  onCreate,
-  groups,
-  modelOptions,
-  initialProfile,
-  onModelSettings,
-}: {
-  onClose: () => void
+interface RecruitCatFormProps {
   onCreate: (profile: NewAgent, model: SelectOption) => void
   groups: string[]
   modelOptions: readonly SelectOption[]
   initialProfile?: NewAgent
   onModelSettings: (profile: NewAgent) => void
-}) {
+  heading?: string
+}
+
+/** 招聘表单。弹窗和首次进入的整页共用，避免两套字段。 */
+function RecruitCatForm({
+  onCreate,
+  groups,
+  modelOptions,
+  initialProfile,
+  onModelSettings,
+  heading,
+}: RecruitCatFormProps) {
   const [profile, setProfile] = useState<NewAgent>(
     initialProfile ?? {
       name: '',
@@ -43,95 +46,115 @@ export function RecruitCatDialog({
     }
   }
   return (
-    <Dialog title="招聘猫咪" variant="recruit" onClose={onClose}>
+    <form onSubmit={submit} className="agent-form">
+      {heading && <h1>{heading}</h1>}
       <p className="dialog-description">选一位猫咪搭档，一起开启下一个想法。</p>
-      <form onSubmit={submit} className="agent-form">
-        <div className="avatar-picker">
-          <div className="avatar-options" role="group" aria-label="预设猫咪头像">
-            {CAT_AVATARS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className="avatar-option"
-                onClick={() => setProfile({ ...profile, avatar: preset.id })}
-                aria-label={preset.name}
-                aria-pressed={profile.avatar === preset.id}
-              >
-                <Avatar preset={preset.id} />
-                <span>{preset.name}</span>
-                {profile.avatar === preset.id && (
-                  <Check className="avatar-option-check" size={11} />
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-        <label>
-          助手名称
-          <input
-            autoFocus
-            value={profile.name}
-            maxLength={24}
-            placeholder="例如：灵感搭档"
-            onChange={(event) => setProfile({ ...profile, name: event.target.value })}
-            required
-          />
-        </label>
-        <label>
-          一句话介绍 <span className="optional-label">选填</span>
-          <textarea
-            value={profile.description}
-            maxLength={120}
-            rows={2}
-            placeholder="你想和这位搭档一起做什么？"
-            onChange={(event) => setProfile({ ...profile, description: event.target.value })}
-          />
-        </label>
-        <div className="recruit-selects">
-          <div className="recruit-field">
-            <span>分组</span>
-            <Select
-              label="分组"
-              value={profile.group}
-              onChange={(group) => setProfile({ ...profile, group })}
-              options={[...new Set(['未分组', ...groups])].map((group) => ({
-                value: group,
-                label: group,
-              }))}
-            />
-          </div>
-          <div className="recruit-field">
-            <span>模型</span>
-            <Select
-              label="模型"
-              value={modelValue}
-              onChange={setModelValue}
-              options={modelOptions}
-              placeholder="暂无已配置模型"
-            />
-          </div>
-        </div>
-        {modelOptions.length === 0 && (
-          <div className="empty-model-note">
-            <span>先在模型设置中填写模型名称，再招聘猫咪。</span>
-            <button type="button" onClick={() => onModelSettings(profile)}>
-              前往模型设置
+      <div className="avatar-picker">
+        <div className="avatar-options" role="group" aria-label="预设猫咪头像">
+          {CAT_AVATARS.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className="avatar-option"
+              onClick={() => setProfile({ ...profile, avatar: preset.id })}
+              aria-label={preset.name}
+              aria-pressed={profile.avatar === preset.id}
+            >
+              <Avatar preset={preset.id} />
+              <span>{preset.name}</span>
+              {profile.avatar === preset.id && <Check className="avatar-option-check" size={11} />}
             </button>
-          </div>
-        )}
-        {error && (
-          <p role="alert" className="form-error">
-            {error}
-          </p>
-        )}
-        <button className="primary-button" type="submit" disabled={modelOptions.length === 0}>
-          招聘猫咪
-        </button>
-        <p className="form-footnote">
-          猫咪资料会保存到服务。这里选中的模型会写进这只猫咪，回复时使用它。
+          ))}
+        </div>
+      </div>
+      <label>
+        助手名称
+        <input
+          autoFocus
+          value={profile.name}
+          maxLength={24}
+          placeholder="例如：灵感搭档"
+          onChange={(event) => setProfile({ ...profile, name: event.target.value })}
+          required
+        />
+      </label>
+      <label>
+        一句话介绍 <span className="optional-label">选填</span>
+        <textarea
+          value={profile.description}
+          maxLength={120}
+          rows={2}
+          placeholder="你想和这位搭档一起做什么？"
+          onChange={(event) => setProfile({ ...profile, description: event.target.value })}
+        />
+      </label>
+      <div className="recruit-selects">
+        <div className="recruit-field">
+          <span>分组</span>
+          <Select
+            label="分组"
+            value={profile.group}
+            onChange={(group) => setProfile({ ...profile, group })}
+            options={[...new Set(['未分组', ...groups])].map((group) => ({
+              value: group,
+              label: group,
+            }))}
+          />
+        </div>
+        <div className="recruit-field">
+          <span>模型</span>
+          <Select
+            label="模型"
+            value={modelValue}
+            onChange={setModelValue}
+            options={modelOptions}
+            placeholder="暂无已配置模型"
+          />
+        </div>
+      </div>
+      {modelOptions.length === 0 && (
+        <div className="empty-model-note">
+          <span>先在模型设置中填写模型名称，再招聘猫咪。</span>
+          <button type="button" onClick={() => onModelSettings(profile)}>
+            前往模型设置
+          </button>
+        </div>
+      )}
+      {error && (
+        <p role="alert" className="form-error">
+          {error}
         </p>
-      </form>
+      )}
+      <button className="primary-button" type="submit" disabled={modelOptions.length === 0}>
+        招聘猫咪
+      </button>
+      <p className="form-footnote">
+        猫咪资料会保存到服务。这里选中的模型会写进这只猫咪，回复时使用它。
+      </p>
+    </form>
+  )
+}
+
+/** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
+export function RecruitCatDialog({
+  onClose,
+  ...props
+}: RecruitCatFormProps & { onClose: () => void }) {
+  return (
+    <Dialog title="招聘猫咪" variant="recruit" onClose={onClose}>
+      <RecruitCatForm {...props} />
     </Dialog>
+  )
+}
+
+/** 工作空间还没有猫咪时的整页。不能跳过，招聘成功后才进入主界面。 */
+export function FirstCatPage(props: RecruitCatFormProps) {
+  return (
+    <SessionFrame>
+      <section className="session-card session-card--wide" aria-label="招聘第一只猫咪">
+        <RecruitCatForm {...props} heading="招聘第一只猫咪" />
+      </section>
+    </SessionFrame>
   )
 }
 

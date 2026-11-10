@@ -58,7 +58,11 @@ export function Sidebar({
   serverUrl: string
 }) {
   const serverHost = hostOf(serverUrl)
-  const assistant = workspace.agents.find((agent) => agent.id === 'assistant')!
+  const assistant =
+    workspace.agents.find((agent) => agent.id === 'assistant') ??
+    workspace.agents.find((agent) => agent.id === workspace.activeAgentId) ??
+    workspace.agents[0]
+  if (!assistant) return null
   const { hiddenIds, pinnedIds, unreadIds } = preferences
   const pinnedAgents = [
     assistant,

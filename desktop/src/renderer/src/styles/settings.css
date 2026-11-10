@@ -200,6 +200,27 @@
 .setting-row input[aria-invalid='true'] {
   border-color: var(--error-border);
 }
+.provider-mode-actions {
+  display: flex;
+  gap: 8px;
+}
+.provider-mode-actions button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.provider-mode-actions button.is-selected {
+  border-color: #2084f5;
+  color: #2084f5;
+}
+.setting-note {
+  margin: 0 14px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
 .settings-preview-note {
   margin: 20px 12px 0;
   font-size: 11px;

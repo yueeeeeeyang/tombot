@@ -102,9 +102,10 @@ export function renameAgentGroup(
 export function deleteAgent(workspace: Workspace, id: string): Workspace {
   if (id === 'assistant') throw new Error('默认猫咪不能删除')
   if (!workspace.agents.some((agent) => agent.id === id)) throw new Error('猫咪不存在')
-  return {
-    ...workspace,
-    activeAgentId: workspace.activeAgentId === id ? 'assistant' : workspace.activeAgentId,
-    agents: workspace.agents.filter((agent) => agent.id !== id),
+  const agents = workspace.agents.filter((agent) => agent.id !== id)
+  let activeAgentId = workspace.activeAgentId
+  if (activeAgentId === id) {
+    activeAgentId = agents.find((agent) => agent.id === 'assistant')?.id ?? agents[0]?.id ?? ''
   }
+  return { ...workspace, activeAgentId, agents }
 }

@@ -167,7 +167,7 @@ INSERT INTO conversations(id,kind,bot_id,title,created_at,updated_at) VALUES('to
 	if err := db.QueryRow(`SELECT COUNT(*) FROM bots b JOIN conversations c ON c.bot_id=b.id WHERE b.id='tom' AND b.name='现有助手' AND b.soul='User instructions.' AND b.updated_at=20 AND c.id='tom-direct' AND c.title='已有会话' AND c.updated_at=20`).Scan(&count); err != nil || count != 1 {
 		t.Fatal("迁移覆盖了冲突的用户业务数据", count, err)
 	}
-	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 21 {
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil || version != 23 {
 		t.Fatal("迁移账本未完成升级", version, err)
 	}
 }

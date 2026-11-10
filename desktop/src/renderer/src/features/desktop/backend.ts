@@ -150,6 +150,10 @@ export interface DesktopBackend {
   trySettingsSync?: () => SettingsView
   loadSettings: () => Promise<SettingsView>
   saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>
+  listProviderModels?: (
+    providerId: string,
+    apiKey: string,
+  ) => Promise<Array<{ id: string; name: string }>>
 }
 
 /** 读取当前页面的服务通道。没有桥接时直接失败，不用本地数据假装已连接。 */

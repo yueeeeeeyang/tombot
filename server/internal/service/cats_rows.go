@@ -30,7 +30,7 @@ func (s *Service) ensureState(ctx context.Context) (stateRow, error) {
 	if !errors.Is(err, sql.ErrNoRows) {
 		return stateRow{}, err
 	}
-	workspace := SeedWorkspace()
+	workspace := Workspace{Version: 5, ActiveAgentID: "", Agents: []Agent{}}
 	settings := DefaultModelForm()
 	if err = s.writeState(ctx, stateRow{workspace: workspace, revision: 1, pristine: true, settings: settings}); err != nil {
 		if row, readErr := s.readState(ctx); readErr == nil {
@@ -48,8 +48,8 @@ func (s *Service) readState(ctx context.Context) (stateRow, error) {
 	var settings ModelForm
 	var streaming int
 	var nonce, ciphertext []byte
-	err := s.db.QueryRowContext(ctx, `SELECT active_agent_id, revision, pristine, language, provider, base_url, model_name, temperature, top_p, max_output_tokens, is_streaming, api_key_nonce, api_key_ciphertext FROM workspace_meta WHERE id=1`).Scan(
-		&active, &revision, &pristine, &settings.Language, &settings.Provider, &settings.BaseURL, &settings.ModelName, &settings.Temperature, &settings.TopP, &settings.MaxOutputTokens, &streaming, &nonce, &ciphertext,
+	err := s.db.QueryRowContext(ctx, `SELECT active_agent_id, revision, pristine, language, provider, provider_name, base_url, model_name, temperature, top_p, max_output_tokens, is_streaming, api_key_nonce, api_key_ciphertext FROM workspace_meta WHERE id=1`).Scan(
+		&active, &revision, &pristine, &settings.Language, &settings.Provider, &settings.ProviderName, &settings.BaseURL, &settings.ModelName, &settings.Temperature, &settings.TopP, &settings.MaxOutputTokens, &streaming, &nonce, &ciphertext,
 	)
 	if err != nil {
 		return stateRow{}, err
@@ -59,8 +59,11 @@ func (s *Service) readState(ctx context.Context) (stateRow, error) {
 	if err != nil {
 		return stateRow{}, err
 	}
+	if agents == nil {
+		agents = []Agent{}
+	}
 	if len(agents) == 0 {
-		return stateRow{}, sql.ErrNoRows
+		active = ""
 	}
 	return stateRow{
 		workspace: Workspace{Version: 5, ActiveAgentID: active, Agents: agents},
@@ -263,8 +266,8 @@ func (s *Service) writeState(ctx context.Context, row stateRow) error {
 		if row.settings.IsStreaming {
 			streaming = 1
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_meta(id,active_agent_id,revision,pristine,language,provider,base_url,model_name,temperature,top_p,max_output_tokens,is_streaming,api_key_nonce,api_key_ciphertext,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET active_agent_id=excluded.active_agent_id, revision=excluded.revision, pristine=excluded.pristine, language=excluded.language, provider=excluded.provider, base_url=excluded.base_url, model_name=excluded.model_name, temperature=excluded.temperature, top_p=excluded.top_p, max_output_tokens=excluded.max_output_tokens, is_streaming=excluded.is_streaming, api_key_nonce=excluded.api_key_nonce, api_key_ciphertext=excluded.api_key_ciphertext, updated_at=excluded.updated_at`,
-			row.workspace.ActiveAgentID, row.revision, pristine, row.settings.Language, row.settings.Provider, row.settings.BaseURL, row.settings.ModelName, row.settings.Temperature, row.settings.TopP, row.settings.MaxOutputTokens, streaming, nullableBytes(row.nonce), nullableBytes(row.ciphertext), s.now().UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO workspace_meta(id,active_agent_id,revision,pristine,language,provider,provider_name,base_url,model_name,temperature,top_p,max_output_tokens,is_streaming,api_key_nonce,api_key_ciphertext,updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET active_agent_id=excluded.active_agent_id, revision=excluded.revision, pristine=excluded.pristine, language=excluded.language, provider=excluded.provider, provider_name=excluded.provider_name, base_url=excluded.base_url, model_name=excluded.model_name, temperature=excluded.temperature, top_p=excluded.top_p, max_output_tokens=excluded.max_output_tokens, is_streaming=excluded.is_streaming, api_key_nonce=excluded.api_key_nonce, api_key_ciphertext=excluded.api_key_ciphertext, updated_at=excluded.updated_at`,
+			row.workspace.ActiveAgentID, row.revision, pristine, row.settings.Language, row.settings.Provider, row.settings.ProviderName, row.settings.BaseURL, row.settings.ModelName, row.settings.Temperature, row.settings.TopP, row.settings.MaxOutputTokens, streaming, nullableBytes(row.nonce), nullableBytes(row.ciphertext), s.now().UnixMilli()); err != nil {
 			return err
 		}
 		kept := map[string]struct{}{}

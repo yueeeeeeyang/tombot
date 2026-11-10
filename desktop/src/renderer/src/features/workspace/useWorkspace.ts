@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { getBackend, type DeliveryResult, type DesktopBackend } from '../desktop/backend'
-import { createWorkspace, type AppWorkspace } from './model'
+import { emptyWorkspace, type AppWorkspace } from './model'
 
 interface WorkspaceState {
   workspace: AppWorkspace
@@ -28,7 +28,7 @@ function mergeDelivery(local: AppWorkspace, remote: AppWorkspace): AppWorkspace 
 function readInitial(backend: DesktopBackend): WorkspaceState {
   const sync = backend.tryWorkspaceSync?.()
   // 没有同步快照时先占位，真正的列表等服务返回后再换上，不用本机旧档填充。
-  if (!sync) return { workspace: createWorkspace(), error: '', isBlocked: false, ready: false }
+  if (!sync) return { workspace: emptyWorkspace(), error: '', isBlocked: false, ready: false }
   return { workspace: sync.workspace, error: '', isBlocked: false, ready: true }
 }
 

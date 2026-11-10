@@ -29,8 +29,14 @@ export class MemoryBackend implements DesktopBackend {
   private listeners = new Set<(status: BootstrapStatus) => void>()
   private workspace = createWorkspace()
   private pristine = true
-  private settings: SettingsDraft = createSettingsDraft()
-  private apiKey = ''
+  private settings: SettingsDraft = {
+    ...createSettingsDraft(),
+    provider: 'custom',
+    providerName: '测试供应商',
+    baseUrl: '',
+    modelName: '内存模型',
+  }
+  private apiKey = 'memory-key'
 
   /** 地址、初始化和密码优先于引导。已验证且引导未完成时才停在进度页。 */
   private gatePhase(): SessionPhase {
@@ -218,10 +224,34 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve(this.trySettingsSync())
   }
 
+  listProviderModels(
+    _providerId: string,
+    apiKey: string,
+  ): Promise<Array<{ id: string; name: string }>> {
+    if (!apiKey.trim() && !this.apiKey) {
+      return Promise.reject(new Error('请填写 API Key。'))
+    }
+    if (apiKey === 'bad-key') {
+      return Promise.reject(new Error('API Key 验证失败，请检查后重试。'))
+    }
+    return Promise.resolve([{ id: 'deepseek-chat', name: 'DeepSeek Chat' }])
+  }
+
   saveSettings(draft: SettingsDraft, apiKey: string): SettingsView {
     this.settings = { ...draft }
     if (apiKey) this.apiKey = apiKey
     return this.trySettingsSync()
+  }
+
+  /** 测试切换到尚未配置模型或空工作空间。调用方结束时要 reset。 */
+  loadFixture(input: {
+    workspace?: AppWorkspace
+    settings?: Partial<SettingsDraft>
+    apiKey?: string
+  }): void {
+    if (input.workspace) this.workspace = input.workspace
+    if (input.settings) this.settings = { ...createSettingsDraft(), ...input.settings }
+    if (input.apiKey !== undefined) this.apiKey = input.apiKey
   }
 
   reset(): void {
@@ -236,8 +266,14 @@ export class MemoryBackend implements DesktopBackend {
     this.listeners.clear()
     this.workspace = createWorkspace()
     this.pristine = true
-    this.settings = createSettingsDraft()
-    this.apiKey = ''
+    this.settings = {
+      ...createSettingsDraft(),
+      provider: 'custom',
+      providerName: '测试供应商',
+      baseUrl: '',
+      modelName: '内存模型',
+    }
+    this.apiKey = 'memory-key'
   }
 }
 

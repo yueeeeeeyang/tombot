@@ -33,6 +33,8 @@ func (s *Server) workspaceRoutes(router chi.Router) {
 		protected.Post("/computer", s.openComputer)
 		protected.Get("/model-settings", s.desktopLoadSettings)
 		protected.Put("/model-settings", s.desktopSaveSettings)
+		protected.Get("/model-providers", s.desktopModelProviders)
+		protected.Post("/model-providers/{id}/models", s.desktopListProviderModels)
 	})
 }
 
@@ -101,12 +103,59 @@ func (s *Server) desktopSaveSettings(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if base, ok := service.BuiltinBaseURL(request.Provider, s.Config); ok {
+		request.BaseURL = base
+		if request.ProviderName == "" {
+			for _, item := range service.BuiltinProviders() {
+				if item.ID == request.Provider {
+					request.ProviderName = item.Name
+				}
+			}
+		}
+	}
 	view, err := s.Workspace.SaveModelForm(r.Context(), request.ModelForm, request.APIKey, request.ClearKey)
 	if err != nil {
 		s.fail(w, r, err)
 		return
 	}
 	s.respond(w, r, http.StatusOK, view)
+}
+
+func (s *Server) desktopModelProviders(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireDesktop(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.respond(w, r, http.StatusOK, service.BuiltinProviders())
+}
+
+func (s *Server) desktopListProviderModels(w http.ResponseWriter, r *http.Request) {
+	if err := s.requireDesktop(); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	var request struct {
+		APIKey string `json:"apiKey"`
+	}
+	if err := decodeLimit(w, r, &request, 64<<10); err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	base, ok := service.BuiltinBaseURL(chi.URLParam(r, "id"), s.Config)
+	if !ok {
+		s.fail(w, r, domain.NewError(404, "PROVIDER_NOT_FOUND", "没有这个内置提供商。"))
+		return
+	}
+	models, err := s.Workspace.ListBuiltinModels(r.Context(), request.APIKey, base)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	listed := make([]map[string]string, 0, len(models))
+	for _, model := range models {
+		listed = append(listed, map[string]string{"id": model.ID, "name": model.Name})
+	}
+	s.respond(w, r, http.StatusOK, map[string]any{"models": listed})
 }
 
 func decodeWorkspace(w http.ResponseWriter, r *http.Request) (service.Workspace, error) {

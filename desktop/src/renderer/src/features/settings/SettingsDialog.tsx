@@ -1,4 +1,5 @@
 import { Settings, SlidersHorizontal, X } from 'lucide-react'
+import { ModelProviderFields } from './ModelProviderFields'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../components/Select'
 import {
@@ -138,77 +139,20 @@ function GeneralSettings({
 }
 
 /** 渲染供应商与参数表单。密钥只提交给服务，不会留在本地存储。 */
-function ModelSettings({
-  draft,
-  onChange,
-  apiKey,
-  hasApiKey,
-  onApiKeyChange,
-}: Pick<SettingsDialogProps, 'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'>) {
+function ModelSettings(
+  props: Pick<
+    SettingsDialogProps,
+    'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'
+  >,
+) {
+  const { draft, onChange } = props
   const errors = validateSettingsDraft(draft)
   return (
     <>
       <div className="settings-section">
         <h3>模型供应商</h3>
         <div className="settings-card">
-          <div className="setting-row">
-            <span>供应商</span>
-            <Select
-              label="模型供应商"
-              value={draft.provider}
-              onChange={(value) => onChange({ ...draft, provider: value })}
-              options={[
-                { value: 'openai', label: 'OpenAI' },
-                { value: 'anthropic', label: 'Anthropic' },
-                { value: 'deepseek', label: 'DeepSeek' },
-                { value: 'google', label: 'Google' },
-                { value: 'custom', label: '自定义（兼容 OpenAI）' },
-              ]}
-            />
-          </div>
-          <div className="setting-field">
-            <label className="setting-row" htmlFor="model-base-url">
-              <span>API 地址</span>
-              <input
-                id="model-base-url"
-                className="setting-text-input"
-                type="url"
-                value={draft.baseUrl}
-                maxLength={500}
-                placeholder="输入供应商 API 地址"
-                aria-invalid={Boolean(errors.baseUrl)}
-                aria-describedby={errors.baseUrl ? 'model-base-url-error' : undefined}
-                onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })}
-              />
-            </label>
-            {errors.baseUrl && (
-              <p className="setting-error" id="model-base-url-error" role="alert">
-                {errors.baseUrl}
-              </p>
-            )}
-          </div>
-          <label className="setting-row" htmlFor="model-api-key">
-            <span>API 密钥</span>
-            <input
-              id="model-api-key"
-              className="setting-text-input"
-              type="password"
-              value={apiKey}
-              placeholder={hasApiKey ? '已保存，留空则不修改' : '输入 API 密钥'}
-              autoComplete="off"
-              onChange={(event) => onApiKeyChange(event.target.value)}
-            />
-          </label>
-          <label className="setting-row">
-            <span>模型名称</span>
-            <input
-              className="setting-text-input"
-              value={draft.modelName}
-              maxLength={120}
-              placeholder="输入模型名称"
-              onChange={(event) => onChange({ ...draft, modelName: event.target.value })}
-            />
-          </label>
+          <ModelProviderFields {...props} />
         </div>
       </div>
       <div className="settings-section">

@@ -324,6 +324,18 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
+  ipcMain.handle(
+    'desktop:provider-models',
+    (_event, input: { providerId: string; apiKey: string }) =>
+      handle(async () => {
+        const result = (await call(
+          'POST',
+          `/model-providers/${encodeURIComponent(input.providerId)}/models`,
+          { apiKey: input.apiKey },
+        )) as { models?: Array<{ id: string; name: string }> }
+        return result.models ?? []
+      }),
+  )
   ipcMain.handle('desktop:bootstrap', () => handle(() => call('POST', '/bootstrap/retry')))
   ipcMain.handle('desktop:bootstrap-watch', (event, watchID: unknown) =>
     handle(async () => {
@@ -502,6 +514,7 @@ export function registerDesktopIpc(): void {
         return call('PUT', '/model-settings', {
           language: draft.language,
           provider: draft.provider,
+          providerName: draft.providerName,
           baseUrl: draft.baseUrl,
           modelName: draft.modelName,
           temperature: draft.temperature,

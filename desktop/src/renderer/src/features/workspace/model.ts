@@ -202,13 +202,33 @@ export const agentSchema = z
     }
   })
 
+function refineAppWorkspace(
+  workspace: { activeAgentId: string; agents: { id: string; messages: readonly unknown[] }[] },
+  context: { addIssue: (issue: { code: 'custom'; message: string }) => void },
+): void {
+  const ids = workspace.agents.map((agent) => agent.id)
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
+  }
+  if (workspace.agents.length === 0) {
+    if (workspace.activeAgentId !== '') {
+      context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
+    }
+  } else if (!ids.includes(workspace.activeAgentId)) {
+    context.addIssue({ code: 'custom', message: '工作空间的助手标识无效' })
+  }
+  if (workspace.agents.reduce((count, agent) => count + agent.messages.length, 0) > MAX_MESSAGES) {
+    context.addIssue({ code: 'custom', message: '消息数量已达上限' })
+  }
+}
+
 export const appWorkspaceSchema = z
   .object({
     version: z.literal(5),
-    activeAgentId: z.string().min(1),
-    agents: z.array(agentSchema).min(1).max(MAX_AGENTS),
+    activeAgentId: z.string(),
+    agents: z.array(agentSchema).max(MAX_AGENTS),
   })
-  .superRefine(refineWorkspace)
+  .superRefine(refineAppWorkspace)
 
 export type Agent = z.infer<typeof agentSchema>
 export type Artifact = z.infer<typeof artifactSchema>
@@ -219,7 +239,12 @@ export type AppWorkspace = z.infer<typeof appWorkspaceSchema>
 export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
 export type ModelTurn = { role: 'user' | 'assistant'; content: string }
 
-/** 创建首次使用的工作空间；预设助手没有伪造会话或模型回复。 */
+/** 服务端首次创建的工作空间没有任何猫咪。 */
+export function emptyWorkspace(): AppWorkspace {
+  return { version: 5, activeAgentId: '', agents: [] }
+}
+
+/** 测试里用的八只样例猫咪。服务端不再在首次创建时写入它们。 */
 export function createWorkspace(): AppWorkspace {
   const profiles: Array<[keyof typeof DEFAULT_AGENT_AVATARS, string, string, string]> = [
     ['assistant', '小黑', '你的日常搭档，陪你把想法变成现实。', '我的助手'],

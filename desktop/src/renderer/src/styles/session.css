@@ -37,6 +37,10 @@
   color: var(--text);
 }
 
+.session-card.session-card--wide {
+  width: min(520px, 100%);
+}
+
 .session-card h1 {
   margin: 0;
   font-size: 22px;

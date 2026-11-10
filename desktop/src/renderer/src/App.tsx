@@ -21,7 +21,11 @@ import {
   updateDraft,
   type NewAgent,
 } from './features/workspace/model'
-import { RecruitCatDialog, WorkspaceDialog } from './features/workspace/WorkspaceDialogs'
+import {
+  FirstCatPage,
+  RecruitCatDialog,
+  WorkspaceDialog,
+} from './features/workspace/WorkspaceDialogs'
 import { getBackend } from './features/desktop/backend'
 import type { DmNotice, MessageAttachment } from './features/workspace/model'
 import {
@@ -44,6 +48,7 @@ import { removeSidebarAgent, setSidebarFlag } from './features/workspace/sidebar
 
 import { SearchDialog } from './features/search/SearchDialog'
 import { SettingsDialog } from './features/settings/SettingsDialog'
+import { ModelInitPage } from './features/settings/ModelInitPage'
 import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
 import { type SettingsSection } from './features/settings/settings'
@@ -137,7 +142,9 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
   const [returnToRecruit, setReturnToRecruit] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
-  const agent = workspace.agents.find((candidate) => candidate.id === workspace.activeAgentId)!
+  // 有密钥和模型名称才离开初始化页。自定义地址没填时服务仍拒绝投递，消息保持未发送。
+  const modelConfigured = hasApiKey && settingsDraft.modelName.trim() !== ''
+  const agent = workspace.agents.find((candidate) => candidate.id === workspace.activeAgentId)
   const agentIds = workspace.agents.map((item) => item.id)
   const menuAgent = menuAnchor
     ? workspace.agents.find((candidate) => candidate.id === menuAnchor.agentId)
@@ -266,7 +273,10 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         setEditingGroupName(undefined)
         runAction(() => {
           if (workspace.activeAgentId === target.id) {
-            commit((previous) => ({ ...previous, activeAgentId: 'assistant' }))
+            const fallback = workspace.agents.find((agent) => agent.id !== target.id)?.id
+            if (fallback) {
+              commit((previous) => ({ ...previous, activeAgentId: fallback }))
+            }
           }
           updatePreferences((previous) =>
             setSidebarFlag(previous, agentIds, target.id, 'hiddenIds', true),
@@ -351,11 +361,61 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     })
   }
 
+  const settingsDialog = openDialog === 'settings' && (
+    <SettingsDialog
+      onClose={() => {
+        setOpenDialog(null)
+        setReturnToRecruit(false)
+      }}
+      theme={theme}
+      onThemeChange={setTheme}
+      themeError={themeError}
+      section={settingsSection}
+      onSectionChange={setSettingsSection}
+      draft={settingsDraft}
+      onChange={setSettingsDraft}
+      apiKey={apiKey}
+      hasApiKey={hasApiKey}
+      onApiKeyChange={setApiKey}
+    />
+  )
   if (!ready) {
     return (
       <SessionFrame>
         <p role="status">正在打开工作空间</p>
       </SessionFrame>
+    )
+  }
+  if (!modelConfigured) {
+    return (
+      <>
+        <ModelInitPage
+          draft={settingsDraft}
+          onChange={setSettingsDraft}
+          apiKey={apiKey}
+          hasApiKey={hasApiKey}
+          onApiKeyChange={setApiKey}
+          error={settingsError}
+        />
+        {settingsDialog}
+      </>
+    )
+  }
+  if (!agent) {
+    return (
+      <>
+        <FirstCatPage
+          onCreate={createAgent}
+          initialProfile={recruitProfile}
+          onModelSettings={(profile) => {
+            setRecruitProfile(profile)
+            openSettings('models', false)
+          }}
+          groups={[...new Set(workspace.agents.map((item) => item.group))]}
+          modelOptions={getModelOptions(settingsDraft)}
+        />
+        {settingsDialog}
+      </>
     )
   }
 

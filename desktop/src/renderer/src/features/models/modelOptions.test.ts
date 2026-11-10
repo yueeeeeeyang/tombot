@@ -11,9 +11,9 @@ describe('招聘模型预览选项', () => {
     const draft = { ...createSettingsDraft(), modelName: '  my-model  ' }
     expect(getModelOptions(draft)).toEqual([
       {
-        value: 'configured:openai:my-model',
+        value: 'configured:deepseek:my-model',
         label: 'my-model',
-        description: 'openai',
+        description: 'deepseek',
       },
     ])
     expect(draft.modelName).toBe('  my-model  ')
