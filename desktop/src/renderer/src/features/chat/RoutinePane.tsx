@@ -37,7 +37,10 @@ export function RoutinePane({
     let cancelled = false
     void onLoad(agentId).then(
       (next) => {
-        if (!cancelled) setItems(Array.isArray(next) ? next : [])
+        if (!cancelled) {
+          setItems(Array.isArray(next) ? next : [])
+          setError('')
+        }
       },
       (failure: Error) => {
         if (!cancelled) setError(failure.message)
@@ -62,7 +65,11 @@ export function RoutinePane({
       id="cat-panel-routine"
       aria-labelledby="cat-tab-routine"
     >
-      {items.length === 0 ? <p role="status">还没有定时任务</p> : null}
+      {items.length === 0 && !error ? (
+        <p className="cat-panel-empty" role="status">
+          还没有定时任务
+        </p>
+      ) : null}
       <ul className="routine-list">
         {items.map((item) => (
           <li

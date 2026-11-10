@@ -7,10 +7,13 @@ import {
 } from '@playwright/test'
 import { randomBytes } from 'node:crypto'
 import { createServer, type ServerResponse } from 'node:http'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { buildCompanion, startCompanion, type Companion } from './companionServer'
+
+const artifactsRoot = join(import.meta.dirname, '../../test-results/screenshots')
 
 let application: ElectronApplication
 let window: Page
@@ -98,7 +101,7 @@ test.afterEach(async () => {
   expect(browserErrors).toEqual([])
 })
 
-function launchApp(
+async function launchApp(
   profile: string,
   serverEnv: string | null = companion.url,
   options?: { userDataDir?: boolean },
@@ -110,8 +113,16 @@ function launchApp(
   if (serverEnv === null) delete env.TOMBOT_SERVER_URL
   else env.TOMBOT_SERVER_URL = serverEnv
   const args = ['.', '--force-device-scale-factor=1']
-  if (options?.userDataDir === false) env.XDG_CONFIG_HOME = profile
-  else args.push(`--user-data-dir=${profile}`)
+  if (options?.userDataDir === false) {
+    // macOS 不使用 XDG 目录；启动入口只隔离系统应用目录，仍验证产品默认 userData 路径。
+    const entry = join(profile, 'launch.mjs')
+    const main = pathToFileURL(join(import.meta.dirname, '../../out/main/index.js')).href
+    await writeFile(
+      entry,
+      `import { app } from 'electron';\napp.setPath('appData', ${JSON.stringify(profile)});\nawait import(${JSON.stringify(main)});\n`,
+    )
+    args[0] = entry
+  } else args.push(`--user-data-dir=${profile}`)
   return electron.launch({ args, env })
 }
 
@@ -186,10 +197,10 @@ async function submitServerAddress(): Promise<void> {
 async function unlock(): Promise<void> {
   if (!setupShot) {
     await expect(window.getByRole('heading', { name: '连接服务' })).toBeVisible()
-    await mkdir('/opt/cursor/artifacts', { recursive: true })
+    await mkdir(artifactsRoot, { recursive: true })
     await expectSessionDrag()
     await paintDragHints()
-    await window.screenshot({ path: '/opt/cursor/artifacts/session-connect.png', scale: 'css' })
+    await window.screenshot({ path: join(artifactsRoot, 'session-connect.png'), scale: 'css' })
     await clearDragHints()
     await expectSessionDrag()
   }
@@ -197,7 +208,7 @@ async function unlock(): Promise<void> {
   const setupHeading = window.getByRole('heading', { name: '初始化 TomBot' })
   await expect(setupHeading).toBeVisible()
   if (!setupShot) {
-    await window.screenshot({ path: '/opt/cursor/artifacts/session-setup.png', scale: 'css' })
+    await window.screenshot({ path: join(artifactsRoot, 'session-setup.png'), scale: 'css' })
     setupShot = true
   }
   await window.getByLabel('初始化码').fill(companion.setupCode)
@@ -282,6 +293,7 @@ async function reloadPersisted(): Promise<void> {
 async function updateServerWorkspace(
   mutate: (workspace: {
     activeAgentId: string
+    leadAgentId: string
     agents: Array<{
       id: string
       draft: string
@@ -315,6 +327,7 @@ async function updateServerWorkspace(
   const snapshot = (await current.json()) as {
     workspace: {
       activeAgentId: string
+      leadAgentId: string
       agents: Array<{
         id: string
         draft: string
@@ -353,8 +366,8 @@ test('首次打开要求填写服务地址，不会自己去连本机', async ()
   await expect(window.getByLabel('服务地址')).toHaveValue('')
   await expect(window.getByRole('heading', { name: '正在连接服务' })).toHaveCount(0)
   await expect(window.getByText('正在确认这台服务是否已经初始化。')).toHaveCount(0)
-  await mkdir('/opt/cursor/artifacts', { recursive: true })
-  await window.screenshot({ path: '/opt/cursor/artifacts/session-address.png', scale: 'css' })
+  await mkdir(artifactsRoot, { recursive: true })
+  await window.screenshot({ path: join(artifactsRoot, 'session-address.png'), scale: 'css' })
 })
 
 test('连接失败后可以修改服务地址', async () => {
@@ -370,9 +383,9 @@ test('连接失败后可以修改服务地址', async () => {
   await expect(window.getByLabel('服务地址')).toHaveValue('http://127.0.0.1:9')
   await expect(window.getByRole('alert')).toContainText('无法连接服务')
   await window.getByLabel('服务地址').fill('https://tom.example.com')
-  await mkdir('/opt/cursor/artifacts', { recursive: true })
+  await mkdir(artifactsRoot, { recursive: true })
   await window.screenshot({
-    path: '/opt/cursor/artifacts/session-connect-failed.png',
+    path: join(artifactsRoot, 'session-connect-failed.png'),
     scale: 'css',
   })
   await window.getByLabel('服务地址').fill(companion.url)
@@ -427,7 +440,7 @@ test('下次打开使用已保存的服务地址', async () => {
 test('点击自建猫咪只切换会话，不会和置顶位交换', async () => {
   await updateServerWorkspace((workspace) => {
     workspace.activeAgentId = 'cat-a'
-    ;(workspace as { leadAgentId: string }).leadAgentId = 'cat-a'
+    workspace.leadAgentId = 'cat-a'
     workspace.agents = [
       {
         id: 'cat-a',
@@ -475,7 +488,7 @@ test('已初始化后要验证密码才能进入工作空间', async () => {
   await submitServerAddress()
   await expect(window.getByRole('heading', { name: '验证密码' })).toBeVisible()
   await expectSessionDrag()
-  await window.screenshot({ path: '/opt/cursor/artifacts/session-login.png', scale: 'css' })
+  await window.screenshot({ path: join(artifactsRoot, 'session-login.png'), scale: 'css' })
   await window.getByLabel('密码', { exact: true }).fill(password)
   await window.getByRole('button', { name: '进入工作空间' }).click()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
@@ -532,8 +545,8 @@ test('引导未完成时显示进度，重试成功后才进入工作空间', as
   expect(spinnerMotion.iteration).toBe('infinite')
   expect(['0.85s', '.85s', '850ms']).toContain(spinnerMotion.duration)
   await expectSessionDrag()
-  await mkdir('/opt/cursor/artifacts', { recursive: true })
-  await window.screenshot({ path: '/opt/cursor/artifacts/bootstrap-progress.png', scale: 'css' })
+  await mkdir(artifactsRoot, { recursive: true })
+  await window.screenshot({ path: join(artifactsRoot, 'bootstrap-progress.png'), scale: 'css' })
   await window.getByRole('button', { name: '重新准备' }).click()
   await expect(window.getByRole('textbox', { name: '给小黑发消息' })).toBeVisible()
   expect(await appRegion('.sidebar-toolbar')).toBe('drag')
@@ -560,7 +573,7 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
       .evaluate((element) => element.scrollHeight <= element.clientHeight),
   ).toBe(true)
   await window.screenshot({ path: testInfo.outputPath('desktop-home.png'), scale: 'css' })
-  await window.screenshot({ path: '/opt/cursor/artifacts/desktop-home.png', scale: 'css' })
+  await window.screenshot({ path: join(artifactsRoot, 'desktop-home.png'), scale: 'css' })
   const rendererProcesses = await application.evaluate(({ app }) =>
     app.getAppMetrics().filter((metric) => metric.type === 'Tab'),
   )
@@ -588,6 +601,7 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
   const dialogBox = await createDialog.boundingBox()
   expect(dialogBox!.width).toBe(480)
   await expect(createDialog.getByText('预设头像', { exact: true })).toHaveCount(0)
+  await expect(createDialog.getByRole('textbox', { name: /一句话介绍/ })).toHaveCount(0)
   await expect(createDialog.getByRole('combobox', { name: '模型', exact: true })).toHaveText(
     '项目模型',
   )
@@ -781,7 +795,7 @@ test('招聘只列出已经配置的模型', async () => {
   await window.getByRole('button', { name: '查看我的猫咪资料', exact: true }).click()
   const hired = window.getByRole('complementary', { name: '我的猫咪' })
   await expect(hired.getByRole('combobox', { name: '模型' })).toHaveText('团队模型')
-  await window.screenshot({ path: '/opt/cursor/artifacts/recruit-model.png', scale: 'css' })
+  await window.screenshot({ path: join(artifactsRoot, 'recruit-model.png'), scale: 'css' })
 })
 
 test('搜索键盘操作与最小窗口布局', async () => {
@@ -821,7 +835,7 @@ test('搜索键盘操作与最小窗口布局', async () => {
   await expect
     .poll(() => input.evaluate((element) => element.scrollHeight > element.clientHeight))
     .toBe(true)
-  const saveButton = window.getByRole('button', { name: '保存为本地草稿' })
+  const saveButton = window.getByRole('button', { name: '发送' })
   const saveButtonBox = await saveButton.boundingBox()
   expect(saveButtonBox!.y + saveButtonBox!.height).toBeLessThanOrEqual(640)
   await saveButton.click()
@@ -1113,17 +1127,19 @@ test('真实主题、系统变化、表单焦点、悬浮滚动条与顶部雾�
   const input = window.getByRole('textbox', { name: '给小黑发消息' })
   await input.fill(
     Array.from(
-      { length: 24 },
+      { length: 60 },
       (_, index) => `第 ${index + 1} 行：验证消息在顶部渐变下自然淡出`,
     ).join('\n'),
   )
   await expectHoverScrollbar('.composer textarea')
   await input.press('Enter')
-  expect(
-    await window
-      .locator('.messages-scroll')
-      .evaluate((element) => element.scrollHeight > element.clientHeight),
-  ).toBe(true)
+  await expect
+    .poll(() =>
+      window
+        .locator('.messages-scroll')
+        .evaluate((element) => element.scrollHeight > element.clientHeight),
+    )
+    .toBe(true)
   const fog = await window.locator('.chat-header').evaluate((element) => ({
     position: getComputedStyle(element).position,
     blur: getComputedStyle(element, '::before').backdropFilter,
@@ -1541,7 +1557,7 @@ function boxesOverlap(
 }
 
 test('消息菜单、悬停按钮、回复、表情和时间分隔', async () => {
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const input = window.getByRole('textbox', { name: '给小黑发消息' })
   await input.fill('原来的想法')
@@ -1662,25 +1678,31 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
 })
 
 test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', async () => {
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const trigger = window.getByRole('button', { name: '查看小黑资料', exact: true })
   const chevron = trigger.locator('.pill-chevron')
   await expect(chevron).toHaveClass(/lucide-chevron-right/)
   await expect(chevron).toHaveCSS('opacity', '0')
+  await expect(chevron).toHaveCSS('width', '0px')
+  await expect(chevron).toHaveCSS('margin-left', '0px')
   const idleWidth = (await trigger.boundingBox())!.width
   await trigger.screenshot({ path: `${artifacts}/chat-chip-idle.png` })
   await trigger.hover()
   await expect(chevron).toHaveCSS('opacity', '1')
-  expect((await trigger.boundingBox())!.width).toBe(idleWidth)
+  await expect(chevron).toHaveCSS('width', '14px')
+  expect((await trigger.boundingBox())!.width).toBe(idleWidth + 22)
   await trigger.screenshot({ path: `${artifacts}/chat-chip-hover.png` })
   await window.getByRole('textbox', { name: '给小黑发消息' }).hover()
   await expect(chevron).toHaveCSS('opacity', '0')
+  await expect(chevron).toHaveCSS('width', '0px')
+  expect((await trigger.boundingBox())!.width).toBe(idleWidth)
   await trigger.evaluate((element: HTMLElement) => {
     element.focus({ focusVisible: true } as FocusOptions)
   })
   await expect(chevron).toHaveCSS('opacity', '1')
-  expect((await trigger.boundingBox())!.width).toBe(idleWidth)
+  await expect(chevron).toHaveCSS('width', '14px')
+  expect((await trigger.boundingBox())!.width).toBe(idleWidth + 22)
   await trigger.evaluate((element: HTMLElement) => element.blur())
   await window.screenshot({ path: `${artifacts}/cat-panel-closed.png`, scale: 'css' })
   await trigger.click()
@@ -1704,17 +1726,35 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   await window.screenshot({ path: `${artifacts}/cat-panel-details.png`, scale: 'css' })
   await panel.getByRole('tab', { name: '资料库', exact: true }).click()
   await expect(panel.getByRole('status')).toContainText('资料库还是空的')
+  const emptyStyles = await panel.getByRole('status').evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      padding: style.padding,
+      border: style.border,
+      borderRadius: style.borderRadius,
+      textAlign: style.textAlign,
+    }
+  })
   await window.screenshot({ path: `${artifacts}/cat-panel-library.png`, scale: 'css' })
   await panel.getByRole('tab', { name: '电脑', exact: true }).click()
   await expect(panel.getByRole('status')).toContainText('未连接')
   await expect(panel.getByRole('button', { name: '开始准备', exact: true })).toBeVisible()
   await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
-  await panel.getByRole('tab', { name: '记忆', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('还没有记忆')
-  await expect(panel.getByRole('button', { name: '记下' })).toHaveCount(0)
-  await window.screenshot({ path: `${artifacts}/cat-memory.png`, scale: 'css' })
+  await expect(panel.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0)
+  await expect(panel.getByRole('tab')).toHaveCount(4)
   await panel.getByRole('tab', { name: '定时', exact: true }).click()
   await expect(panel.getByRole('status')).toHaveText('还没有定时任务')
+  expect(
+    await panel.getByRole('status').evaluate((element) => {
+      const style = getComputedStyle(element)
+      return {
+        padding: style.padding,
+        border: style.border,
+        borderRadius: style.borderRadius,
+        textAlign: style.textAlign,
+      }
+    }),
+  ).toEqual(emptyStyles)
   await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
   await window.screenshot({ path: `${artifacts}/cat-routines.png`, scale: 'css' })
   await trigger.click()
@@ -1732,7 +1772,7 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
 })
 
 test('资料库按时间分组展示产物，电脑在没有地址时保持未连接', async () => {
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const preview =
     'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC'
@@ -1777,7 +1817,7 @@ test('资料库按时间分组展示产物，电脑在没有地址时保持未�
 })
 
 test('连接电脑使用这只猫咪的工作区，断开后回到未连接', async () => {
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
   const panel = window.getByRole('complementary', { name: '小黑' })
@@ -1803,7 +1843,7 @@ test('连接电脑使用这只猫咪的工作区，断开后回到未连接', as
 
 test('对话里记住一件事并创建定时任务后，界面能看到、能暂停、能右键删除', async () => {
   test.setTimeout(120_000)
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const model = await startToolModel()
   try {
@@ -1817,18 +1857,22 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
     await window
       .getByRole('textbox', { name: '给小黑发消息' })
       .fill('请记住我每周三晨跑，并在当天早上9点提醒我')
-    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await window.getByRole('button', { name: '发送' }).click()
     await expect
       .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 45_000 })
       .toContain('已经记下，并设好周三早上的提醒。')
     await expect(window.getByRole('alert')).toHaveCount(0)
     await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
     const panel = window.getByRole('complementary', { name: '小黑' })
-    await panel.getByRole('tab', { name: '记忆', exact: true }).click()
-    await expect(panel.getByText('晨跑', { exact: true })).toBeVisible()
-    await expect(panel.getByRole('button', { name: '记下' })).toHaveCount(0)
-    await expect(panel.getByRole('button', { name: '删除' })).toHaveCount(0)
-    await window.screenshot({ path: `${artifacts}/cat-memory.png`, scale: 'css' })
+    await expect(panel.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0)
+    await expect(
+      panel.getByText('熟悉你的晨跑习惯，会贴心地安排周三的提醒。', { exact: true }),
+    ).toBeVisible()
+    await window.screenshot({
+      path: `${artifacts}/cat-introduction.png`,
+      scale: 'css',
+      animations: 'disabled',
+    })
     await panel.getByRole('tab', { name: '定时', exact: true }).click()
     await expect(panel.getByText('晨跑提醒', { exact: true })).toBeVisible()
     await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
@@ -1845,9 +1889,88 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
   }
 })
 
+test('群资料与初始头像、折叠、成员搜索和提及交互', async () => {
+  test.setTimeout(120_000)
+  await mkdir(artifactsRoot, { recursive: true })
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
+  await window.getByRole('textbox', { name: '群名称', exact: true }).fill('创作小队')
+  for (const name of ['小黑', '游戏程序', '游戏负责人 + 策划', '游戏美术'])
+    await window.getByRole('checkbox', { name, exact: true }).check()
+  await window.getByRole('button', { name: '创建群聊', exact: true }).click()
+  const capsule = window.getByRole('button', { name: '查看创作小队群资料' })
+  await expect(capsule).toBeVisible()
+  await expect(capsule.locator('.group-avatar img')).toHaveCount(4)
+  await expect(capsule).toHaveCSS('padding-left', '14px')
+  await expect(window.getByRole('button', { name: '成员', exact: true })).toHaveCount(0)
+  const composer = await window.locator('.composer').boundingBox()
+  expect(composer!.y + composer!.height).toBeGreaterThan(
+    (await window.evaluate(() => innerHeight)) - 35,
+  )
+  await capsule.click()
+  const panel = window.locator('.group-panel')
+  const avatars = await panel
+    .locator('.group-avatar img')
+    .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src))
+  expect(await panel.evaluate((element) => getComputedStyle(element).borderLeftColor)).toBe(
+    await window
+      .locator('.sidebar')
+      .evaluate((element) => getComputedStyle(element).borderRightColor),
+  )
+  await expect(panel.getByRole('textbox', { name: '群名称' })).toHaveCount(0)
+  await panel.getByRole('button', { name: '修改群名称' }).click()
+  await panel.getByRole('textbox', { name: '群名称' }).fill('灵感小队')
+  await panel.getByRole('button', { name: '保存名称' }).click()
+  await expect(window.getByRole('button', { name: '查看灵感小队群资料' })).toBeVisible()
+  await expect(panel.getByRole('textbox', { name: '群名称' })).toHaveCount(0)
+  await panel.getByRole('tab', { name: '资料库' }).click()
+  await expect(panel.getByRole('status')).toContainText('资料库还是空的')
+  await panel.getByRole('tab', { name: '成员' }).click()
+  const remove = panel.getByRole('button', { name: '移出游戏程序' })
+  await expect(remove).toHaveCSS('opacity', '0')
+  await remove.locator('..').hover()
+  await expect(remove).toHaveCSS('opacity', '1')
+  await window.screenshot({ path: join(artifactsRoot, 'group-members-hover.png'), scale: 'css' })
+  await remove.click()
+  await expect(remove).toHaveCount(0)
+  await panel.getByRole('button', { name: '添加成员' }).click()
+  await panel.getByRole('textbox', { name: '搜索猫咪名称' }).fill('音效')
+  await expect(panel.getByRole('option')).toHaveCount(1)
+  await window.screenshot({ path: join(artifactsRoot, 'group-member-search.png'), scale: 'css' })
+  await panel.getByRole('option', { name: '游戏音效' }).click()
+  await expect(panel.getByRole('button', { name: '移出游戏音效' })).toBeAttached()
+  expect(
+    await panel
+      .locator('.group-avatar img')
+      .evaluateAll((images) => images.map((image) => (image as HTMLImageElement).src)),
+  ).toEqual(avatars)
+  await setPageSize(860, 640)
+  await window.screenshot({ path: join(artifactsRoot, 'group-panel-compact.png'), scale: 'css' })
+  expect(await window.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  await panel.getByRole('button', { name: '关闭群资料' }).click()
+  const input = window.getByRole('textbox', { name: '给灵感小队发消息' })
+  await input.fill('@小')
+  await expect(window.getByRole('option', { name: '小黑', exact: true })).toBeVisible()
+  await window.screenshot({ path: join(artifactsRoot, 'group-mention.png'), scale: 'css' })
+  await input.press('Enter')
+  await expect(input).toHaveValue('@小黑 ')
+  await window.getByRole('button', { name: '收起群聊分组' }).click()
+  await expect(window.getByRole('button', { name: /灵感小队 多只/ })).toBeHidden()
+  await window.getByRole('button', { name: '收起游戏开发分组' }).click()
+  await expect(window.getByRole('button', { name: '游戏程序', exact: true })).toBeHidden()
+  await window.reload()
+  await expect(window.getByRole('button', { name: '展开群聊分组' })).toBeVisible()
+  await expect(window.getByRole('button', { name: '展开游戏开发分组' })).toBeVisible()
+  await window.getByRole('button', { name: '展开群聊分组' }).click()
+  await window.getByRole('button', { name: /灵感小队 多只/ }).click()
+  await expect(
+    window.getByRole('button', { name: '查看灵感小队群资料' }).locator('.group-avatar img'),
+  ).toHaveCount(4)
+})
+
 test('群聊、私信和附件沿用原来的气泡', async () => {
   test.setTimeout(120_000)
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const model = await startFixtureModel([['群', '里收到了']])
   try {
@@ -1869,14 +1992,33 @@ test('群聊、私信和附件沿用原来的气泡', async () => {
     await expect(window.getByRole('log', { name: '晨会' })).toContainText('群里收到了', {
       timeout: 30_000,
     })
+    await expect(window.getByRole('log', { name: '晨会' }).locator('.message-bubble')).toHaveText([
+      '大家看一下今天的安排',
+      /群里收到了/,
+    ])
+    await window.getByRole('textbox', { name: '给晨会发消息' }).fill('第二条安排')
+    await window.getByRole('button', { name: '发送', exact: true }).click()
+    await expect(window.getByRole('log', { name: '晨会' }).locator('.message-bubble')).toHaveCount(
+      4,
+    )
+    await window.getByRole('button', { name: '小黑', exact: true }).click()
+    await window.getByRole('button', { name: /晨会/ }).click()
+    await expect(window.getByRole('log', { name: '晨会' }).locator('.message-bubble')).toHaveText([
+      '大家看一下今天的安排',
+      /群里收到了/,
+      '第二条安排',
+      /群里收到了/,
+    ])
     await window.screenshot({ path: `${artifacts}/group-chat.png`, scale: 'css' })
     await window.getByRole('button', { name: '小黑', exact: true }).click()
     await window
       .locator('input[type="file"]')
-      .setInputFiles('/agent/repos/tombot/desktop/src/renderer/src/assets/cats/frames/bombay.png')
+      .setInputFiles(
+        join(import.meta.dirname, '../../src/renderer/src/assets/cats/frames/bombay.png'),
+      )
     await expect(window.getByText('bombay.png')).toBeVisible()
     await window.getByRole('textbox', { name: '给小黑发消息' }).fill('看看这张图')
-    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await window.getByRole('button', { name: '发送' }).click()
     await expect(window.getByRole('log').locator('img[alt="bombay.png"]')).toBeVisible()
     await expect(window.getByRole('log')).toContainText('群里收到了', { timeout: 20_000 })
     await window.screenshot({ path: `${artifacts}/attachment-message.png`, scale: 'css' })
@@ -1887,7 +2029,7 @@ test('群聊、私信和附件沿用原来的气泡', async () => {
 
 test('猫咪主动发的私信出现在侧栏', async () => {
   test.setTimeout(120_000)
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const model = await startDmModel()
   try {
@@ -1909,7 +2051,7 @@ test('猫咪主动发的私信出现在侧栏', async () => {
       headers: { authorization: `Bearer ${token}` },
     })
     await window.getByRole('textbox', { name: '给小黑发消息' }).fill('请私下告诉游戏程序一声')
-    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await window.getByRole('button', { name: '发送' }).click()
     const notice = window.getByRole('button', { name: /已发消息给/ })
     await expect(notice).toBeVisible({ timeout: 30_000 })
     await window.screenshot({ path: `${artifacts}/cat-dm.png`, scale: 'css' })
@@ -1937,9 +2079,48 @@ test('猫咪主动发的私信出现在侧栏', async () => {
   }
 })
 
+test('目标猫咪即时收到任务并在自己的聊天中直接交付', async () => {
+  const model = await startDmModel(true)
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByRole('textbox', { name: 'API 地址', exact: true }).fill(model.url)
+    await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill('fixture-key')
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model')
+    await window.evaluate(async () => globalThis.window.desktop!.backend.ensureAgent!('developer'))
+    await window.getByRole('textbox', { name: '给小黑发消息' }).fill('让游戏程序整理结果直接发给我')
+    await window.getByRole('button', { name: '发送' }).click()
+    await expect(window.getByRole('button', { name: /已发消息给/ })).toBeVisible()
+    await expect(window.locator('.composer-area .work-status')).toHaveCount(0)
+    await window.getByRole('button', { name: '游戏程序', exact: true }).click()
+    await expect(window.getByRole('button', { name: /收到.*小黑.*消息/ })).toBeVisible()
+    const progress = window.locator('.composer-area .work-status')
+    await expect(progress).toHaveText('正在独立核验资料')
+    await expect(progress.locator('.avatar')).toHaveAttribute('data-pose', 'working')
+    await window.screenshot({ path: test.info().outputPath('recipient-working.png'), scale: 'css' })
+    model.releaseRecipient()
+    await expect(window.getByRole('log')).toContainText('这是游戏程序亲自整理的结果。')
+    await expect(progress).toHaveCount(0)
+    await window.getByRole('button', { name: '小黑', exact: true }).click()
+    await expect(window.getByRole('log')).not.toContainText('这是游戏程序亲自整理的结果。')
+    await expect(progress).toHaveText('正在思考…')
+    model.releaseSender()
+    await expect(window.getByRole('log')).toContainText('好的')
+    await expect(progress).toHaveCount(0)
+    await window.getByRole('button', { name: '游戏程序', exact: true }).click()
+    await expect(
+      window.getByRole('log').getByText('这是游戏程序亲自整理的结果。', { exact: true }),
+    ).toHaveCount(1)
+  } finally {
+    await model.close()
+  }
+})
+
 test('回复按默认方式逐段出现', async () => {
   test.setTimeout(120_000)
-  const artifacts = '/opt/cursor/artifacts'
+  const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const model = await startFixtureModel([
     ['你', '好'],
@@ -1955,7 +2136,7 @@ test('回复按默认方式逐段出现', async () => {
     await window.keyboard.press('Escape')
     await waitForModel('fixture-model')
     await window.getByRole('textbox', { name: '给小黑发消息' }).fill('打个招呼')
-    await window.getByRole('button', { name: '保存为本地草稿' }).click()
+    await window.getByRole('button', { name: '发送' }).click()
     await expect
       .poll(async () => window.locator('.message-text').allTextContents(), { timeout: 20_000 })
       .toContain('你')
@@ -1999,13 +2180,23 @@ function startToolModel(): Promise<{ url: string; close: () => Promise<void> }> 
   const server = createServer((request, response) => {
     void (async () => {
       try {
+        let body = ''
+        request.on('data', (chunk) => {
+          body += chunk.toString()
+        })
         await new Promise<void>((resolve, reject) => {
           request.on('end', () => resolve())
           request.on('error', reject)
-          request.resume()
         })
         if (request.method !== 'POST' || !request.url?.endsWith('/chat/completions')) {
           response.writeHead(404).end()
+          return
+        }
+        if (body.includes('Write a short Chinese introduction')) {
+          response.writeHead(200, { 'content-type': 'text/event-stream' })
+          response.end(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '熟悉你的晨跑习惯，会贴心地安排周三的提醒。' }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+          )
           return
         }
         const current = step
@@ -2059,8 +2250,21 @@ function startToolModel(): Promise<{ url: string; close: () => Promise<void> }> 
   })
 }
 
-function startDmModel(): Promise<{ url: string; close: () => Promise<void> }> {
+function startDmModel(directDelivery = false): Promise<{
+  url: string
+  releaseRecipient: () => void
+  releaseSender: () => void
+  close: () => Promise<void>
+}> {
   let step = 0
+  let releaseRecipient!: () => void
+  let releaseSender!: () => void
+  const recipientGate = new Promise<void>((resolve) => {
+    releaseRecipient = resolve
+  })
+  const senderGate = new Promise<void>((resolve) => {
+    releaseSender = resolve
+  })
   const server = createServer((request, response) => {
     void (async () => {
       try {
@@ -2084,12 +2288,28 @@ function startDmModel(): Promise<{ url: string; close: () => Promise<void> }> {
             response,
             'call-dm',
             'message_bot',
-            '{"bot_id":"developer","message":"晨会我先看了。倒地保持最后一帧，移动改成爬行，倒地开火不要再把整段动作锁死。副武器走自己的一套键，按侧向速度选择左右并加上角度滞回，避免来回跳切。缺片先标清楚，不要静默。等用户说合再合，资源先留在当前版本上，不要提前开合。静止时末帧停住，移动只播爬行，开火从瞄准接射击，不要整段锁死。沙鹰只用手枪那一组动作，步枪的射击和战斗待机都不要混进来。侧向速度过了阈值再换左右，并留一点滞回，免得准星附近来回跳。缺的片段先写明，等用户确认后再接。"}',
+            directDelivery
+              ? JSON.stringify({
+                  bot_id: 'developer',
+                  message: '请你独立整理结果并直接发给用户。',
+                  deliver_to_user: true,
+                })
+              : '{"bot_id":"developer","message":"晨会我先看了。倒地保持最后一帧，移动改成爬行，倒地开火不要再把整段动作锁死。副武器走自己的一套键，按侧向速度选择左右并加上角度滞回，避免来回跳切。缺片先标清楚，不要静默。等用户说合再合，资源先留在当前版本上，不要提前开合。静止时末帧停住，移动只播爬行，开火从瞄准接射击，不要整段锁死。沙鹰只用手枪那一组动作，步枪的射击和战斗待机都不要混进来。侧向速度过了阈值再换左右，并留一点滞回，免得准星附近来回跳。缺的片段先写明，等用户确认后再接。"}',
           )
           return
         }
+        if (directDelivery && current === 1) {
+          writeToolCall(
+            response,
+            'recipient-progress',
+            'report_progress',
+            JSON.stringify({ summary: '正在独立核验资料' }),
+          )
+          return
+        }
+        if (directDelivery) await (current === 2 ? recipientGate : senderGate)
         response.write(
-          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: '好的' }, finish_reason: 'stop' }] })}\n\n`,
+          `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: directDelivery && current === 2 ? '这是游戏程序亲自整理的结果。' : '好的' }, finish_reason: 'stop' }] })}\n\n`,
         )
         response.write('data: [DONE]\n\n')
         response.end()
@@ -2107,10 +2327,15 @@ function startDmModel(): Promise<{ url: string; close: () => Promise<void> }> {
       }
       resolve({
         url: `http://127.0.0.1:${address.port}/v1`,
-        close: () =>
-          new Promise((done, fail) => {
+        releaseRecipient,
+        releaseSender,
+        close: () => {
+          releaseRecipient()
+          releaseSender()
+          return new Promise((done, fail) => {
             server.close((error) => (error ? fail(error) : done()))
-          }),
+          })
+        },
       })
     })
     server.on('error', reject)
@@ -2192,8 +2417,8 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
     )
     await expect(window.getByRole('heading', { name: '招聘第一只猫咪' })).toHaveCount(0)
     await expectSessionDrag()
-    await mkdir('/opt/cursor/artifacts', { recursive: true })
-    await window.screenshot({ path: '/opt/cursor/artifacts/model-init.png', scale: 'css' })
+    await mkdir(artifactsRoot, { recursive: true })
+    await window.screenshot({ path: join(artifactsRoot, 'model-init.png'), scale: 'css' })
     await window.getByLabel('API 密钥').fill('wrong-key')
     await window.getByRole('button', { name: '拉取模型' }).click()
     await expect(window.getByRole('alert')).toHaveText('API Key 验证失败，请检查后重试。')
@@ -2203,13 +2428,13 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
     await expect(window.getByRole('heading', { name: '招聘第一只猫咪' })).toBeVisible()
     await expect(window.getByText('e2e-deepseek-key')).toHaveCount(0)
     await expectSessionDrag()
-    await window.screenshot({ path: '/opt/cursor/artifacts/first-cat.png', scale: 'css' })
+    await window.screenshot({ path: join(artifactsRoot, 'first-cat.png'), scale: 'css' })
     await window.getByRole('textbox', { name: '助手名称' }).fill('阿花')
     await window.getByRole('button', { name: '招聘猫咪' }).click()
     await expect(window.getByRole('textbox', { name: '给阿花发消息' })).toBeVisible()
     const pinned = window.locator('.pinned-area')
     await expect(pinned.getByRole('button', { name: '阿花', exact: true })).toBeVisible()
-    await window.screenshot({ path: '/opt/cursor/artifacts/first-cat-home.png', scale: 'css' })
+    await window.screenshot({ path: join(artifactsRoot, 'first-cat-home.png'), scale: 'css' })
     await expect
       .poll(() => window.evaluate(() => document.documentElement.dataset.workspaceSave ?? 'saved'))
       .toBe('saved')
@@ -2231,7 +2456,7 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
     )
     await expect(window.getByText('接口地址已内置在服务端')).toBeVisible()
     await window.screenshot({
-      path: '/opt/cursor/artifacts/settings-models-builtin.png',
+      path: join(artifactsRoot, 'settings-models-builtin.png'),
       scale: 'css',
     })
     await window.getByRole('button', { name: '自定义提供商' }).click()
@@ -2241,7 +2466,7 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
     await window.getByRole('textbox', { name: '模型名称', exact: true }).fill('手填模型')
     await expect(window.getByText('custom-secret')).toHaveCount(0)
     await window.screenshot({
-      path: '/opt/cursor/artifacts/settings-models-custom.png',
+      path: join(artifactsRoot, 'settings-models-custom.png'),
       scale: 'css',
     })
     expect(mock.url.startsWith('http://127.0.0.1:')).toBe(true)
@@ -2252,6 +2477,110 @@ test('没有默认模型时先配置，再招聘第一只猫咪，设置里可�
 })
 
 /** 按 OpenAI 兼容流式分两段返回。两段之间留出时间，方便截到进行中的回复。 */
+test('自定义猫咪上传头像、介绍并在重载和群头像中保留', async () => {
+  await configureModel()
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
+  await window.getByRole('button', { name: '自定义猫咪', exact: true }).click()
+  await window.getByRole('textbox', { name: '助手名称', exact: true }).fill('花园伙伴')
+  await window
+    .getByRole('textbox', { name: '猫咪介绍', exact: true })
+    .fill('擅长园艺，帮助我整理植物养护习惯。')
+  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await expect(window.getByRole('alert')).toHaveText('请先上传自定义猫咪头像。')
+  await window
+    .getByLabel('上传猫咪头像')
+    .setInputFiles(
+      join(import.meta.dirname, '../../src/renderer/src/assets/cats/frames/calico.png'),
+    )
+  const preview = window.locator('.custom-avatar-upload img')
+  await expect(preview).toHaveAttribute('src', /^data:image\/png;base64,/)
+  await window.screenshot({ path: test.info().outputPath('custom-cat-recruit.png'), scale: 'css' })
+  await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+  await expect(window.getByRole('textbox', { name: '给花园伙伴发消息' })).toBeVisible()
+  await expect(window.locator('.chat-agent-pill .avatar')).toHaveAttribute('data-avatar', 'custom')
+  await window.reload()
+  await expect(window.getByRole('textbox', { name: '给花园伙伴发消息' })).toBeVisible()
+  const profile = await window.evaluate(async () => {
+    const snapshot = await (globalThis as unknown as Window).desktop!.backend.loadWorkspace()
+    const cat = snapshot.workspace.agents.find((agent) => agent.name === '花园伙伴')!
+    return { avatar: cat.customAvatar, description: cat.description }
+  })
+  expect(profile.description).toBe('擅长园艺，帮助我整理植物养护习惯。')
+  expect(profile.avatar).toMatch(/^data:image\/png;base64,/)
+  await window.getByRole('button', { name: '新建', exact: true }).click()
+  await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
+  await window.getByRole('textbox', { name: '群名称', exact: true }).fill('园艺小组')
+  await window.getByRole('checkbox', { name: '花园伙伴' }).check()
+  await window.getByRole('button', { name: '创建群聊', exact: true }).click()
+  await expect(window.locator('.chat-agent-pill .group-avatar img')).toHaveAttribute(
+    'src',
+    profile.avatar!,
+  )
+})
+
+test('输入框粘贴系统文件与图片，普通文字保持正常输入', async () => {
+  const path = join(profilePath, '粘贴资料.txt')
+  await writeFile(path, '来自剪贴板的文件内容')
+  await application.evaluate(async ({ clipboard, ClipboardItem }) => {
+    const saved = []
+    for (const item of await clipboard.read()) {
+      const entries = await Promise.all(
+        item.types.map(async (type) => [type, await item.getType(type)] as const),
+      )
+      saved.push(new ClipboardItem(Object.fromEntries(entries)))
+    }
+    Object.assign(globalThis, { testClipboard: saved })
+  })
+  try {
+    await application.evaluate(async ({ clipboard, ClipboardItem }, url) => {
+      const type =
+        process.platform === 'darwin'
+          ? 'electron application/osclipboard;format="public.file-url"'
+          : 'text/uri-list'
+      await clipboard.write([new ClipboardItem({ [type]: url })])
+    }, pathToFileURL(path).href)
+    const input = window.getByRole('textbox', { name: '给小黑发消息' })
+    await input.focus()
+    await input.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V')
+    await expect(window.getByText('粘贴资料.txt', { exact: true })).toBeVisible()
+    await expect(input).toHaveValue('')
+    await application.evaluate(async ({ clipboard }) => clipboard.writeText('文字仍然正常粘贴'))
+    await input.press(process.platform === 'darwin' ? 'Meta+V' : 'Control+V')
+    await expect(input).toHaveValue('文字仍然正常粘贴')
+    await input.evaluate((element) => {
+      const transfer = new DataTransfer()
+      transfer.items.add(new File(['附件正文'], '第二份.md', { type: 'text/markdown' }))
+      element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+      )
+    })
+    await expect(window.getByText('第二份.md', { exact: true })).toBeVisible()
+    const picture = await readFile(
+      join(import.meta.dirname, '../../src/renderer/src/assets/cats/frames/calico.png'),
+    )
+    await input.evaluate((element, encoded) => {
+      const transfer = new DataTransfer()
+      const bytes = Uint8Array.from(atob(encoded), (char) => char.charCodeAt(0))
+      transfer.items.add(new File([bytes], '粘贴图片.png', { type: 'image/png' }))
+      element.dispatchEvent(
+        new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }),
+      )
+    }, picture.toString('base64'))
+    await expect(window.getByText('粘贴图片.png', { exact: true })).toBeVisible()
+    await window.screenshot({
+      path: test.info().outputPath('pasted-attachments.png'),
+      scale: 'css',
+    })
+  } finally {
+    await application.evaluate(async ({ clipboard }) => {
+      const holder = globalThis as unknown as { testClipboard: Electron.ClipboardItem[] }
+      await clipboard.write(holder.testClipboard)
+      Reflect.deleteProperty(holder, 'testClipboard')
+    })
+  }
+})
+
 function startFixtureModel(
   pairs: Array<[string, string]>,
 ): Promise<{ url: string; close: () => Promise<void> }> {
@@ -2306,3 +2635,147 @@ function startFixtureModel(
     server.on('error', reject)
   })
 }
+
+/** 真正经过服务端工具调用，验证摘要、欢迎与正文使用各自通道。 */
+function startChatExperienceModel(): Promise<{ url: string; close: () => Promise<void> }> {
+  let requests = 0
+  const server = createServer((request, response) => {
+    request.on('error', (error) => response.destroy(error))
+    request.resume()
+    request.on('end', () => {
+      requests += 1
+      response.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (requests === 2) {
+        writeToolCall(
+          response,
+          'progress-call',
+          'report_progress',
+          JSON.stringify({ summary: '正在整理创作方向与下一步计划' }),
+        )
+        return
+      }
+      const content =
+        requests === 1
+          ? '你好，我是你的**创作搭档**。一起开始吧！'
+          : '## 创作计划\n\n- **明确目标**\n- 整理资料\n\n```ts\nconst nextStep = "开始创作"\n```\n\n| 阶段 | 状态 |\n| --- | --- |\n| 规划 | 完成 |'
+      setTimeout(
+        () => {
+          response.end(
+            `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content }, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`,
+          )
+        },
+        requests === 1 ? 100 : 1800,
+      )
+    })
+  })
+  return new Promise((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('模型端口没有打开'))
+        return
+      }
+      resolve({
+        url: `http://127.0.0.1:${address.port}/v1`,
+        close: () =>
+          new Promise((done, fail) => server.close((error) => (error ? fail(error) : done()))),
+      })
+    })
+  })
+}
+
+test('聊天体验：群聊弹窗、搜索预设、模型欢迎、工作摘要、Markdown 和连接状态', async () => {
+  test.setTimeout(90_000)
+  const model = await startChatExperienceModel()
+  try {
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await chooseOption('主题', '深色')
+    await window.getByRole('button', { name: '模型设置', exact: true }).click()
+    await window.getByLabel('API 地址', { exact: true }).fill(model.url)
+    await window.getByLabel('模型名称', { exact: true }).fill('fixture-model')
+    await window.getByLabel('API 密钥').fill(randomBytes(16).toString('hex'))
+    await window.keyboard.press('Escape')
+    await waitForModel('fixture-model')
+    await expect(window.getByRole('status', { name: '服务端已连接' })).toBeVisible()
+    expect(
+      await window
+        .locator('.server-status')
+        .evaluate((element) => getComputedStyle(element).backgroundColor),
+    ).toBe('rgb(50, 166, 106)')
+
+    await window.getByRole('button', { name: '搜索助手和消息' }).click()
+    await expect(window.getByRole('group', { name: '设置', exact: true })).toBeVisible()
+    await expect(window.getByRole('option', { name: /模型设置/ })).toBeAttached()
+    await window.getByRole('group', { name: '设置', exact: true }).scrollIntoViewIfNeeded()
+    await window.screenshot({
+      path: test.info().outputPath('search-presets-dark.png'),
+      scale: 'css',
+    })
+    await window.getByRole('option', { name: /创建群聊/ }).click()
+    const dialog = window.getByRole('dialog', { name: '新建群聊' })
+    await expect(dialog).toHaveCSS('width', '480px')
+    await window.getByLabel('群名称', { exact: true }).fill('创作小队')
+    await window.getByRole('checkbox', { name: '小黑', exact: true }).check()
+    await window.getByRole('checkbox', { name: '游戏程序', exact: true }).check()
+    await window.screenshot({ path: test.info().outputPath('create-group-dark.png'), scale: 'css' })
+    await setPageSize(860, 640)
+    const bounds = await dialog.boundingBox()
+    expect(bounds!.y).toBeGreaterThanOrEqual(0)
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(640)
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+      true,
+    )
+    await window.getByRole('button', { name: '创建群聊', exact: true }).click()
+    await expect(window.getByRole('textbox', { name: '给创作小队发消息' })).toBeVisible()
+    await setPageSize(1073, 780)
+
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click()
+    await window.getByLabel('助手名称', { exact: true }).fill('创作搭档')
+    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click()
+    await expect(window.getByRole('textbox', { name: '给创作搭档发消息' })).toBeVisible()
+    await expect(window.getByRole('log')).toContainText('你好，我是你的创作搭档。一起开始吧！')
+    await expect(window.getByRole('log').locator('.user-row')).toHaveCount(0)
+    await expect(window.getByText('你的想法，有了一个新家。')).toHaveCount(0)
+    await window.getByRole('textbox', { name: '给创作搭档发消息' }).fill('帮我整理计划')
+    await window.getByRole('button', { name: '发送' }).click()
+    const progress = window.locator('.composer-area .work-status')
+    await expect(progress).toHaveText('正在整理创作方向与下一步计划')
+    await expect(window.getByRole('log')).not.toContainText('正在整理创作方向')
+    await expect(progress.locator('.avatar')).toHaveAttribute('data-avatar', 'bombay')
+    await expect(progress.locator('.avatar')).toHaveAttribute('data-pose', 'working')
+    await expect(progress.locator('.cat-motion')).toHaveCSS('animation-name', 'cat-work')
+    await window.screenshot({ path: test.info().outputPath('work-summary-dark.png'), scale: 'css' })
+    await expect(window.getByRole('heading', { name: '创作计划' })).toBeVisible()
+    await expect(window.getByRole('table')).toContainText('规划完成')
+    await expect(progress).toHaveCount(0)
+    await window.screenshot({ path: test.info().outputPath('markdown-dark.png'), scale: 'css' })
+    await reloadPersisted()
+    await expect(window.getByRole('log')).toContainText('你好，我是你的创作搭档。一起开始吧！')
+    await expect(window.getByRole('heading', { name: '创作计划' })).toHaveCount(1)
+
+    await window.getByRole('button', { name: '打开设置' }).click()
+    await chooseOption('主题', '浅色')
+    await window.keyboard.press('Escape')
+    await window.screenshot({ path: test.info().outputPath('markdown-light.png'), scale: 'css' })
+    await window.getByRole('button', { name: '新建', exact: true }).click()
+    await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click()
+    await window.screenshot({
+      path: test.info().outputPath('create-group-light.png'),
+      scale: 'css',
+    })
+    await window.keyboard.press('Escape')
+    await companion.stop()
+    await expect(window.getByRole('status', { name: '服务端连接异常' })).toBeVisible({
+      timeout: 20_000,
+    })
+    expect(
+      await window
+        .locator('.server-status')
+        .evaluate((element) => getComputedStyle(element).backgroundColor),
+    ).toBe('rgb(226, 81, 81)')
+  } finally {
+    await model.close()
+  }
+})

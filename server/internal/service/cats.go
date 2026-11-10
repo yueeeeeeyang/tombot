@@ -320,6 +320,42 @@ func (s *Service) PrepareDispatch(ctx context.Context, agentID, messageID string
 	return Dispatch{ConversationID: conversationID, Content: message.Content, Attachments: attachments, ReplyToID: replyToID, AgentID: agentID, MessageID: messageID, Revision: revision}, nil
 }
 
+// PrepareWelcome 使用新猫咪已保存的身份和模型准备欢迎回合，不新增用户气泡。
+func (s *Service) PrepareWelcome(ctx context.Context, agentID string) (Dispatch, error) {
+	snapshot, err := s.Load(ctx)
+	if err != nil {
+		return Dispatch{}, err
+	}
+	for _, cat := range snapshot.Workspace.Agents {
+		if cat.ID != agentID {
+			continue
+		}
+		if len(cat.Messages) > 0 {
+			return Dispatch{Done: true, Result: Delivery{Workspace: snapshot.Workspace}}, nil
+		}
+		settings, err := s.LoadModelForm(ctx)
+		if err != nil {
+			return Dispatch{}, err
+		}
+		if !modelReady(settings.ModelForm) {
+			return Dispatch{}, domain.NewError(409, "MODEL_NOT_READY", "请先配置模型，再开始聊天。")
+		}
+		if err := s.EnsureAgent(ctx, agentID); err != nil {
+			return Dispatch{}, err
+		}
+		botID, err := s.BotID(ctx, agentID)
+		if err != nil {
+			return Dispatch{}, err
+		}
+		bot, err := s.bots.Get(ctx, botID)
+		if err != nil {
+			return Dispatch{}, err
+		}
+		return Dispatch{AgentID: agentID, ConversationID: bot.ConversationID}, nil
+	}
+	return Dispatch{}, domain.NewError(404, "AGENT_NOT_FOUND", "助手不存在")
+}
+
 // MessageChrome 读取气泡的回复目标和表情。
 func (s *Service) MessageChrome(ctx context.Context, messageID string) (string, []Reaction, error) {
 	var reply string

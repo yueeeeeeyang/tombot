@@ -119,7 +119,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	var botID, conversationID string
 	err := s.db.QueryRowContext(ctx, `SELECT bots.id, conversations.id FROM bots JOIN conversations ON conversations.bot_id=bots.id AND conversations.kind='direct' AND conversations.source!='routine' WHERE bots.id=? OR bots.desktop_id=?`, agent.ID, agent.ID).Scan(&botID, &conversationID)
 	if err == nil {
-		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}, Soul: Field[string]{Set: true, Value: desktopSoul}, ToolPolicy: Field[domain.ToolPolicy]{Set: true, Value: desktopToolPolicy()}, MessagingPolicy: Field[domain.MessagingPolicy]{Set: true, Value: domain.MessagingPolicy{AcceptDM: true, CanInitiate: true, AcceptGroupInvite: true}}}
+		patch := BotPatch{Name: Field[string]{Set: true, Value: agent.Name}, RoleTitle: Field[string]{Set: true, Value: desktopRole}, Soul: Field[string]{Set: true, Value: desktopSoulFor(agent)}, ToolPolicy: Field[domain.ToolPolicy]{Set: true, Value: desktopToolPolicy()}, MessagingPolicy: Field[domain.MessagingPolicy]{Set: true, Value: domain.MessagingPolicy{AcceptDM: true, CanInitiate: true, AcceptGroupInvite: true}}}
 		if modelID != "" {
 			patch.ModelID = Field[*string]{Set: true, Value: &modelID}
 		}
@@ -129,7 +129,7 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
-	role := fitRole(agent.Description)
+	role := desktopRole
 	var modelPtr *string
 	if modelID != "" {
 		modelPtr = &modelID
@@ -137,32 +137,17 @@ func (s *Service) ensureBot(ctx context.Context, agent Agent, modelID string) (s
 	policy := desktopToolPolicy()
 	created, err := s.bots.Create(ctx, BotInput{
 		ID: agent.ID, Name: agent.Name, RoleTitle: role,
-		Soul:       desktopSoul,
+		Soul:       desktopSoulFor(agent),
 		ModelID:    modelPtr,
 		ToolPolicy: &policy,
 	}, "desktop")
 	if err != nil {
 		return "", err
 	}
-	if _, err = s.db.ExecContext(ctx, `UPDATE bots SET desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=? WHERE id=? AND desktop_id IS NULL`, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, created.ID); err != nil {
+	if _, err = s.db.ExecContext(ctx, `UPDATE bots SET desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=?, custom_avatar=? WHERE id=? AND desktop_id IS NULL`, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, agent.CustomAvatar, created.ID); err != nil {
 		return "", err
 	}
 	return created.ConversationID, nil
-}
-
-func fitRole(description string) string {
-	if description == "" {
-		return "助手"
-	}
-	runes := []rune(description)
-	if len(runes) > 40 {
-		description = string(runes[:40])
-	}
-	for len(description) > 300 && len([]rune(description)) > 1 {
-		runes = []rune(description)
-		description = string(runes[:len(runes)-1])
-	}
-	return description
 }
 
 // BotID 返回猫咪对应的 Bot，电脑页要用它的工作区。

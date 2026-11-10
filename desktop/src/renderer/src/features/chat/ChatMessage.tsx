@@ -1,3 +1,4 @@
+import { MarkdownMessage } from './MarkdownMessage'
 import { Ellipsis, FileText, Reply, Smile } from 'lucide-react'
 import {
   useEffect,
@@ -11,6 +12,7 @@ import type { ChatMessage as ChatMessageModel, MessageAttachment } from '../work
 export function ChatMessage({
   message,
   speaker,
+  isPending = false,
   isHighlighted,
   onOpenMenu,
   onReply,
@@ -21,6 +23,7 @@ export function ChatMessage({
 }: {
   message: ChatMessageModel
   speaker?: string
+  isPending?: boolean
   isHighlighted: boolean
   onOpenMenu: (messageId: string, x: number, y: number, trigger: HTMLElement) => void
   onReply: (messageId: string) => void
@@ -29,7 +32,7 @@ export function ChatMessage({
   onReveal: (messageId: string) => void
   onPreview?: (attachment: MessageAttachment) => Promise<string>
 }) {
-  const needsStatus = message.status === 'unsent' || message.status === 'failed'
+  const needsStatus = !isPending && (message.status === 'unsent' || message.status === 'failed')
   const statusLabel = message.status === 'failed' ? '发送失败，点击重试' : '未发送，点击重试'
 
   function openFromPointer(event: ReactMouseEvent<HTMLElement>): void {
@@ -99,7 +102,11 @@ export function ChatMessage({
             {speaker && message.role === 'assistant' ? (
               <span className="message-speaker">{speaker}</span>
             ) : null}
-            <div className="message-text">{message.content}</div>
+            {message.role === 'assistant' ? (
+              <MarkdownMessage content={message.content} />
+            ) : (
+              <div className="message-text">{message.content}</div>
+            )}
             {message.attachments?.map((attachment) => (
               <MessageFile key={attachment.path} attachment={attachment} onPreview={onPreview} />
             ))}

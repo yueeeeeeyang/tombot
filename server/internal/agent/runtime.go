@@ -65,9 +65,6 @@ type job struct {
 	summaryDone     chan error
 	group           *orchestrator.Task
 	brief           string
-	mode            string
-	groupResults    []orchestrator.Result
-	plan            domain.GroupPlan
 	preflightErr    error
 	completed       chan jobOutcome
 	done            chan struct{}
@@ -83,23 +80,25 @@ type job struct {
 	resume          chan struct{}
 	children        []*job
 	replyRequired   bool
+	deliverToUser   bool
 	dm              bool
 	peerBotID       string
 }
 
 // Runtime 只接受服务根上下文；HTTP 断开不会取消执行。队列与 Bot 占用由一把锁维护。
 type Runtime struct {
-	deps   Dependencies
-	limits Limits
-	root   context.Context
-	mu     sync.Mutex
-	jobs   map[string]*job
-	groups map[string]*groupExecution
-	queue  []*job
-	busy   map[string]bool
-	active int
-	closed bool
-	wg     sync.WaitGroup
+	deps          Dependencies
+	limits        Limits
+	root          context.Context
+	mu            sync.Mutex
+	jobs          map[string]*job
+	introductions map[string]*introductionCall
+	groups        map[string]*groupExecution
+	queue         []*job
+	busy          map[string]bool
+	active        int
+	closed        bool
+	wg            sync.WaitGroup
 }
 
 func New(ctx context.Context, deps Dependencies, limits Limits) (*Runtime, error) {
@@ -109,7 +108,7 @@ func New(ctx context.Context, deps Dependencies, limits Limits) (*Runtime, error
 	if limits.Concurrent < 1 || limits.MaxQueued < 1 || limits.MaxSteps < 1 || limits.WallTime <= 0 || limits.StepTime <= 0 || limits.BudgetMicro < 1 {
 		return nil, errors.New("运行时上限无效")
 	}
-	r := &Runtime{deps: deps, limits: limits, root: ctx, jobs: map[string]*job{}, groups: map[string]*groupExecution{}, busy: map[string]bool{}}
+	r := &Runtime{deps: deps, limits: limits, root: ctx, jobs: map[string]*job{}, introductions: map[string]*introductionCall{}, groups: map[string]*groupExecution{}, busy: map[string]bool{}}
 	if err := r.recover(ctx); err != nil {
 		return nil, err
 	}
@@ -117,6 +116,8 @@ func New(ctx context.Context, deps Dependencies, limits Limits) (*Runtime, error
 }
 
 type SendInput struct {
+	isWelcome bool
+
 	Attachments    []domain.AttachmentInput `json:"attachments,omitempty"`
 	Content        string                   `json:"content"`
 	Mentions       []string                 `json:"mentions,omitempty"`
@@ -133,6 +134,11 @@ type Submission struct {
 // Submit 在一个事务内登记用户消息、回合与队列事件；任何冲突都不会留下半条消息。
 func (r *Runtime) Submit(ctx context.Context, conversationID string, input SendInput, actor string) (Submission, error) {
 	return r.submit(ctx, conversationID, input, actor, "")
+}
+
+// Welcome 仅对尚无消息的会话生成开场白；触发消息为系统上下文，不冒充用户发言。
+func (r *Runtime) Welcome(ctx context.Context, conversationID string) (Submission, error) {
+	return r.submit(ctx, conversationID, SendInput{isWelcome: true, Content: "You have just been created by the user. Greet them in Chinese in your own voice, briefly introduce how you can help based on your identity and role, and invite their first request. Keep it warm and concise. Do not use tools or claim any work has already been done."}, "desktop", "")
 }
 
 func (r *Runtime) submit(ctx context.Context, conversationID string, input SendInput, actor, routineRunID string) (Submission, error) {
@@ -211,6 +217,15 @@ func (r *Runtime) submit(ctx context.Context, conversationID string, input SendI
 				return err
 			}
 		}
+		if input.isWelcome {
+			var count int
+			if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM messages WHERE conversation_id=?", conversationID).Scan(&count); err != nil {
+				return err
+			}
+			if count > 0 {
+				return domain.NewError(409, "WELCOME_EXISTS", "会话已经开始，不会重复生成欢迎消息。")
+			}
+		}
 		var active int
 		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM turns WHERE conversation_id=? AND status IN('queued','running','waiting_approval')", conversationID).Scan(&active); err != nil {
 			return err
@@ -234,6 +249,9 @@ func (r *Runtime) submit(ctx context.Context, conversationID string, input SendI
 			return err
 		}
 		message := domain.Message{ID: submission.MessageID, ConversationID: conversationID, TurnID: &run.TurnID, SenderKind: "user", Blocks: blocks, Status: "complete", CreatedAt: now}
+		if input.isWelcome {
+			message.SenderKind = "system"
+		}
 		if err := service.AppendMessage(ctx, tx, &message); err != nil {
 			return err
 		}
@@ -330,14 +348,13 @@ func (r *Runtime) execute(j *job) {
 		if err == nil {
 			err = j.preflightErr
 			if err == nil {
-				if j.mode == "plan" {
-					err = r.planGroup(ctx, j)
-				} else {
-					err = r.loop(ctx, j)
-				}
+				err = r.loop(ctx, j)
 			}
 		}
 		err = errors.Join(err, r.drainChildren(ctx, j))
+		if err == nil && j.deliverToUser {
+			err = r.deliverUserResult(ctx, j)
+		}
 		if err == nil {
 			err = ctx.Err()
 		}
@@ -370,7 +387,7 @@ func (r *Runtime) execute(j *job) {
 	} else if err != nil {
 		r.deps.Logger.Warn("执行停止", "run_id", j.run.ID, "bot_id", j.run.BotID, "error_code", code)
 	}
-	j.outcome = jobOutcome{runID: j.run.ID, status: status, code: code, plan: j.plan, err: err, persistErr: finishErr}
+	j.outcome = jobOutcome{runID: j.run.ID, status: status, code: code, err: err, persistErr: finishErr}
 	close(j.done)
 	if j.completed != nil {
 		j.completed <- j.outcome
@@ -410,6 +427,9 @@ func (r *Runtime) Close() {
 	}
 	for _, j := range r.jobs {
 		j.cancel(context.Canceled)
+	}
+	for _, call := range r.introductions {
+		call.cancel()
 	}
 	r.mu.Unlock()
 	r.wg.Wait()

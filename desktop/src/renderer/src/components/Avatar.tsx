@@ -15,7 +15,7 @@ import {
   type HoverEntry,
 } from '../features/avatars/ears'
 import { catEyeOverlaySource, catPortraitSource } from '../features/avatars/frames'
-import { resolveAvatarPresentation } from '../features/avatars/pose'
+import { resolveAvatarPresentation, type AgentActivity } from '../features/avatars/pose'
 import type { CatAvatarId } from '../features/avatars/presets'
 import { useAvatarPointer } from '../features/avatars/useAvatarPointer'
 import { useLookTilt } from '../features/avatars/useLookTilt'
@@ -24,6 +24,7 @@ import { usePrefersReducedMotion } from '../features/avatars/usePrefersReducedMo
 /**
  * 显示打包好的猫咪帧。姿态只来自 resolveAvatarPresentation。
  * 跟随指针是侧栏专属：会话标题和选择器不传 tracksPointer，避免满屏一起转头。
+ * 等待区通过 activity 表示当前请求的工作状态，不反向修改侧栏的全局活动。
  */
 export function Avatar({
   preset,
@@ -31,12 +32,16 @@ export function Avatar({
   starred = false,
   agentId,
   tracksPointer = false,
+  activity: explicitActivity,
+  customAvatar,
 }: {
   preset: CatAvatarId
   size?: 'small' | 'medium' | 'large'
   starred?: boolean
   agentId?: string
   tracksPointer?: boolean
+  activity?: AgentActivity
+  customAvatar?: string
 }) {
   const activity = useAgentActivity(agentId)
   const prefersReducedMotion = usePrefersReducedMotion()
@@ -45,7 +50,11 @@ export function Avatar({
   const motionId = catMotionId(agentId, preset)
   const eye = useCatEye(motionId)
   const { ref, pointer, hoverEntry } = useAvatarPointer(tracksPointer, agentId)
-  const presentation = resolveAvatarPresentation({ activity, pointer, prefersReducedMotion })
+  const presentation = resolveAvatarPresentation({
+    activity: explicitActivity ?? activity,
+    pointer,
+    prefersReducedMotion,
+  })
   const hoverNow = useHoverClock(hoverEntry)
   const workingTwitch = useWorkingTwitch(
     motionId,
@@ -59,13 +68,14 @@ export function Avatar({
     hoverEntry,
     workingTwitch,
   })
-  const overlay = framesReady && !prefersReducedMotion ? catEyeOverlaySource(preset, eye) : null
+  const overlay =
+    !customAvatar && framesReady && !prefersReducedMotion ? catEyeOverlaySource(preset, eye) : null
   useLookTilt(ref, presentation.lookX, presentation.lookY, prefersReducedMotion)
   return (
     <span
       ref={ref}
-      className={`avatar avatar--${size}`}
-      data-avatar={preset}
+      className={`avatar avatar--${size}${customAvatar ? ' avatar--custom' : ''}`}
+      data-avatar={customAvatar ? 'custom' : preset}
       data-pose={presentation.pose}
       data-pressed={presentation.isPressed ? 'true' : 'false'}
       data-frames={frameStatus}
@@ -84,7 +94,7 @@ export function Avatar({
           <span className="cat-motion">
             <img
               className="cat-portrait"
-              src={catPortraitSource(preset, ear)}
+              src={customAvatar || catPortraitSource(preset, ear)}
               alt=""
               draggable={false}
               decoding="sync"

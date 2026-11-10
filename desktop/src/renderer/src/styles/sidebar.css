@@ -105,3 +105,35 @@
   flex-direction: column;
   gap: 6px;
 }
+.group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.group-toggle > svg {
+  flex-shrink: 0;
+  transition: transform 160ms ease;
+}
+.group-toggle[aria-expanded='true'] > svg {
+  transform: rotate(90deg);
+}
+.group-toggle:hover {
+  color: var(--text);
+}
+.group-list-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  color: var(--muted);
+  background: var(--surface-muted);
+  border-radius: 10px;
+}

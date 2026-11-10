@@ -20,7 +20,7 @@ func ValidAction(class string) bool {
 	switch class {
 	case "group.read", "group.post", "conversation.read":
 		return true
-	case "fs.read", "fs.write", "fs.delete", "fs.write_outside_out", "shell.exec", "shell.privileged", "net.new_domain", "browser.login", "browser.read", "browser.interact", "browser.close", "secret.use", "delegate.spawn", "message.bot", "group.invite", "routine.create", "user.question":
+	case "fs.read", "fs.write", "fs.delete", "fs.write_outside_out", "shell.exec", "shell.privileged", "net.new_domain", "browser.login", "browser.read", "browser.interact", "browser.close", "secret.use", "delegate.spawn", "message.bot", "message.user", "group.invite", "routine.create", "user.question":
 		return true
 	}
 	return false

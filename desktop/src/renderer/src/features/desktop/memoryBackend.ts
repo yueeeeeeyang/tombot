@@ -121,8 +121,12 @@ export class MemoryBackend implements DesktopBackend {
     this.pristine = false
   }
 
-  listMemories(): Promise<Array<{ path: string; title: string; summary: string; sha256: string }>> {
-    return Promise.resolve([])
+  listGroupArtifacts(): ReturnType<DesktopBackend['listGroupArtifacts']> {
+    return Promise.resolve({ artifacts: [], next: 0 })
+  }
+
+  loadIntroduction(): Promise<{ text: string }> {
+    return Promise.resolve({ text: '' })
   }
 
   listRoutines(): Promise<
@@ -167,6 +171,39 @@ export class MemoryBackend implements DesktopBackend {
 
   openComputer(): Promise<string> {
     return Promise.resolve('http://127.0.0.1:9/api/v1/computer/view?agent=memory&ticket=memory')
+  }
+
+  async welcomeAgent(
+    agentId: string,
+    onEvent?: (event: { type: string; text: string }) => void,
+  ): Promise<DeliveryResult> {
+    const agent = this.workspace.agents.find((item) => item.id === agentId)
+    if (!agent) return { code: 'AGENT_NOT_FOUND', message: '助手不存在' }
+    if (agent.messages.length) return { workspace: this.workspace }
+    if (!this.settings.baseUrl.trim() || !this.settings.modelName.trim())
+      return { code: 'MODEL_NOT_READY', message: modelNotReady }
+    onEvent?.({ type: 'delta', text: '内存测试欢迎内容' })
+    this.workspace = {
+      ...this.workspace,
+      agents: this.workspace.agents.map((item) =>
+        item.id === agentId
+          ? {
+              ...item,
+              messages: [
+                {
+                  id: `welcome-${agentId}`,
+                  role: 'assistant',
+                  content: '内存测试欢迎内容',
+                  status: 'sent',
+                  createdAt: new Date().toISOString(),
+                  reactions: [],
+                },
+              ],
+            }
+          : item,
+      ),
+    }
+    return { workspace: this.workspace }
   }
 
   async deliverMessage(

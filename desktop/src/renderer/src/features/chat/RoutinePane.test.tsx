@@ -43,5 +43,31 @@ describe('定时面板', () => {
       />,
     )
     expect(await screen.findByRole('status')).toHaveTextContent('还没有定时任务')
+    expect(screen.getByRole('status')).toHaveClass('cat-panel-empty')
+  })
+
+  it('读取失败时显示错误，不把失败展示为空定时任务', async () => {
+    const view = render(
+      <RoutinePane
+        agentId="assistant"
+        onLoad={async () => {
+          throw new Error('定时读取失败')
+        }}
+        onToggle={async () => undefined}
+        onDelete={async () => undefined}
+      />,
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('定时读取失败')
+    expect(screen.queryByText('还没有定时任务')).toBeNull()
+    view.rerender(
+      <RoutinePane
+        agentId="assistant"
+        onLoad={async () => []}
+        onToggle={async () => undefined}
+        onDelete={async () => undefined}
+      />,
+    )
+    expect(await screen.findByRole('status')).toHaveClass('cat-panel-empty')
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 })

@@ -66,9 +66,7 @@ func (r *Runtime) loop(ctx context.Context, j *job) error {
 		if len(uses) == 0 {
 			return nil
 		}
-		if j.mode == "summary" {
-			return domain.NewError(502, "GROUP_SUMMARY_TOOLS", "The summary must not invoke tools.")
-		}
+
 		var toolErr error
 		toolErr = ledger.CheckBudget(ctx, r.deps.DB, j.run.ID)
 		results := []domain.MessageBlock{}
@@ -79,6 +77,12 @@ func (r *Runtime) loop(ctx context.Context, j *job) error {
 			}
 			if toolErr != nil {
 				result.Content = "TOOL_CANCELED: The run stopped before this tool completed."
+			} else if use.Name == progressToolName && j.model.SupportsTools {
+				result, err = r.reportProgress(ctx, j, use)
+				if err != nil {
+					toolErr = err
+					result = domain.ToolResultBlock{ToolCallID: use.ID, IsError: true, Content: "PROGRESS_FAILED: The progress update could not be saved."}
+				}
 			} else if r.deps.Tools != nil {
 				result, err = r.deps.Tools.Execute(ctx, domain.ToolInvocation{Run: j.run, Bot: j.bot, Step: step, Messenger: runMessenger{r, j}, UserWaiter: runUserWaiter{r, j}}, use)
 				if err != nil {
@@ -160,13 +164,25 @@ func (r *Runtime) stream(parent context.Context, j *job, req provider.Request) (
 		if err != nil {
 			return err
 		}
+		if final && j.group != nil {
+			var text strings.Builder
+			for _, block := range m.Blocks {
+				if block.Kind == "text" {
+					text.WriteString(block.Text)
+				}
+			}
+			m.Mentions, err = domain.ResolveGroupMentions(text.String(), j.group.Group.Members)
+			if err != nil {
+				return err
+			}
+		}
 		if final {
 			m.Status = "complete"
 			m.TokenIn = usage.InputTokens + usage.CacheReadTokens
 			m.TokenOut = usage.OutputTokens
 		}
 		err = store.Transact(flushCtx, r.deps.DB, func(tx *sql.Tx) error {
-			if final && j.group != nil && j.mode == "member" {
+			if final && j.group != nil {
 				// 群成员按完成顺序成为最终发言；流式占位在结束时移动，客户端按同一消息 ID 更新。
 				if err := tx.QueryRowContext(flushCtx, "SELECT COALESCE(MAX(seq),0)+1 FROM messages WHERE conversation_id=?", m.ConversationID).Scan(&m.Seq); err != nil {
 					return err
@@ -175,12 +191,26 @@ func (r *Runtime) stream(parent context.Context, j *job, req provider.Request) (
 					return err
 				}
 			}
+			if final && len(m.Mentions) > 0 {
+				raw, err := json.Marshal(m.Mentions)
+				if err != nil {
+					return err
+				}
+				audience := append(append([]string{}, m.Mentions...), j.bot.ID)
+				encodedAudience, err := json.Marshal(audience)
+				if err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(flushCtx, "UPDATE messages SET mentions_json=?,audience_json=? WHERE id=?", string(raw), string(encodedAudience), m.ID); err != nil {
+					return err
+				}
+			}
 			if _, err := tx.ExecContext(flushCtx, "UPDATE messages SET blocks_json=?,status=?,token_in=?,token_out=? WHERE id=?", string(encoded), m.Status, m.TokenIn, m.TokenOut, m.ID); err != nil {
 				return err
 			}
 			for index, text := range deltas {
 				kind := m.Blocks[index].Kind + ".delta"
-				if _, err := bus.Append(flushCtx, tx, kind, m.ConversationID, map[string]any{"run_id": j.run.ID, "message_id": m.ID, "index": index, "text": text}); err != nil {
+				if _, err := bus.Append(flushCtx, tx, kind, m.ConversationID, map[string]any{"run_id": j.run.ID, "bot_id": j.bot.ID, "message_id": m.ID, "index": index, "text": text}); err != nil {
 					return err
 				}
 			}

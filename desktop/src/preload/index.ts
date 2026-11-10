@@ -1,3 +1,4 @@
+import type { StreamEvent } from '../renderer/src/features/desktop/backend'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 interface BootstrapStatus {
@@ -30,34 +31,35 @@ contextBridge.exposeInMainWorld(
       setup: (input: { setupCode: string; password: string }) => invoke('desktop:setup', input),
       login: (password: string) => invoke('desktop:login', password),
       loadWorkspace: () => invoke('desktop:load-workspace'),
+      readClipboardFiles: () => invoke('desktop:clipboard-files'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
+      welcomeAgent: (agentId: string, onEvent?: (event: StreamEvent) => void) => {
+        const requestId = crypto.randomUUID()
+        const listener = (
+          _event: IpcRendererEvent,
+          payload: StreamEvent & { requestId: string },
+        ) => {
+          if (payload.requestId === requestId) onEvent?.(payload)
+        }
+        ipcRenderer.on('desktop:stream-event', listener)
+        return invoke('desktop:deliver', { agentId, welcome: true, requestId }).finally(() =>
+          ipcRenderer.removeListener('desktop:stream-event', listener),
+        )
+      },
       deliverMessage: (
         agentId: string,
         messageId: string,
-        onEvent?: (event: {
-          type: string
-          text: string
-          messageId?: string
-          peerId?: string
-          peerName?: string
-          conversationId?: string
-          direction?: 'sent' | 'received'
-        }) => void,
+        onEvent?: (event: StreamEvent) => void,
       ) => {
+        const requestId = crypto.randomUUID()
         const listener = (
           _event: IpcRendererEvent,
-          payload: {
-            type: string
-            text: string
-            messageId?: string
-            peerId?: string
-            peerName?: string
-            conversationId?: string
-            direction?: 'sent' | 'received'
-          },
-        ) => onEvent?.(payload)
+          payload: StreamEvent & { requestId: string },
+        ) => {
+          if (payload.requestId === requestId) onEvent?.(payload)
+        }
         ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:deliver', { agentId, messageId }).finally(() => {
+        return invoke('desktop:deliver', { agentId, messageId, requestId }).finally(() => {
           ipcRenderer.removeListener('desktop:stream-event', listener)
         })
       },
@@ -76,7 +78,7 @@ contextBridge.exposeInMainWorld(
           ipcRenderer.removeListener('desktop:bootstrap-status', listener)
         }
       },
-      listMemories: (agentId: string) => invoke('desktop:memories', agentId),
+      loadIntroduction: (agentId: string) => invoke('desktop:introduction', agentId),
       listRoutines: (agentId: string) => invoke('desktop:routines', agentId),
       setRoutineEnabled: (id: string, revision: number, enabled: boolean) =>
         invoke('desktop:routine-enabled', { id, revision, enabled }),
@@ -85,7 +87,11 @@ contextBridge.exposeInMainWorld(
       listGroups: () => invoke('desktop:groups'),
       createGroup: (name: string, memberIds: string[]) =>
         invoke('desktop:group-create', { name, memberIds }),
+      listGroupArtifacts: (id: string, before?: number) =>
+        invoke('desktop:group-artifacts', { id, before }),
       groupDetail: (id: string) => invoke('desktop:group', id),
+      renameGroup: (id: string, revision: number, name: string) =>
+        invoke('desktop:group-rename', { id, revision, name }),
       addGroupMembers: (id: string, revision: number, botIds: string[]) =>
         invoke('desktop:group-members', { id, revision, botIds }),
       removeGroupMember: (id: string, revision: number, botId: string) =>
@@ -97,16 +103,24 @@ contextBridge.exposeInMainWorld(
         content: string,
         attachments: Array<{ path: string; sha256: string }>,
         replyToId: string | undefined,
-        onEvent?: (event: { type: string; text: string }) => void,
+        mentions: string[],
+        onEvent?: (event: StreamEvent) => void,
       ) => {
-        const listener = (_event: IpcRendererEvent, payload: { type: string; text: string }) =>
-          onEvent?.(payload)
+        const requestId = crypto.randomUUID()
+        const listener = (
+          _event: IpcRendererEvent,
+          payload: StreamEvent & { requestId: string },
+        ) => {
+          if (payload.requestId === requestId) onEvent?.(payload)
+        }
         ipcRenderer.on('desktop:stream-event', listener)
         return invoke('desktop:conversation-send', {
+          requestId,
           conversationId,
           content,
           attachments,
           replyToId,
+          mentions,
         }).finally(() => ipcRenderer.removeListener('desktop:stream-event', listener))
       },
       uploadAttachment: (

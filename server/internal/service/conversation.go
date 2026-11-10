@@ -114,7 +114,7 @@ const conversationColumns = `c.id,c.kind,c.source,c.bot_id,c.group_id,c.initiato
  EXISTS(SELECT 1 FROM turns WHERE conversation_id=c.id AND status IN ('queued','running')),
  CASE WHEN EXISTS(SELECT 1 FROM runs WHERE conversation_id=c.id AND status='waiting_approval') OR EXISTS(SELECT 1 FROM group_members gm JOIN runs r ON r.bot_id=gm.bot_id WHERE gm.group_id=c.group_id AND r.status='waiting_approval') THEN 'waiting_approval' WHEN EXISTS(SELECT 1 FROM turns WHERE conversation_id=c.id AND status IN('running','queued','waiting_approval')) OR EXISTS(SELECT 1 FROM group_members gm JOIN runs r ON r.bot_id=gm.bot_id WHERE gm.group_id=c.group_id AND r.status IN('running','queued')) THEN 'running' ELSE 'idle' END,
  COALESCE((SELECT accent_hue FROM bots WHERE id=c.bot_id),0),
- CASE WHEN c.kind='bot_dm' THEN COALESCE((SELECT json_group_array(json_object('bot_id',b.id,'name',b.name,'role_title',b.role_title,'role_note','','accent_hue',b.accent_hue,'is_archived',json(CASE WHEN b.is_archived THEN 'true' ELSE 'false' END))) FROM bots b WHERE b.id IN(c.bot_id,c.initiator_bot_id)),'[]') ELSE COALESCE((SELECT json_group_array(json_object('bot_id',b.id,'name',b.name,'role_title',b.role_title,'role_note',m.role_note,'accent_hue',b.accent_hue,'is_archived',json(CASE WHEN b.is_archived THEN 'true' ELSE 'false' END))) FROM group_members m JOIN bots b ON b.id=m.bot_id WHERE m.group_id=c.group_id),'[]') END`
+ CASE WHEN c.kind='bot_dm' THEN COALESCE((SELECT json_group_array(json_object('bot_id',b.id,'name',b.name,'role_title',b.role_title,'accent_hue',b.accent_hue,'is_archived',json(CASE WHEN b.is_archived THEN 'true' ELSE 'false' END))) FROM bots b WHERE b.id IN(c.bot_id,c.initiator_bot_id)),'[]') ELSE COALESCE((SELECT json_group_array(json_object('bot_id',b.id,'name',b.name,'role_title',b.role_title,'accent_hue',b.accent_hue,'is_archived',json(CASE WHEN b.is_archived THEN 'true' ELSE 'false' END))) FROM group_members m JOIN bots b ON b.id=m.bot_id WHERE m.group_id=c.group_id),'[]') END`
 
 func scanConversation(row scanner) (domain.Conversation, error) {
 	var c domain.Conversation
@@ -236,6 +236,13 @@ func (s *Conversations) ToggleReaction(ctx context.Context, messageID, emoji str
 		_, err = tx.ExecContext(ctx, `DELETE FROM message_reactions WHERE message_id=? AND emoji=?`, messageID, emoji)
 		return err
 	})
+}
+
+// RunBelongsToTurn 核对通知是否来自当前回合的有界子任务，避免把其他会话混入事件流。
+func (s *Conversations) RunBelongsToTurn(ctx context.Context, runID, turnID string) (bool, error) {
+	var related bool
+	err := s.db.QueryRowContext(ctx, `WITH RECURSIVE chain(id,parent_run_id,turn_id,depth) AS (SELECT id,parent_run_id,turn_id,0 FROM runs WHERE id=? UNION ALL SELECT r.id,r.parent_run_id,r.turn_id,chain.depth+1 FROM runs r JOIN chain ON r.id=chain.parent_run_id WHERE chain.depth<8) SELECT EXISTS(SELECT 1 FROM chain WHERE turn_id=?)`, runID, turnID).Scan(&related)
+	return related, err
 }
 
 func (s *Conversations) Messages(ctx context.Context, id string, before int64, limit int) ([]domain.Message, error) {

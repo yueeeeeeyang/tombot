@@ -235,3 +235,43 @@ func mustJSON(t *testing.T, value any) []byte {
 	}
 	return encoded
 }
+
+func TestWelcomeProjectionAndPreconditions(t *testing.T) {
+	service := newService(t)
+	ctx := context.Background()
+	if _, err := service.Save(ctx, SeedWorkspace()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PrepareWelcome(ctx, "missing"); err == nil {
+		t.Fatal("不存在的猫咪应失败")
+	}
+	if _, err := service.PrepareWelcome(ctx, "assistant"); err == nil {
+		t.Fatal("未配置模型应失败")
+	}
+	var conversationID string
+	if err := service.db.QueryRow(`SELECT c.id FROM conversations c JOIN bots b ON c.bot_id=b.id WHERE b.desktop_id='assistant' AND c.kind='direct'`).Scan(&conversationID); err != nil {
+		t.Fatal(err)
+	}
+	for index, sender := range []string{"system", "bot"} {
+		id := fmt.Sprintf("welcome-projection-%d", index)
+		blocks := `[{"kind":"text","text":"模型欢迎内容"}]`
+		if sender == "system" {
+			blocks = `[{"kind":"text","text":"Greet the user in Chinese."}]`
+		}
+		if _, err := service.db.Exec(`INSERT INTO messages(id,conversation_id,seq,sender_kind,blocks_json,status,created_at) VALUES(?,?,?,?,?,'complete',?)`, id, conversationID, index+1, sender, blocks, time.Now().UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := service.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := snapshot.Workspace.Agents[0].Messages
+	if len(messages) != 1 || messages[0].Role != "assistant" || messages[0].Content != "模型欢迎内容" {
+		t.Fatal("系统触发不能显示为消息", messages)
+	}
+	dispatch, err := service.PrepareWelcome(ctx, "assistant")
+	if err != nil || !dispatch.Done {
+		t.Fatal("已有会话不应触发欢迎", dispatch, err)
+	}
+}

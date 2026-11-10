@@ -6,10 +6,10 @@ import { catModelOptions } from '../models/catalog'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'
 import { ComputerPane } from './ComputerPane'
-import { MemoryPane } from './MemoryPane'
+import { CatIntroduction } from './CatIntroduction'
 import { RoutinePane } from './RoutinePane'
 
-const PANEL_TABS = ['details', 'library', 'computer', 'memory', 'routine'] as const
+const PANEL_TABS = ['details', 'library', 'computer', 'routine'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
 function modelOptions(modelId: string): readonly SelectOption[] {
   const catalog = catModelOptions()
@@ -21,7 +21,6 @@ const TAB_LABELS: Record<PanelTab, string> = {
   details: '详情',
   library: '资料库',
   computer: '电脑',
-  memory: '记忆',
   routine: '定时',
 }
 
@@ -81,7 +80,13 @@ export function CatSidePanel({
         <X size={18} strokeWidth={1.7} />
       </button>
       <div className="cat-panel-hero">
-        <Avatar preset={agent.avatar} agentId={agent.id} size="large" starred={isLead} />
+        <Avatar
+          preset={agent.avatar}
+          customAvatar={agent.customAvatar}
+          agentId={agent.id}
+          size="large"
+          starred={isLead}
+        />
         <h2>{agent.name}</h2>
       </div>
       <div className="cat-panel-tabs" role="tablist" aria-label="猫咪栏目">
@@ -114,7 +119,7 @@ export function CatSidePanel({
           </section>
           <section className="cat-panel-card">
             <span>介绍</span>
-            <strong>{agent.description || '还没有介绍'}</strong>
+            <CatIntroduction key={agent.id} agentId={agent.id} revision={agent.messages.length} />
           </section>
           <section className="cat-panel-card">
             <span>分组</span>
@@ -158,12 +163,6 @@ export function CatSidePanel({
             onPrepare={onPrepareComputer}
           />
         </div>
-      )}
-      {tab === 'memory' && (
-        <MemoryPane
-          agentId={agent.id}
-          onLoad={(id) => window.desktop?.backend.listMemories?.(id) ?? Promise.resolve([])}
-        />
       )}
       {tab === 'routine' && (
         <RoutinePane

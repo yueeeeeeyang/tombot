@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { CAT_AVATAR_IDS, DEFAULT_AGENT_AVATARS } from '../avatars/presets'
 import { CAT_MODEL_IDS, DEFAULT_CAT_MODEL_ID } from '../models/catalog'
+import { CUSTOM_AVATAR_PATTERN, MAX_CUSTOM_AVATAR_LENGTH } from '../avatars/customAvatar'
 import { isReactionEmoji, REACTION_EMOJIS, type ReactionEmoji } from './reactions'
 
 export const MAX_MESSAGE_LENGTH = 10_000
@@ -186,6 +187,11 @@ export const agentSchema = z
     description: z.string().trim().max(120, '助手介绍最多 120 个字'),
     group: groupNameSchema,
     avatar: z.enum(CAT_AVATAR_IDS, { error: '请选择预设猫咪头像' }),
+    customAvatar: z
+      .string()
+      .max(MAX_CUSTOM_AVATAR_LENGTH)
+      .regex(CUSTOM_AVATAR_PATTERN, '自定义头像无效')
+      .optional(),
     modelId: z.string().trim().min(1, '请选择列表中的模型').max(120, '模型名称过长'),
     messages: z.array(messageSchema).max(MAX_MESSAGES),
     draft: z.string().max(MAX_MESSAGE_LENGTH),
@@ -241,7 +247,9 @@ export type ChatMessage = z.infer<typeof messageSchema>
 export type MessageAttachment = z.infer<typeof attachmentSchema>
 export type DmNotice = z.infer<typeof dmNoticeSchema>
 export type AppWorkspace = z.infer<typeof appWorkspaceSchema>
-export type NewAgent = Pick<Agent, 'name' | 'description' | 'group' | 'avatar'>
+export type NewAgent = Pick<Agent, 'name' | 'group' | 'avatar' | 'customAvatar'> & {
+  description?: string
+}
 export type ModelTurn = { role: 'user' | 'assistant'; content: string }
 
 /** 服务端首次创建的工作空间没有任何猫咪。 */
@@ -290,6 +298,7 @@ export function addAgent(
   if (workspace.agents.length >= MAX_AGENTS) throw new Error(`最多创建 ${MAX_AGENTS} 个助手`)
   const result = agentSchema.safeParse({
     ...profile,
+    description: profile.customAvatar ? (profile.description ?? '') : '',
     id,
     modelId,
     messages: [],
@@ -347,40 +356,6 @@ export function setAgentComputerUrl(
     ...workspace,
     agents: workspace.agents.map((agent) =>
       agent.id === agentId ? { ...agent, computerUrl: canonical } : agent,
-    ),
-  }
-}
-
-/** 把服务端已经写下的私信提示插进当前会话，同一条标识不重复。 */
-export function insertDmNotice(
-  workspace: AppWorkspace,
-  agentId: string,
-  notice: DmNotice & { id: string; createdAt: string },
-): AppWorkspace {
-  const agent = workspace.agents.find((item) => item.id === agentId)
-  if (!agent || agent.messages.some((message) => message.id === notice.id)) return workspace
-  const content =
-    notice.direction === 'received'
-      ? `收到 ${notice.peerName} 的消息`
-      : `已发消息给 ${notice.peerName}`
-  const message = messageSchema.parse({
-    id: notice.id,
-    role: 'assistant',
-    content,
-    createdAt: notice.createdAt,
-    status: 'sent',
-    reactions: [],
-    dmNotice: {
-      direction: notice.direction,
-      peerId: notice.peerId,
-      peerName: notice.peerName,
-      conversationId: notice.conversationId,
-    },
-  })
-  return {
-    ...workspace,
-    agents: workspace.agents.map((item) =>
-      item.id === agentId ? { ...item, messages: [...item.messages, message] } : item,
     ),
   }
 }

@@ -118,7 +118,7 @@ func TestAvatarValidationAndPurge(t *testing.T) {
 		t.Fatal("确认清理后工作区仍存在")
 	}
 }
-func TestDeletingCoordinatorPreservesGroup(t *testing.T) {
+func TestDeletingMemberPreservesGroup(t *testing.T) {
 	ctx := context.Background()
 	db := testkit.Database(t)
 	bots := NewBots(db, bus.New(db), t.TempDir())
@@ -126,15 +126,15 @@ func TestDeletingCoordinatorPreservesGroup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = db.Exec(`INSERT INTO groups(id,name,coordinator_bot_id,created_at,updated_at) VALUES('group','测试群',?,0,0); INSERT INTO group_members(group_id,bot_id,joined_at) VALUES('group',?,0)`, bot.ID, bot.ID); err != nil {
+	if _, err = db.Exec(`INSERT INTO groups(id,name,created_at,updated_at) VALUES('group','测试群',0,0); INSERT INTO group_members(group_id,bot_id,joined_at) VALUES('group',?,0)`, bot.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err = bots.Delete(ctx, bot.ID, bot.Name, "user", false); err != nil {
 		t.Fatal(err)
 	}
-	var coordinator *string
-	if err = db.QueryRow("SELECT coordinator_bot_id FROM groups WHERE id='group'").Scan(&coordinator); err != nil || coordinator != nil {
-		t.Fatal("群组协调者未清空")
+	var members int
+	if err = db.QueryRow("SELECT COUNT(*) FROM group_members WHERE group_id='group'").Scan(&members); err != nil || members != 0 {
+		t.Fatal("删除后群成员关联未清空")
 	}
 }
 

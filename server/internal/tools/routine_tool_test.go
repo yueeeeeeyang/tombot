@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,5 +40,49 @@ func TestLooseBotWritesMemoryAndRoutineWithoutApproval(t *testing.T) {
 	routines, err := e.routines.List(ctx, bot.ID, "", "", 20)
 	if err != nil || len(routines) != 1 || routines[0].Name != "晨跑提醒" || !routines[0].IsEnabled {
 		t.Fatalf("例程列表不对: %+v %v", routines, err)
+	}
+}
+
+func TestWorkingHabitsPersistAndRejectStaleUpdates(t *testing.T) {
+	e, bot, run := fixture(t, "loose")
+	bot.ToolPolicy.AllowedTools = []string{"memory_search", "memory_write"}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	write := func(input map[string]any) domain.ToolResultBlock {
+		t.Helper()
+		result, err := e.Execute(ctx, domain.ToolInvocation{Run: run, Bot: bot}, domain.ToolUseBlock{ID: ids.New(), Name: "memory_write", Input: input})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := write(map[string]any{"title": "协作习惯", "summary": "负责整理周报，先给结论", "content": "根据用户安排负责周报整理；汇报时先给结论，再列依据。"})
+	if first.IsError {
+		t.Fatal(first.Content)
+	}
+	entries, err := e.memories.Search(ctx, bot.ID, "协作习惯", 5)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("已形成的习惯必须可检索", entries, err)
+	}
+	entry := entries[0]
+	updated := write(map[string]any{"path": entry.Path, "expected_sha256": entry.SHA256, "title": "协作习惯", "summary": "负责整理周报，先给结论，再列风险", "content": "用户补充：先给结论，再列风险，最后说明依据。"})
+	if updated.IsError {
+		t.Fatal(updated.Content)
+	}
+	stale := write(map[string]any{"path": entry.Path, "expected_sha256": entry.SHA256, "title": "协作习惯", "content": "过期的旧习惯"})
+	if !stale.IsError {
+		t.Fatal("旧版本不能覆盖最新习惯")
+	}
+	stored, err := e.files.ReadMemory(ctx, bot.ID, entry.Path)
+	if err != nil || !strings.Contains(stored.Content, "再列风险") || strings.Contains(stored.Content, "过期的旧习惯") {
+		t.Fatal("习惯更新未持久化或被过期写入覆盖", err)
+	}
+	index, err := e.memories.PromptIndex(ctx, bot.ID)
+	if err != nil || !strings.Contains(index, "负责整理周报，先给结论，再列风险") {
+		t.Fatal("后续对话不能读取新的职责与习惯", err)
+	}
+	entries, err = e.memories.List(ctx, bot.ID)
+	if err != nil || len(entries) != 1 {
+		t.Fatal("更新不应累积重复笔记", len(entries), err)
 	}
 }

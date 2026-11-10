@@ -111,8 +111,7 @@ func TestGroupHTTPParallelToolPostsAndEventStream(t *testing.T) {
 		}
 		members = append(members, bot.ID)
 	}
-	summary := false
-	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "端到端协作", Routing: "all", Members: members, AutoSummary: &summary}, "user")
+	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "端到端协作", Members: members}, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,12 +175,15 @@ func TestGroupHTTPParallelToolPostsAndEventStream(t *testing.T) {
 		t.Fatal("真实群回合结果错误", turns, err)
 	}
 	snapshot, err = server.Conversations.Snapshot(ctx, group.ConversationID)
-	if err != nil || snapshot.ActiveTurnID != nil || len(snapshot.ActiveRuns) != 0 || len(snapshot.Messages) != 14 {
+	if err != nil || snapshot.ActiveTurnID != nil || len(snapshot.ActiveRuns) != 0 || len(snapshot.Messages) != 13 {
 		t.Fatal("消息、追加发言或收尾快照错误", snapshot, err)
 	}
 	posts, replies, toolResults := 0, 0, 0
 	for _, message := range snapshot.Messages {
 		for _, block := range message.Blocks {
+			if block.Kind == "plan" {
+				t.Fatal("平等群聊不应显示分工计划")
+			}
 			if block.Kind == "text" && strings.HasPrefix(block.Text, "已提交公开进展") {
 				posts++
 			}
@@ -248,7 +250,7 @@ func TestGroupHTTPAuthenticationCRUDAndRevision(t *testing.T) {
 	if response.Code != 409 {
 		t.Fatal("旧版本未被拒绝", response.Code)
 	}
-	response = request(t, handler, "PATCH", path, map[string]any{"revision": 2, "routing": "all", "auto_summary": false}, headers)
+	response = request(t, handler, "PATCH", path, map[string]any{"revision": 2, "name": "平等协作"}, headers)
 	if response.Code != 200 {
 		t.Fatal(response.Body.String())
 	}
@@ -256,7 +258,7 @@ func TestGroupHTTPAuthenticationCRUDAndRevision(t *testing.T) {
 	if response.Code != 200 {
 		t.Fatal(response.Body.String())
 	}
-	if err = json.Unmarshal(response.Body.Bytes(), &group); err != nil || group.Revision != 3 || len(group.Members) != 2 || group.AutoSummary {
+	if err = json.Unmarshal(response.Body.Bytes(), &group); err != nil || group.Revision != 3 || len(group.Members) != 2 || group.Name != "平等协作" {
 		t.Fatal(group, err)
 	}
 	response = request(t, handler, "DELETE", path+"/members/"+bots[1].ID+"?revision=3", nil, headers)

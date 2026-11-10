@@ -13,16 +13,18 @@ function imagePreview(artifact: Artifact): string | undefined {
 export function ArtifactLibrary({
   artifacts,
   now = new Date(),
+  emptyText = '资料库还是空的。这只猫咪还没有留下文件。',
 }: {
   artifacts: Artifact[]
   now?: Date
+  emptyText?: string
 }) {
   const groups = groupArtifacts(artifacts, now)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   if (groups.length === 0) {
     return (
       <p className="cat-panel-empty" role="status">
-        资料库还是空的。这只猫咪还没有留下文件。
+        {emptyText}
       </p>
     )
   }

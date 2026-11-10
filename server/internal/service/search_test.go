@@ -176,7 +176,7 @@ func TestGlobalSearchPaginationTitleAndLiteralEscaping(t *testing.T) {
 func TestGlobalSearchUpdatesDeletionArchiveAndGroupNavigation(t *testing.T) {
 	s, bot := searchFixture(t)
 	ctx := t.Context()
-	group, err := NewGroups(s.db, s.events).Create(ctx, GroupInput{Name: "群聊标题核验", Routing: "mention", Members: []string{bot.ID}}, "user")
+	group, err := NewGroups(s.db, s.events).Create(ctx, GroupInput{Name: "群聊标题核验", Members: []string{bot.ID}}, "user")
 	if err != nil {
 		t.Fatal(err)
 	}

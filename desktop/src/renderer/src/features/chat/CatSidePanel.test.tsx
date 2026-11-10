@@ -20,7 +20,10 @@ describe('猫咪侧栏面板', () => {
       />,
     )
     expect(screen.getByRole('heading', { name: '小黑' })).toHaveTextContent('小黑')
-    expect(screen.getByText('你的日常搭档，陪你把想法变成现实。')).toBeInTheDocument()
+    expect(await screen.findByText('相处久一点，会更了解彼此。')).toBeInTheDocument()
+    expect(screen.queryByText(agent.description)).toBeNull()
+    expect(screen.queryByRole('tab', { name: '记忆' })).toBeNull()
+    expect(screen.getAllByRole('tab')).toHaveLength(4)
     expect(screen.getByText('我的助手')).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '模型' })).toHaveTextContent('GPT-4o')
     await user.click(screen.getByRole('tab', { name: '资料库' }))

@@ -2,6 +2,7 @@ import { app, ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { normalizeStatus, parseEventBlock, type BootstrapStatus } from './bootstrapEvents'
+import { readClipboardFiles } from './clipboardFiles'
 import {
   normalizeServerAddress,
   parseStoredSession,
@@ -10,6 +11,11 @@ import {
 } from '../shared/serverAddress'
 
 const codeMessages: Record<string, string> = {
+  INVALID_GROUP_MENTION: '请从提及菜单选择当前群成员。',
+  AMBIGUOUS_GROUP_MENTION: '有猫咪使用了相同名称，请从提及菜单选择具体成员。',
+  GROUP_CHANGED: '群资料已被更新，请重新确认后保存。',
+  GROUP_LAST_MEMBER: '群里至少保留一位猫咪。',
+
   SETUP_CODE_INVALID: '初始化码不正确。',
   PASSWORD_INVALID: '密码至少 12 个字符，且不能超过 1024 字节。',
   ALREADY_INITIALIZED: '服务已经初始化，请改为验证密码。',
@@ -311,21 +317,24 @@ export function registerDesktopIpc(): void {
   )
   ipcMain.handle('desktop:login', (_event, password: string) => handle(() => login(password)))
   ipcMain.handle('desktop:load-workspace', () => handle(() => call('GET', '/workspace')))
+  ipcMain.handle('desktop:clipboard-files', () => handle(readClipboardFiles))
   ipcMain.handle('desktop:save-workspace', (_event, workspace: unknown) =>
     handle(() => call('PUT', '/workspace', workspace)),
   )
-  ipcMain.handle('desktop:deliver', (event, input: { agentId: string; messageId: string }) =>
-    handle(async () => {
-      try {
-        return await readStream(event, input)
-      } catch (error) {
-        const coded = error as { code?: string; message?: string }
-        if (coded.code === 'MODEL_NOT_READY') {
-          return { code: coded.code, message: coded.message }
+  ipcMain.handle(
+    'desktop:deliver',
+    (event, input: { agentId: string; messageId?: string; welcome?: boolean; requestId: string }) =>
+      handle(async () => {
+        try {
+          return await readStream(event, input)
+        } catch (error) {
+          const coded = error as { code?: string; message?: string }
+          if (coded.code === 'MODEL_NOT_READY') {
+            return { code: coded.code, message: coded.message }
+          }
+          throw error
         }
-        throw error
-      }
-    }),
+      }),
   )
   ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
   ipcMain.handle('desktop:model-providers', () =>
@@ -371,8 +380,15 @@ export function registerDesktopIpc(): void {
     if (typeof watchID !== 'string') return
     bootstrapWatches.get(`${event.sender.id}:${watchID}`)?.abort()
   })
-  ipcMain.handle('desktop:memories', (_event, agentId: string) =>
-    handle(() => call('GET', `/bots/${encodeURIComponent(agentId)}/memory`)),
+  ipcMain.handle('desktop:introduction', (_event, agentId: string) =>
+    handle(() =>
+      call(
+        'POST',
+        `/workspace/agents/${encodeURIComponent(agentId)}/introduction`,
+        undefined,
+        30_000,
+      ),
+    ),
   )
   ipcMain.handle('desktop:routines', (_event, agentId: string) =>
     handle(async () => {
@@ -421,10 +437,24 @@ export function registerDesktopIpc(): void {
       return call('POST', '/groups', {
         name: input.name,
         purpose: '',
-        routing: 'all',
         members: input.memberIds,
       })
     }),
+  )
+  ipcMain.handle(
+    'desktop:group-rename',
+    (_event, input: { id: string; revision: number; name: string }) =>
+      handle(() =>
+        call('PATCH', `/groups/${encodeURIComponent(input.id)}`, {
+          revision: input.revision,
+          name: input.name,
+        }),
+      ),
+  )
+  ipcMain.handle('desktop:group-artifacts', (_event, input: { id: string; before?: number }) =>
+    handle(() =>
+      call('GET', `/groups/${encodeURIComponent(input.id)}/artifacts?before=${input.before ?? 0}`),
+    ),
   )
   ipcMain.handle('desktop:group', (_event, id: string) =>
     handle(() => call('GET', `/groups/${encodeURIComponent(id)}`)),
@@ -457,12 +487,10 @@ export function registerDesktopIpc(): void {
         'GET',
         `/conversations/${encodeURIComponent(conversationId)}/messages?limit=80`,
       )) as ServerMessage[]
-      return (Array.isArray(rows) ? rows : [])
-        .flatMap((row) => {
-          const bubble = toBubble(row)
-          return bubble ? [bubble] : []
-        })
-        .reverse()
+      return (Array.isArray(rows) ? rows : []).flatMap((row) => {
+        const bubble = toBubble(row)
+        return bubble ? [bubble] : []
+      })
     }),
   )
   ipcMain.handle(
@@ -470,18 +498,26 @@ export function registerDesktopIpc(): void {
     (
       event,
       input: {
+        requestId: string
         conversationId: string
         content: string
         attachments: Array<{ path: string; sha256: string }>
         replyToId?: string
+        mentions: string[]
       },
     ) =>
       handle(() =>
-        readConversationStream(event, input.conversationId, {
-          content: input.content,
-          attachments: input.attachments,
-          ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
-        }),
+        readConversationStream(
+          event,
+          input.conversationId,
+          {
+            content: input.content,
+            mentions: input.mentions,
+            attachments: input.attachments,
+            ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
+          },
+          input.requestId,
+        ),
       ),
   )
   ipcMain.handle(
@@ -535,7 +571,7 @@ export function registerDesktopIpc(): void {
 
 async function readStream(
   event: IpcMainInvokeEvent,
-  input: { agentId: string; messageId: string },
+  input: { agentId: string; messageId?: string; welcome?: boolean; requestId: string },
 ): Promise<unknown> {
   await loadSession()
   const response = await fetch(`${requireServerAddress()}/api/v1/messages/stream`, {
@@ -545,7 +581,11 @@ async function readStream(
       accept: 'text/event-stream',
       ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
-    body: JSON.stringify(input),
+    body: JSON.stringify({
+      agentId: input.agentId,
+      messageId: input.messageId,
+      welcome: input.welcome,
+    }),
     signal: AbortSignal.timeout(90_000),
   })
   const type = response.headers.get('content-type') ?? ''
@@ -560,63 +600,7 @@ async function readStream(
     }
     return payload
   }
-  const reader = response.body?.getReader()
-  if (!reader)
-    throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let donePayload: unknown
-  const push = async (block: string) => {
-    const name = /^event: (\S+)/m.exec(block)?.[1]
-    const data = block
-      .split('\n')
-      .filter((line) => line.startsWith('data: '))
-      .map((line) => line.slice(6))
-      .join('\n')
-    if (!name || !data) return
-    const parsed = JSON.parse(data) as {
-      text?: string
-      code?: string
-      message?: string
-      kind?: string
-      message_id?: string
-      to_bot_id?: string
-      to_name?: string
-      conversation_id?: string
-    }
-    if (name === 'delta' || name === 'process') {
-      event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
-    }
-    if (name === 'dm' && parsed.kind === 'bot_message' && parsed.message_id && parsed.to_bot_id) {
-      event.sender.send('desktop:stream-event', {
-        type: 'dm',
-        text: '',
-        messageId: parsed.message_id,
-        peerId: parsed.to_bot_id,
-        peerName: parsed.to_name ?? parsed.to_bot_id,
-        conversationId: parsed.conversation_id ?? '',
-        direction: 'sent',
-      })
-    }
-    if (name === 'done') donePayload = parsed
-    if (name === 'error') {
-      throw Object.assign(new Error(parsed.message ?? 'agent 运行失败。'), {
-        code: parsed.code ?? 'MODEL_FAILED',
-      })
-    }
-  }
-  while (true) {
-    const chunk = await reader.read()
-    if (chunk.done) break
-    buffer += decoder.decode(chunk.value, { stream: true })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() ?? ''
-    for (const block of blocks) await push(block)
-  }
-  if (buffer.trim()) await push(buffer)
-  if (!donePayload)
-    throw Object.assign(new Error('agent 没有返回结果。'), { code: 'RESPONSE_INVALID' })
-  return donePayload
+  return readEventStream(event, response, input.requestId)
 }
 
 type ServerMessage = {
@@ -743,6 +727,7 @@ async function readConversationStream(
   event: IpcMainInvokeEvent,
   conversationId: string,
   body: unknown,
+  requestId: string,
 ): Promise<unknown> {
   await loadSession()
   const response = await fetch(
@@ -771,10 +756,14 @@ async function readConversationStream(
     }
     return payload
   }
-  return readEventStream(event, response)
+  return readEventStream(event, response, requestId)
 }
 
-async function readEventStream(event: IpcMainInvokeEvent, response: Response): Promise<unknown> {
+async function readEventStream(
+  event: IpcMainInvokeEvent,
+  response: Response,
+  requestId: string,
+): Promise<unknown> {
   const reader = response.body?.getReader()
   if (!reader)
     throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })
@@ -795,22 +784,48 @@ async function readEventStream(event: IpcMainInvokeEvent, response: Response): P
       message?: string
       kind?: string
       message_id?: string
+      bot_id?: string
+      run_id?: string
+      is_working?: boolean
+      is_finished?: boolean
       to_bot_id?: string
       to_name?: string
       conversation_id?: string
     }
-    if (name === 'delta' || name === 'process') {
-      event.sender.send('desktop:stream-event', { type: name, text: parsed.text ?? '' })
-    }
-    if (name === 'dm' && parsed.kind === 'bot_message' && parsed.message_id && parsed.to_bot_id) {
+    if (name === 'delta' || name === 'process' || name === 'activity') {
       event.sender.send('desktop:stream-event', {
-        type: 'dm',
-        text: '',
+        requestId,
+        type: name,
+        text: parsed.text ?? '',
+        runId: parsed.run_id,
+        isWorking: parsed.is_working,
+        isFinished: parsed.is_finished,
         messageId: parsed.message_id,
-        peerId: parsed.to_bot_id,
-        peerName: parsed.to_name ?? parsed.to_bot_id,
-        conversationId: parsed.conversation_id ?? '',
-        direction: 'sent',
+        botId: parsed.bot_id,
+      })
+    }
+    if ((name === 'dm' || name === 'user_message') && parsed.message_id) {
+      const snapshot = (await call('GET', '/workspace')) as {
+        workspace: {
+          agents: Array<{
+            id: string
+            messages: Array<{ id: string; dmNotice?: { conversationId: string } }>
+          }>
+        }
+      }
+      const incoming = snapshot.workspace.agents.flatMap((agent) => {
+        const messages = agent.messages.filter((message) =>
+          name === 'user_message'
+            ? message.id === parsed.message_id
+            : message.dmNotice?.conversationId === parsed.conversation_id,
+        )
+        return messages.length ? [{ id: agent.id, messages }] : []
+      })
+      event.sender.send('desktop:stream-event', {
+        requestId,
+        type: 'incoming',
+        text: '',
+        incoming,
       })
     }
     if (name === 'done') donePayload = parsed

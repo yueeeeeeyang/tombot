@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -13,17 +12,13 @@ import (
 
 func TestSharedAttachmentsReachGroupMembersWithoutPrivateToolResults(t *testing.T) {
 	received := make(chan provider.Request, 10)
-	var coordinator string
 	r, bot := runtimeFixture(t, script(func(ctx context.Context, in provider.Request, emit func(provider.Event) error) (provider.Usage, error) {
 		received <- in
-		if strings.HasPrefix(in.System, "You are the router") {
-			return provider.Usage{}, emit(provider.Event{Kind: "text_delta", Text: fmt.Sprintf(`{"steps":[{"bot_id":%q,"brief":"Review the attachment."}],"reason":"Relevant role."}`, coordinator)})
-		}
+
 		return provider.Usage{}, emit(provider.Event{Kind: "text_delta", Text: "已处理共享附件"})
 	}), DefaultLimits())
 	ctx := t.Context()
-	coordinator = bot.ID
-	group := createTestGroup(t, r, bot, "coordinator", false, 5_000_000)
+	group := createTestGroup(t, r, bot, 5_000_000)
 	file, err := r.deps.Files.UploadShared(ctx, "共享.txt", strings.NewReader("公开材料"), func(context.Context, string, string) error { return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +45,7 @@ func TestSharedAttachmentsReachGroupMembersWithoutPrivateToolResults(t *testing.
 	if status != "succeeded" {
 		t.Fatal(status, code)
 	}
-	for _, stage := range []string{"规划者", "执行成员"} {
+	for _, stage := range []string{"第一位成员", "第二位成员", "第三位成员"} {
 		select {
 		case req := <-received:
 			if ref := firstAttachment(req); ref == nil || ref.Path != file.Path || string(ref.Content) != "公开材料" {

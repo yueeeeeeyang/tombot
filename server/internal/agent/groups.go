@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,14 +22,12 @@ type groupExecution struct {
 	task           orchestrator.Task
 	ctx            context.Context
 	cancel         context.CancelFunc
-	summaryStarted bool
 	clock          *executionClock
 	waitingRuns    int
 	waitingChanges chan struct{}
 }
 type jobOutcome struct {
 	runID, status, code string
-	plan                domain.GroupPlan
 	err, persistErr     error
 }
 type groupBackend struct{ runtime *Runtime }
@@ -48,6 +47,7 @@ func (r *Runtime) submitGroupLocked(ctx context.Context, conversationID string, 
 		}
 	}
 	submission = Submission{TurnID: task.TurnID, MessageID: ids.New()}
+	task.TriggerID = submission.MessageID
 	now := time.Now().UTC()
 	err = store.Transact(ctx, r.deps.DB, func(tx *sql.Tx) error {
 		if err := usage.CheckMonthlyAdmission(ctx, tx, now); err != nil {
@@ -79,15 +79,22 @@ func (r *Runtime) submitGroupLocked(ctx context.Context, conversationID string, 
 		for _, member := range task.Group.Members {
 			members[member.BotID] = !member.IsArchived
 		}
+		parsed, err := domain.ResolveGroupMentions(input.Content, task.Group.Members, input.Mentions...)
+		if err != nil {
+			return err
+		}
+		for _, id := range parsed {
+			if !slices.Contains(input.Mentions, id) {
+				input.Mentions = append(input.Mentions, id)
+			}
+		}
+		task.Mentions = input.Mentions
 		seen := map[string]bool{}
 		for _, id := range input.Mentions {
 			if !members[id] || seen[id] {
 				return domain.NewError(400, "INVALID_GROUP_MENTION", "Mentions must name unique active group members.")
 			}
 			seen[id] = true
-		}
-		if task.Group.Routing == "coordinator" && (task.Group.CoordinatorBotID == nil || !members[*task.Group.CoordinatorBotID]) {
-			return domain.NewError(409, "GROUP_COORDINATOR_REQUIRED", "Select an active group coordinator before sending.")
 		}
 		snapshot, err := json.Marshal(struct {
 			Group    domain.Group `json:"group"`
@@ -103,7 +110,7 @@ func (r *Runtime) submitGroupLocked(ctx context.Context, conversationID string, 
 			return err
 		}
 
-		message := domain.Message{ID: submission.MessageID, ConversationID: conversationID, TurnID: &task.TurnID, SenderKind: "user", Blocks: blocks, Status: "complete", CreatedAt: now}
+		message := domain.Message{ID: submission.MessageID, ConversationID: conversationID, TurnID: &task.TurnID, SenderKind: "user", Audience: input.Mentions, Mentions: input.Mentions, Blocks: blocks, Status: "complete", CreatedAt: now}
 		if err = service.AppendMessage(ctx, tx, &message); err != nil {
 			return err
 		}
@@ -217,7 +224,7 @@ func (r *Runtime) finishGroup(ctx context.Context, turnID, conversationID, statu
 }
 
 // enqueueGroupRun 复用全局队列与 Bot 互斥；编排器不占用模型执行槽，避免等待自己的子任务。
-func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, step domain.GroupStep, mode string, results []orchestrator.Result) (jobOutcome, error) {
+func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, step domain.GroupStep) (jobOutcome, error) {
 	r.mu.Lock()
 	if r.closed || ctx.Err() != nil {
 		r.mu.Unlock()
@@ -250,9 +257,6 @@ func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, s
 	}
 	budget := min(r.limits.BudgetMicro, task.Group.MaxCostMicro)
 	role := "member"
-	if mode != "member" {
-		role = "coordinator"
-	}
 	run := domain.Run{ID: ids.New(), TurnID: task.TurnID, ConversationID: task.Group.ConversationID, BotID: bot.ID, ModelID: model.ID, Source: "group", Status: "queued", PlanRole: role, BudgetMicro: &budget, CreatedAt: time.Now().UTC()}
 	err = store.Transact(ctx, r.deps.DB, func(tx *sql.Tx) error {
 		var active bool
@@ -266,7 +270,7 @@ func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, s
 		if source == "routine" {
 			run.Source = "routine"
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runs(id,turn_id,conversation_id,bot_id,source,status,model_id,prompt,plan_role,budget_micro,created_at) VALUES(?,?,?,?,?,'queued',?,?,?,?,?)`, run.ID, run.TurnID, run.ConversationID, run.BotID, run.Source, run.ModelID, step.Brief, role, budget, run.CreatedAt.UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO runs(id,turn_id,conversation_id,bot_id,source,status,model_id,prompt,plan_role,budget_micro,created_at,trigger_message_id) VALUES(?,?,?,?,?,'queued',?,?,?,?,?,?)`, run.ID, run.TurnID, run.ConversationID, run.BotID, run.Source, run.ModelID, step.Brief, role, budget, run.CreatedAt.UnixMilli(), task.TriggerID); err != nil {
 			return err
 		}
 		if _, err := bus.Append(ctx, tx, "run.status", run.ConversationID, map[string]string{"run_id": run.ID, "turn_id": run.TurnID, "bot_id": run.BotID, "model_name": model.DisplayName, "plan_role": role, "status": "queued"}); err != nil {
@@ -279,7 +283,7 @@ func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, s
 		return jobOutcome{}, err
 	}
 	jobCtx, cancel := context.WithCancelCause(ctx)
-	j := &job{run: run, bot: bot, model: model, spec: spec, ctx: jobCtx, cancel: cancel, start: make(chan struct{}), done: make(chan struct{}), group: &task, brief: step.Brief, mode: mode, groupResults: results, preflightErr: preflight, completed: make(chan jobOutcome, 1)}
+	j := &job{run: run, bot: bot, model: model, spec: spec, ctx: jobCtx, cancel: cancel, start: make(chan struct{}), done: make(chan struct{}), group: &task, brief: step.Brief, preflightErr: preflight, completed: make(chan jobOutcome, 1)}
 	r.jobs[run.ID] = j
 	r.queue = append(r.queue, j)
 	r.wg.Add(1)
@@ -293,20 +297,6 @@ func (r *Runtime) enqueueGroupRun(ctx context.Context, task orchestrator.Task, s
 		return outcome, outcome.persistErr
 	}
 	return outcome, nil
-}
-
-func (b groupBackend) Plan(ctx context.Context, task orchestrator.Task) (domain.GroupPlan, error) {
-	if task.Group.CoordinatorBotID == nil {
-		return domain.GroupPlan{}, domain.NewError(409, "GROUP_COORDINATOR_REQUIRED", "The group needs a coordinator.")
-	}
-	outcome, err := b.runtime.enqueueGroupRun(ctx, task, domain.GroupStep{BotID: *task.Group.CoordinatorBotID, Brief: task.Content}, "plan", nil)
-	if err != nil {
-		return outcome.plan, err
-	}
-	if outcome.err != nil {
-		return outcome.plan, outcome.err
-	}
-	return outcome.plan, nil
 }
 
 func (b groupBackend) WaitingChanges(task orchestrator.Task) <-chan struct{} {
@@ -326,22 +316,8 @@ func (b groupBackend) SavePlan(ctx context.Context, task orchestrator.Task, plan
 		return err
 	}
 	err = store.Transact(ctx, b.runtime.deps.DB, func(tx *sql.Tx) error {
-		var previous sql.NullString
-		if err := tx.QueryRowContext(ctx, "SELECT plan_json FROM turns WHERE id=?", task.TurnID).Scan(&previous); err != nil {
-			return err
-		}
 		if _, err := tx.ExecContext(ctx, "UPDATE turns SET plan_json=? WHERE id=?", string(encoded), task.TurnID); err != nil {
 			return err
-		}
-		if !previous.Valid {
-			message := domain.Message{ID: ids.New(), ConversationID: task.Group.ConversationID, TurnID: &task.TurnID, SenderKind: "system", Blocks: []domain.MessageBlock{{Kind: "plan", Plan: &plan}}, Status: "complete", CreatedAt: time.Now().UTC()}
-			if err := service.AppendMessage(ctx, tx, &message); err != nil {
-				return err
-			}
-		} else {
-			if _, err := tx.ExecContext(ctx, `UPDATE messages SET blocks_json=json_set(blocks_json,'$[0].plan',json(?)) WHERE turn_id=? AND sender_kind='system' AND json_extract(blocks_json,'$[0].kind')='plan'`, string(encoded), task.TurnID); err != nil {
-				return err
-			}
 		}
 		_, err := bus.Append(ctx, tx, "turn.plan", task.Group.ConversationID, map[string]any{"turn_id": task.TurnID, "plan": plan})
 		return err
@@ -352,7 +328,7 @@ func (b groupBackend) SavePlan(ctx context.Context, task orchestrator.Task, plan
 	return err
 }
 func (b groupBackend) Run(ctx context.Context, task orchestrator.Task, step domain.GroupStep) (orchestrator.Result, error) {
-	outcome, err := b.runtime.enqueueGroupRun(ctx, task, step, "member", nil)
+	outcome, err := b.runtime.enqueueGroupRun(ctx, task, step)
 	result := orchestrator.Result{RunID: outcome.runID, BotID: step.BotID, Status: outcome.status, ErrorCode: outcome.code}
 	if err != nil {
 		return result, err
@@ -382,20 +358,10 @@ func (b groupBackend) Run(ctx context.Context, task orchestrator.Task, step doma
 		}
 	}
 	err = b.runtime.deps.DB.QueryRowContext(read, "SELECT COUNT(*) FROM tool_calls WHERE run_id=?", outcome.runID).Scan(&result.ToolCalls)
+	if err == nil {
+		result.Followups, err = b.runtime.groupFollowups(read, task, outcome.runID)
+	}
 	return result, err
-}
-func (b groupBackend) Summarize(ctx context.Context, task orchestrator.Task, results []orchestrator.Result) error {
-	if err := b.CheckBudget(ctx, task); err != nil {
-		return err
-	}
-	outcome, err := b.runtime.enqueueGroupRun(ctx, task, domain.GroupStep{BotID: *task.Group.CoordinatorBotID, Brief: "Summarize the completed group assignments for the user. Preserve uncertainty and failed tasks. Do not use tools or start new work."}, "summary", results)
-	if err != nil {
-		return err
-	}
-	if outcome.err != nil {
-		return outcome.err
-	}
-	return nil
 }
 func (b groupBackend) CheckBudget(ctx context.Context, task orchestrator.Task) error {
 	var cost int64

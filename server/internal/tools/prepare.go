@@ -41,6 +41,9 @@ func (e *Executor) prepare(ctx context.Context, bot domain.Bot, name string, raw
 	if name == "message_bot" || name == "delegate_task" {
 		return e.prepareMessaging(ctx, bot, name, raw)
 	}
+	if name == "message_user" {
+		return prepareUserMessage(raw)
+	}
 	if name == "memory_search" || name == "memory_write" || name == "memory_delete" {
 		return e.prepareMemory(ctx, bot, name, raw)
 	}

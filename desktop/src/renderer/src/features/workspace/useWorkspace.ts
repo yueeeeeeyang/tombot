@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { getBackend, type DeliveryResult, type DesktopBackend } from '../desktop/backend'
+import {
+  getBackend,
+  type DeliveryResult,
+  type DesktopBackend,
+  type IncomingMessages,
+  type StreamEvent,
+} from '../desktop/backend'
 import { emptyWorkspace, type AppWorkspace } from './model'
 
 interface WorkspaceState {
@@ -23,6 +29,24 @@ function mergeDelivery(local: AppWorkspace, remote: AppWorkspace): AppWorkspace 
     ? local.activeAgentId
     : remote.activeAgentId
   return { ...remote, activeAgentId, agents }
+}
+
+/** 只合并已落库的通知和直接回复，不回写服务，也不覆盖正在编辑的草稿与资料。 */
+export function mergeIncoming(local: AppWorkspace, incoming: IncomingMessages): AppWorkspace {
+  return {
+    ...local,
+    agents: local.agents.map((agent) => {
+      const received = incoming.find((item) => item.id === agent.id)
+      if (!received) return agent
+      const messages = [...agent.messages]
+      for (const message of received.messages) {
+        const index = messages.findIndex((item) => item.id === message.id)
+        if (index < 0) messages.push(message)
+        else messages[index] = message
+      }
+      return { ...agent, messages }
+    }),
+  }
 }
 
 function readInitial(backend: DesktopBackend): WorkspaceState {
@@ -133,25 +157,29 @@ export function useWorkspace() {
     return true
   }
 
+  function receive(incoming: IncomingMessages): void {
+    current.current = mergeIncoming(current.current, incoming)
+    setWorkspace(current.current)
+  }
+
   /** 把一条用户消息交给服务。模型未配置时服务不会改写未发送状态。 */
   function deliver(
     agentId: string,
     messageId: string,
-    onEvent?: (event: {
-      type: string
-      text: string
-      messageId?: string
-      peerId?: string
-      peerName?: string
-      conversationId?: string
-      direction?: 'sent' | 'received'
-    }) => void,
+    onEvent?: (event: StreamEvent) => void,
+    isWelcome = false,
   ): Promise<DeliveryResult> {
     return enqueue(async () => {
       try {
         const pending = backend.saveWorkspace(current.current)
         if (pending) await pending
-        const result = await backend.deliverMessage(agentId, messageId, onEvent)
+        const receiveEvent = (event: StreamEvent) => {
+          if (event.type === 'incoming' && event.incoming) receive(event.incoming)
+          else onEvent?.(event)
+        }
+        const result = isWelcome
+          ? await backend.welcomeAgent(agentId, receiveEvent)
+          : await backend.deliverMessage(agentId, messageId, receiveEvent)
         if (result.workspace) {
           const merged = mergeDelivery(current.current, result.workspace)
           current.current = merged
@@ -166,5 +194,5 @@ export function useWorkspace() {
     })
   }
 
-  return { workspace, error, isBlocked, ready, commit, deliver }
+  return { workspace, error, isBlocked, ready, commit, deliver, receive }
 }

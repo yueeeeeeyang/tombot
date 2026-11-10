@@ -215,6 +215,8 @@ func (e *Executor) Execute(ctx context.Context, invocation domain.ToolInvocation
 		value, err = e.invokeGroup(timeout, run, use.ID, use.Name, input.input.(groupInput))
 	} else if use.Name == "message_bot" || use.Name == "delegate_task" {
 		value, err = e.invokeMessaging(timeout, invocation, use.ID, input.input.(domain.BotMessageRequest))
+	} else if use.Name == "message_user" {
+		value, err = invokeUserMessage(timeout, invocation, use.ID, input.input.(string))
 	} else if use.Name == "memory_search" || use.Name == "memory_write" || use.Name == "memory_delete" {
 		value, err = e.invokeMemory(timeout, bot.ID, use.Name, input.input.(memoryInput))
 	} else if use.Name == "routine_list" || use.Name == "routine_upsert" || use.Name == "routine_delete" {

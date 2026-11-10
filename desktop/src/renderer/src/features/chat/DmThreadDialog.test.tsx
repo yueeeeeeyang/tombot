@@ -17,20 +17,20 @@ describe('私信只读气泡', () => {
     const backend: Partial<DesktopBackend> = {
       listConversationMessages: vi.fn(async () => [
         {
-          id: 'newer',
-          role: 'assistant' as const,
-          speaker: peer.id,
-          content: '好的',
-          createdAt: '2026-11-10T08:01:00.000Z',
-          reactions: [],
-          attachments: [],
-        },
-        {
           id: 'older',
           role: 'assistant' as const,
           speaker: self.id,
           content: '晨会我先看了',
           createdAt: '2026-11-10T08:00:00.000Z',
+          reactions: [],
+          attachments: [],
+        },
+        {
+          id: 'newer',
+          role: 'assistant' as const,
+          speaker: peer.id,
+          content: '好的',
+          createdAt: '2026-11-10T08:01:00.000Z',
           reactions: [],
           attachments: [],
         },

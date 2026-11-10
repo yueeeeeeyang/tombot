@@ -137,3 +137,7 @@
     opacity: 1;
   }
 }
+.avatar--custom .cat-portrait {
+  border-radius: 50%;
+  object-fit: cover;
+}

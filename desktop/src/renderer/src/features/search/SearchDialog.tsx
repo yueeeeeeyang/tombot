@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import { Search, Settings, SlidersHorizontal } from 'lucide-react'
+import { Search, Settings, SlidersHorizontal, Plus, Users } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { searchAgents, type Agent } from '../workspace/model'
@@ -10,6 +10,7 @@ interface SearchResult {
   name: string
   preview: string
   agent?: Agent
+  action?: 'create' | 'group'
   section?: SettingsSection
 }
 
@@ -24,7 +25,7 @@ const SETTINGS_RESULTS = [
   {
     id: 'settings-models',
     name: '模型设置',
-    preview: '模型供应商与模型参数',
+    preview: '模型供应商与模型选择',
     section: 'models' as const,
     keywords: '设置 模型 供应商 参数 温度 API',
   },
@@ -37,11 +38,15 @@ export function SearchDialog({
   onClose,
   onSelect,
   onSettings,
+  onCreate,
+  onCreateGroup,
 }: {
   agents: Agent[]
   activeAgentId: string
   onClose: () => void
   onSelect: (id: string) => void
+  onCreate: () => void
+  onCreateGroup: () => void
   onSettings: (section: SettingsSection) => void
 }) {
   const [query, setQuery] = useState('')
@@ -66,20 +71,24 @@ export function SearchDialog({
       name: agent.name,
       agent,
       preview: matchedMessage
-        ? `未发送：${matchedMessage.content}`
+        ? `${matchedMessage.status === 'unsent' ? '未发送：' : ''}${matchedMessage.content}`
         : agent.draft
           ? `草稿：${agent.draft}`
           : agent.messages.length
-            ? `未发送：${agent.messages.at(-1)!.content}`
+            ? `${agent.messages.at(-1)!.status === 'unsent' ? '未发送：' : ''}${agent.messages.at(-1)!.content}`
             : agent.description || agent.group,
     }
   })
-  const settingsResults: SearchResult[] = normalizedQuery
-    ? SETTINGS_RESULTS.filter((result) =>
-        result.keywords.toLocaleLowerCase().includes(normalizedQuery),
-      )
-    : []
-  const results = [...agentResults, ...settingsResults]
+  const settingsResults: SearchResult[] = SETTINGS_RESULTS.filter(
+    (result) => !normalizedQuery || result.keywords.toLocaleLowerCase().includes(normalizedQuery),
+  )
+  const actionResults: SearchResult[] = [
+    { id: 'create', name: '招聘猫咪', preview: '添加一位新的助手搭档', action: 'create' as const },
+    { id: 'group', name: '创建群聊', preview: '邀请猫咪一起讨论、协作', action: 'group' as const },
+  ].filter(
+    (result) => !normalizedQuery || `${result.name} ${result.preview}`.includes(normalizedQuery),
+  )
+  const results = [...agentResults, ...actionResults, ...settingsResults]
   const selectedIndex = Math.min(activeIndex, results.length - 1)
   const selectedResult = results[selectedIndex]
   const shortcutPrefix = window.desktop?.platform === 'darwin' ? '⌘' : 'Ctrl+'
@@ -90,6 +99,8 @@ export function SearchDialog({
 
   function selectResult(result: SearchResult): void {
     if (result.agent) onSelect(result.agent.id)
+    else if (result.action === 'create') onCreate()
+    else if (result.action === 'group') onCreateGroup()
     else if (result.section) onSettings(result.section)
   }
 
@@ -137,6 +148,7 @@ export function SearchDialog({
         <div className="search-results" id={listId} role="listbox" aria-label="搜索结果">
           {[
             { label: '助手', items: agentResults },
+            { label: '操作', items: actionResults },
             { label: '设置', items: settingsResults },
           ].map(
             (group) =>
@@ -158,10 +170,18 @@ export function SearchDialog({
                         onClick={() => selectResult(result)}
                       >
                         {result.agent ? (
-                          <Avatar preset={result.agent.avatar} agentId={result.agent.id} />
+                          <Avatar
+                            preset={result.agent.avatar}
+                            customAvatar={result.agent.customAvatar}
+                            agentId={result.agent.id}
+                          />
                         ) : (
                           <span className="search-setting-icon">
-                            {result.section === 'general' ? (
+                            {result.action === 'create' ? (
+                              <Plus size={18} />
+                            ) : result.action === 'group' ? (
+                              <Users size={18} />
+                            ) : result.section === 'general' ? (
                               <Settings size={18} />
                             ) : (
                               <SlidersHorizontal size={18} />

@@ -46,7 +46,11 @@ func (r *Runtime) resumeParent(ctx context.Context, j *job) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-ready:
-		return ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		_, err := r.deps.Events.Publish(ctx, "run.activity", j.run.ConversationID, map[string]any{"run_id": j.run.ID, "turn_id": j.run.TurnID, "bot_id": j.run.BotID, "is_working": true})
+		return err
 	}
 }
 
@@ -91,6 +95,10 @@ func (r *Runtime) drainChildren(ctx context.Context, parent *job) error {
 	}
 	r.mu.Unlock()
 	var result error
+	if len(children) > 0 {
+		// 收尾只等待已投递任务，不会继续调用模型，不显示成发送者仍在执行。
+		_, result = r.deps.Events.Publish(ctx, "run.activity", parent.run.ConversationID, map[string]any{"run_id": parent.run.ID, "turn_id": parent.run.TurnID, "bot_id": parent.run.BotID, "is_working": false})
+	}
 	for _, child := range children {
 		<-child.done
 		if child.outcome.persistErr != nil {

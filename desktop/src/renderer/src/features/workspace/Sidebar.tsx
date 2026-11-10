@@ -1,4 +1,6 @@
-import { MessageSquarePlus, Plus, Search, Settings, UserPlus } from 'lucide-react'
+import type { GroupSummary } from '../desktop/backend'
+import { GroupAvatar } from '../../components/GroupAvatar'
+import { ChevronRight, MessageSquarePlus, Plus, Search, Settings, UserPlus } from 'lucide-react'
 import {
   useLayoutEffect,
   useRef,
@@ -6,11 +8,13 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import type { ConnectionStatus } from '../session/useConnectionStatus'
 import workspaceCat from '../../assets/cats/workspace-cat.png'
 import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
 import type { CatMenuAnchor } from './CatContextMenu'
 import type { Agent, AppWorkspace as Workspace } from './model'
+import { useCollapsedGroups } from './useCollapsedGroups'
 import type { SidebarPreferences } from './sidebarPreferences'
 
 /** 显示置顶区、分组助手与当前会话入口；右键菜单只上报目标与坐标。 */
@@ -35,6 +39,8 @@ export function Sidebar({
   onOpenGroup,
   onCreateGroup,
   serverUrl,
+  connectionStatus,
+  onError,
 }: {
   workspace: Workspace
   preferences: SidebarPreferences
@@ -51,12 +57,15 @@ export function Sidebar({
   onSearch: () => void
   onCreate: () => void
   onSettings: () => void
-  chatGroups: Array<{ id: string; name: string }>
+  chatGroups: GroupSummary[]
   selected: { kind: 'agent' | 'group'; id: string }
   onOpenGroup: (id: string) => void
   onCreateGroup: () => void
   serverUrl: string
+  connectionStatus: ConnectionStatus
+  onError: (message: string) => void
 }) {
+  const { collapsed, toggle, error: collapseError } = useCollapsedGroups(onError)
   const serverHost = hostOf(serverUrl)
   // 主猫由服务端 leadAgentId 固定。当前会话不能顶上去，否则点击会和置顶位交换。
   const lead = workspace.agents.find((agent) => agent.id === workspace.leadAgentId)
@@ -137,6 +146,7 @@ export function Sidebar({
         ))}
       </div>
       <nav className="agent-groups" aria-label="助手列表">
+        {collapseError && <p role="alert">{collapseError}</p>}
         {groups.map((group) => (
           <section className="agent-group" key={group}>
             {editingGroupName === group ? (
@@ -148,42 +158,73 @@ export function Sidebar({
                 onCancel={onCancelRenameGroup}
               />
             ) : (
-              <h2>{group}</h2>
+              <h2 aria-label={group}>
+                <button
+                  className="group-toggle"
+                  type="button"
+                  aria-label={`${collapsed.includes(`cats:${group}`) ? '展开' : '收起'}${group}分组`}
+                  aria-expanded={!collapsed.includes(`cats:${group}`)}
+                  onClick={() => toggle(`cats:${group}`)}
+                >
+                  <ChevronRight size={13} />
+                  <span>{group}</span>
+                </button>
+              </h2>
             )}
-            {unpinnedAgents
-              .filter((agent) => agent.group === group)
-              .map((agent) => (
-                <AgentButton
-                  key={agent.id}
-                  agent={agent}
-                  isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
-                  isUnread={isUnread(agent)}
-                  isRenaming={agent.id === renamingAgentId}
-                  onSelect={onSelect}
-                  onContextMenu={(event) => openAgentMenu(event, agent.id)}
-                  onMenuKeyDown={(event) => openAgentMenuFromKeyboard(event, agent.id)}
-                  onRename={onRenameAgent}
-                  onCancelRename={onCancelRenameAgent}
-                />
-              ))}
+            <div
+              hidden={
+                !isCollapsed && collapsed.includes(`cats:${group}`) && editingGroupName !== group
+              }
+            >
+              {unpinnedAgents
+                .filter((agent) => agent.group === group)
+                .map((agent) => (
+                  <AgentButton
+                    key={agent.id}
+                    agent={agent}
+                    isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
+                    isUnread={isUnread(agent)}
+                    isRenaming={agent.id === renamingAgentId}
+                    onSelect={onSelect}
+                    onContextMenu={(event) => openAgentMenu(event, agent.id)}
+                    onMenuKeyDown={(event) => openAgentMenuFromKeyboard(event, agent.id)}
+                    onRename={onRenameAgent}
+                    onCancelRename={onCancelRenameAgent}
+                  />
+                ))}
+            </div>
           </section>
         ))}
         {chatGroups.length > 0 && (
           <section className="agent-group">
-            <h2>群聊</h2>
-            {chatGroups.map((group) => (
+            <h2 aria-label="群聊">
               <button
-                key={group.id}
                 type="button"
-                className={`agent-button ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
-                onClick={() => onOpenGroup(group.id)}
+                className="group-toggle"
+                aria-label={`${collapsed.includes('conversations') ? '展开' : '收起'}群聊分组`}
+                aria-expanded={!collapsed.includes('conversations')}
+                onClick={() => toggle('conversations')}
               >
-                <span className="agent-copy">
-                  <span className="agent-name">{group.name}</span>
-                  <span className="agent-preview">多只猫咪一起聊</span>
-                </span>
+                <ChevronRight size={13} />
+                <span>群聊</span>
               </button>
-            ))}
+            </h2>
+            <div hidden={!isCollapsed && collapsed.includes('conversations')}>
+              {chatGroups.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  className={`agent-button ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
+                  onClick={() => onOpenGroup(group.id)}
+                >
+                  <GroupAvatar presets={group.avatar_presets} />
+                  <span className="agent-copy">
+                    <span className="agent-name">{group.name}</span>
+                    <span className="agent-preview">多只猫咪一起聊</span>
+                  </span>
+                </button>
+              ))}
+            </div>
           </section>
         )}
       </nav>
@@ -218,7 +259,16 @@ export function Sidebar({
             <span>我的工作空间</span>
             {serverHost && (
               <small>
-                <i />
+                <i
+                  className={`server-status server-status--${connectionStatus}`}
+                  role="status"
+                  aria-label={connectionStatus === 'connected' ? '服务端已连接' : '服务端连接异常'}
+                  title={
+                    connectionStatus === 'connected'
+                      ? '服务端已连接'
+                      : '服务端连接异常，正在尝试重新连接'
+                  }
+                />
                 {serverHost}
               </small>
             )}
@@ -276,6 +326,7 @@ function PinnedAgent({
       <div className="pinned-agent is-editing">
         <Avatar
           preset={agent.avatar}
+          customAvatar={agent.customAvatar}
           agentId={agent.id}
           tracksPointer
           size="large"
@@ -304,6 +355,7 @@ function PinnedAgent({
     >
       <Avatar
         preset={agent.avatar}
+        customAvatar={agent.customAvatar}
         agentId={agent.id}
         tracksPointer
         size="large"
@@ -348,7 +400,12 @@ function AgentButton({
   if (isRenaming) {
     return (
       <div className="agent-button is-editing">
-        <Avatar preset={agent.avatar} agentId={agent.id} tracksPointer />
+        <Avatar
+          preset={agent.avatar}
+          customAvatar={agent.customAvatar}
+          agentId={agent.id}
+          tracksPointer
+        />
         <span className="agent-copy">
           <InlineNameInput
             initialName={agent.name}
@@ -373,7 +430,12 @@ function AgentButton({
       onKeyDown={onMenuKeyDown}
       aria-current={isActive ? 'page' : undefined}
     >
-      <Avatar preset={agent.avatar} agentId={agent.id} tracksPointer />
+      <Avatar
+        preset={agent.avatar}
+        customAvatar={agent.customAvatar}
+        agentId={agent.id}
+        tracksPointer
+      />
       <span className="agent-copy">
         <span className="agent-name">{agent.name}</span>
         <span className="agent-preview">{preview}</span>

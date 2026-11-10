@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/agent"
 	"io.yueyang/tom/internal/domain"
+	"io.yueyang/tom/internal/service"
 )
 
 // streamWorkspaceMessage 把原来的 agent 运行过程推给桌面。流式开关只影响客户端是否逐段绘制。
@@ -27,12 +28,23 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 	var request struct {
 		AgentID   string `json:"agentId"`
 		MessageID string `json:"messageId"`
+		Welcome   bool   `json:"welcome"`
 	}
 	if err := decode(w, r, &request); err != nil {
 		s.fail(w, r, err)
 		return
 	}
-	dispatch, err := s.Workspace.PrepareDispatch(r.Context(), request.AgentID, request.MessageID)
+	var dispatch service.Dispatch
+	var err error
+	if request.Welcome {
+		if request.MessageID != "" {
+			s.fail(w, r, domain.NewError(400, "INVALID_INPUT", "欢迎请求不能附带用户消息。"))
+			return
+		}
+		dispatch, err = s.Workspace.PrepareWelcome(r.Context(), request.AgentID)
+	} else {
+		dispatch, err = s.Workspace.PrepareDispatch(r.Context(), request.AgentID, request.MessageID)
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -46,7 +58,22 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 		s.fail(w, r, err)
 		return
 	}
-	submission, err := s.Runtime.Submit(r.Context(), dispatch.ConversationID, agent.SendInput{Content: dispatch.Content, Attachments: dispatch.Attachments, ReplyToID: dispatch.ReplyToID}, "desktop")
+	var submission agent.Submission
+	if request.Welcome {
+		submission, err = s.Runtime.Welcome(r.Context(), dispatch.ConversationID)
+		var failure *domain.Error
+		if errors.As(err, &failure) && failure.Code == "WELCOME_EXISTS" {
+			snapshot, loadErr := s.Workspace.Load(r.Context())
+			if loadErr != nil {
+				s.fail(w, r, loadErr)
+				return
+			}
+			s.respond(w, r, http.StatusOK, service.Delivery{Workspace: snapshot.Workspace})
+			return
+		}
+	} else {
+		submission, err = s.Runtime.Submit(r.Context(), dispatch.ConversationID, agent.SendInput{Content: dispatch.Content, Attachments: dispatch.Attachments, ReplyToID: dispatch.ReplyToID}, "desktop")
+	}
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -70,7 +97,21 @@ func (s *Server) streamWorkspaceMessage(w http.ResponseWriter, r *http.Request) 
 	runCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	reply, runErr := s.followRun(runCtx, dispatch.ConversationID, submission.TurnID, cursor, write)
-	delivery, applyErr := s.Workspace.ApplyRun(context.Background(), dispatch.AgentID, dispatch.MessageID, dispatch.Revision, reply, runErr)
+	var delivery service.Delivery
+	var applyErr error
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer persistCancel()
+	if request.Welcome {
+		var snapshot service.Snapshot
+		snapshot, applyErr = s.Workspace.Load(persistCtx)
+		delivery.Workspace = snapshot.Workspace
+		if runErr != nil {
+			delivery.Code = "MODEL_FAILED"
+			delivery.Message = "欢迎消息生成失败，请发送消息后重试。"
+		}
+	} else {
+		delivery, applyErr = s.Workspace.ApplyRun(persistCtx, dispatch.AgentID, dispatch.MessageID, dispatch.Revision, reply, runErr)
+	}
 	if applyErr != nil {
 		if s.Logger != nil {
 			s.Logger.Error("agent 结果没有写入工作空间", "agent_id", dispatch.AgentID, "message_id", dispatch.MessageID, "error", applyErr)
@@ -210,6 +251,21 @@ func (s *Server) eventCursor(ctx context.Context) (int64, error) {
 
 func (s *Server) followRun(ctx context.Context, conversationID, turnID string, cursor int64, write func(string, string) error) (string, error) {
 	var reply string
+	// 一个流内运行归属不会改变，重复摘要不需要反复回溯祖先链。
+	relatedRuns := map[string]bool{}
+	belongs := func(runID string) (bool, error) {
+		if runID == "" {
+			return false, nil
+		}
+		if related, ok := relatedRuns[runID]; ok {
+			return related, nil
+		}
+		related, err := s.Conversations.RunBelongsToTurn(ctx, runID, turnID)
+		if err == nil {
+			relatedRuns[runID] = related
+		}
+		return related, err
+	}
 	clientClosed := false
 	// 写出失败只说明桌面不再接收，运行本身继续，直到回合结束再落库。
 	emit := func(event, payload string) {
@@ -237,33 +293,74 @@ func (s *Server) followRun(ctx context.Context, conversationID, turnID string, c
 		}
 		for _, event := range events {
 			cursor = event.ID
+			if event.Kind == "handoff.created" || event.Kind == "user.message" {
+				var payload struct {
+					RunID string `json:"run_id"`
+				}
+				if err = json.Unmarshal(event.Payload, &payload); err != nil {
+					return reply, err
+				}
+				var related bool
+				if payload.RunID != "" {
+					if related, err = belongs(payload.RunID); err != nil {
+						return reply, err
+					}
+				}
+				if related {
+					if event.Kind == "handoff.created" {
+						emit("dm", string(event.Payload))
+					} else {
+						emit("user_message", string(event.Payload))
+					}
+				}
+				continue
+			}
+			if event.Kind == "run.started" || event.Kind == "run.status" || event.Kind == "run.activity" || event.Kind == "run.progress" {
+				var payload struct {
+					RunID     string `json:"run_id"`
+					BotID     string `json:"bot_id"`
+					TurnID    string `json:"turn_id"`
+					Status    string `json:"status"`
+					Text      string `json:"text"`
+					IsWorking bool   `json:"is_working"`
+				}
+				if err = json.Unmarshal(event.Payload, &payload); err != nil {
+					return reply, err
+				}
+				related := payload.TurnID == turnID && event.ConversationID == conversationID
+				if !related && payload.RunID != "" {
+					if related, err = belongs(payload.RunID); err != nil {
+						return reply, err
+					}
+				}
+				if related {
+					if event.Kind == "run.progress" {
+						if payload.Text != "" {
+							emit("process", fmt.Sprintf(`{"text":%q,"run_id":%q,"bot_id":%q}`, payload.Text, payload.RunID, payload.BotID))
+						}
+					} else if payload.RunID != "" && payload.BotID != "" {
+						working := event.Kind == "run.started" || event.Kind == "run.status" && payload.Status == "running" || event.Kind == "run.activity" && payload.IsWorking
+						finished := event.Kind == "run.status" && (payload.Status == "succeeded" || payload.Status == "failed" || payload.Status == "canceled" || payload.Status == "interrupted")
+						emit("activity", fmt.Sprintf(`{"run_id":%q,"bot_id":%q,"is_working":%t,"is_finished":%t}`, payload.RunID, payload.BotID, working, finished))
+					}
+				}
+				continue
+			}
 			if event.ConversationID != conversationID {
 				continue
 			}
 			switch event.Kind {
 			case "text.delta":
 				var payload struct {
-					Text string `json:"text"`
+					Text      string `json:"text"`
+					MessageID string `json:"message_id"`
+					BotID     string `json:"bot_id"`
 				}
 				if err = json.Unmarshal(event.Payload, &payload); err != nil {
 					return reply, err
 				}
 				reply += payload.Text
-				emit("delta", fmt.Sprintf(`{"text":%q}`, payload.Text))
-			case "thinking.delta":
-				var payload struct {
-					Text string `json:"text"`
-				}
-				if err = json.Unmarshal(event.Payload, &payload); err != nil {
-					return reply, err
-				}
-				if payload.Text != "" {
-					emit("process", fmt.Sprintf(`{"text":%q}`, payload.Text))
-				}
-			case "tool.started":
-				emit("process", `{"text":"正在使用工具"}`)
-			case "handoff.created":
-				emit("dm", string(event.Payload))
+				emit("delta", fmt.Sprintf(`{"text":%q,"message_id":%q,"bot_id":%q}`, payload.Text, payload.MessageID, payload.BotID))
 			case "turn.finished":
 				var payload struct {
 					TurnID string `json:"turn_id"`

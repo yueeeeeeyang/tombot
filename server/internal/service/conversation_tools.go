@@ -13,6 +13,9 @@ import (
 	"io.yueyang/tom/internal/store"
 )
 
+// VisibleMessageSQL 的调用方必须使用消息别名 m，并传入当前猫咪标识两次。
+const VisibleMessageSQL = `(json_array_length(m.audience_json)=0 OR m.sender_bot_id=? OR EXISTS(SELECT 1 FROM json_each(m.audience_json) WHERE value=?))`
+
 const maxTranscriptBytes = 1 << 20
 
 // conversationParticipant 由当前成员关系定义访问权；过滤 Bot 只能进一步缩小结果，不能替换调用身份。
@@ -87,7 +90,8 @@ func (s *Conversations) SearchTranscript(ctx context.Context, botID string, inpu
 		snippet = "substr(f.content,MAX(1,instr(lower(f.content),lower(?))-60),240)"
 		args = append([]any{terms[0]}, args...)
 	}
-	where := match + " AND m.status!='streaming' AND " + conversationParticipant
+	where := match + " AND " + VisibleMessageSQL + " AND m.status!='streaming' AND " + conversationParticipant
+	args = append(args, botID, botID)
 	args = append(args, participantArgs(botID)...)
 	if input.BotID != "" {
 		where += " AND " + conversationParticipant
@@ -150,29 +154,29 @@ func (s *Conversations) ReadTranscript(ctx context.Context, botID string, input 
 		var start int64
 		if input.AroundMessageID != "" {
 			var anchor int64
-			if err := tx.QueryRowContext(ctx, "SELECT seq FROM messages WHERE id=? AND conversation_id=? AND status!='streaming'", input.AroundMessageID, input.ConversationID).Scan(&anchor); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT seq FROM messages m WHERE id=? AND conversation_id=? AND status!='streaming' AND "+VisibleMessageSQL, input.AroundMessageID, input.ConversationID, botID, botID).Scan(&anchor); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
 					return domain.NewError(404, "CONVERSATION_MESSAGE_NOT_FOUND", "The anchor message is not a completed message in this conversation.")
 				}
 				return err
 			}
-			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(seq),0) FROM (SELECT seq FROM messages WHERE conversation_id=? AND seq<=? AND status!='streaming' ORDER BY seq DESC LIMIT ?)", input.ConversationID, anchor, input.Limit/2+1).Scan(&start); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(seq),0) FROM (SELECT seq FROM messages m WHERE conversation_id=? AND seq<=? AND status!='streaming' AND "+VisibleMessageSQL+" ORDER BY seq DESC LIMIT ?)", input.ConversationID, anchor, botID, botID, input.Limit/2+1).Scan(&start); err != nil {
 				return err
 			}
 		} else {
-			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(seq),0) FROM (SELECT seq FROM messages WHERE conversation_id=? AND status!='streaming' ORDER BY seq DESC LIMIT ?)", input.ConversationID, input.Limit).Scan(&start); err != nil {
+			if err := tx.QueryRowContext(ctx, "SELECT COALESCE(MIN(seq),0) FROM (SELECT seq FROM messages m WHERE conversation_id=? AND status!='streaming' AND "+VisibleMessageSQL+" ORDER BY seq DESC LIMIT ?)", input.ConversationID, botID, botID, input.Limit).Scan(&start); err != nil {
 				return err
 			}
 		}
-		page := ` FROM messages m JOIN message_transcripts f ON f.message_id=m.id WHERE m.conversation_id=? AND m.seq>=? AND m.status!='streaming' ORDER BY m.seq LIMIT ?`
+		page := ` FROM messages m JOIN message_transcripts f ON f.message_id=m.id WHERE m.conversation_id=? AND m.seq>=? AND m.status!='streaming' AND ` + VisibleMessageSQL + ` ORDER BY m.seq LIMIT ?`
 		var size int64
-		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM (SELECT length(CAST(f.content AS BLOB)) AS size"+page+")", input.ConversationID, start, input.Limit).Scan(&size); err != nil {
+		if err := tx.QueryRowContext(ctx, "SELECT COALESCE(SUM(size),0) FROM (SELECT length(CAST(f.content AS BLOB)) AS size"+page+")", input.ConversationID, start, botID, botID, input.Limit).Scan(&size); err != nil {
 			return err
 		}
 		if size > maxTranscriptBytes {
 			return domain.NewError(413, "CONVERSATION_TOO_LARGE", "This context exceeds one MiB. Read a smaller window around a returned message ID.")
 		}
-		rows, err := tx.QueryContext(ctx, "SELECT m.id,m.seq,m.sender_kind,m.sender_bot_id,f.content,m.created_at"+page, input.ConversationID, start, input.Limit)
+		rows, err := tx.QueryContext(ctx, "SELECT m.id,m.seq,m.sender_kind,m.sender_bot_id,f.content,m.created_at"+page, input.ConversationID, start, botID, botID, input.Limit)
 		if err != nil {
 			return err
 		}
@@ -190,7 +194,7 @@ func (s *Conversations) ReadTranscript(ctx context.Context, botID string, input 
 			return err
 		}
 		if len(transcript.Messages) > 0 {
-			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=? AND seq<? AND status!='streaming'),EXISTS(SELECT 1 FROM messages WHERE conversation_id=? AND seq>? AND status!='streaming')`, input.ConversationID, transcript.Messages[0].Seq, input.ConversationID, transcript.Messages[len(transcript.Messages)-1].Seq).Scan(&transcript.HasBefore, &transcript.HasAfter); err != nil {
+			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM messages m WHERE conversation_id=? AND seq<? AND status!='streaming' AND `+VisibleMessageSQL+`),EXISTS(SELECT 1 FROM messages m WHERE conversation_id=? AND seq>? AND status!='streaming' AND `+VisibleMessageSQL+`)`, input.ConversationID, transcript.Messages[0].Seq, botID, botID, input.ConversationID, transcript.Messages[len(transcript.Messages)-1].Seq, botID, botID).Scan(&transcript.HasBefore, &transcript.HasAfter); err != nil {
 				return err
 			}
 		}

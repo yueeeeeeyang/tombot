@@ -35,7 +35,7 @@ describe('客户端交互', () => {
     const avatar = screen.getByRole('button', { name: '小黑' }).querySelector('.avatar')
     expect(avatar).toHaveAttribute('data-pose', 'idle')
     await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '只是草稿')
-    await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
+    await user.click(screen.getByRole('button', { name: '发送' }))
     expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
     expect(screen.queryByText(/· 未发送/)).not.toBeInTheDocument()
     expect(avatar).toHaveAttribute('data-pose', 'idle')
@@ -74,7 +74,7 @@ describe('客户端交互', () => {
     const user = userEvent.setup()
     const first = render(<App />)
     await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '一起设计客户端')
-    await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
+    await user.click(screen.getByRole('button', { name: '发送' }))
     expect(within(screen.getByRole('log')).getByText('一起设计客户端')).toBeInTheDocument()
     expect(screen.queryByText(/· 未发送/)).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
@@ -119,6 +119,7 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '新建' }))
     await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
     const avatars = screen.getByRole('group', { name: '预设猫咪头像' })
+    expect(screen.queryByRole('textbox', { name: /一句话介绍/ })).toBeNull()
     expect(screen.queryByText('预设头像')).not.toBeInTheDocument()
     expect(within(avatars).getAllByRole('button')).toHaveLength(8)
     await user.click(within(avatars).getByRole('button', { name: '三花猫' }))
@@ -140,6 +141,7 @@ describe('客户端交互', () => {
     expect(screen.getByRole('textbox', { name: '给创作搭档发消息' })).toBeInTheDocument()
     expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.name).toBe('创作搭档')
     expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.avatar).toBe('calico')
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.description).toBe('')
     expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.group).toBe('游戏开发')
     expect(
       screen.getByRole('button', { name: '查看创作搭档资料' }).querySelector('.avatar'),
@@ -203,7 +205,7 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '搜索助手和消息' }))
     await user.click(screen.getByRole('combobox', { name: '搜索内容' }))
     await user.keyboard('{ArrowUp}')
-    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('整理助手')
+    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('模型设置')
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('option', { selected: true })).toHaveTextContent('小黑')
     await user.keyboard('{Control>}2{/Control}')
@@ -385,7 +387,7 @@ describe('客户端交互', () => {
     fireEvent.change(screen.getByRole('textbox', { name: '给小黑发消息' }), {
       target: { value: '<img src=x onerror=alert(1)>' },
     })
-    await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
+    await user.click(screen.getByRole('button', { name: '发送' }))
     expect(
       within(screen.getByRole('log')).getByText('<img src=x onerror=alert(1)>'),
     ).toBeInTheDocument()

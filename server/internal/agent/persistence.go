@@ -116,7 +116,7 @@ func (r *Runtime) finish(ctx context.Context, run domain.Run, status, code strin
 		if err := tx.QueryRowContext(ctx, "SELECT cost_micro FROM turns WHERE id=?", run.TurnID).Scan(&cost); err != nil {
 			return err
 		}
-		if _, err := bus.Append(ctx, tx, "run.status", run.ConversationID, map[string]string{"run_id": run.ID, "status": status}); err != nil {
+		if _, err := bus.Append(ctx, tx, "run.status", run.ConversationID, map[string]string{"run_id": run.ID, "turn_id": run.TurnID, "bot_id": run.BotID, "status": status}); err != nil {
 			return err
 		}
 		if !isGroup {

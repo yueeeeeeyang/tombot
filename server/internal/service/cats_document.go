@@ -54,16 +54,17 @@ type Workspace struct {
 
 // Agent 是侧栏里的一只猫咪。模型标识来自界面目录，不等于供应商的模型名称。
 type Agent struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Description string        `json:"description"`
-	Group       string        `json:"group"`
-	Avatar      string        `json:"avatar"`
-	ModelID     string        `json:"modelId"`
-	Messages    []ChatMessage `json:"messages"`
-	Draft       string        `json:"draft"`
-	Artifacts   []Artifact    `json:"artifacts"`
-	ComputerURL string        `json:"computerUrl"`
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	Description  string        `json:"description"`
+	Group        string        `json:"group"`
+	Avatar       string        `json:"avatar"`
+	CustomAvatar string        `json:"customAvatar,omitempty"`
+	ModelID      string        `json:"modelId"`
+	Messages     []ChatMessage `json:"messages"`
+	Draft        string        `json:"draft"`
+	Artifacts    []Artifact    `json:"artifacts"`
+	ComputerURL  string        `json:"computerUrl"`
 }
 
 // MessageAttachment 是气泡上的图片或文件。文件本身在工作区，这里只保留定位信息。
@@ -219,6 +220,11 @@ func validateAgent(agent *Agent, messageIDs map[string]struct{}) error {
 	}
 	if _, ok := avatars[agent.Avatar]; !ok {
 		return invalidWorkspace("请选择预设猫咪头像")
+	}
+	var avatarErr error
+	agent.CustomAvatar, avatarErr = normalizeCustomAvatar(agent.CustomAvatar)
+	if avatarErr != nil {
+		return avatarErr
 	}
 	if !validCatalogOrNamedModel(agent.ModelID) {
 		return invalidWorkspace("请选择列表中的模型")

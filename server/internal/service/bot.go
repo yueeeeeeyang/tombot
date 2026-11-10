@@ -117,7 +117,7 @@ func validateBot(bot *domain.Bot) error {
 	return nil
 }
 
-const botColumns = `b.id,b.name,b.avatar_path,b.role_title,b.soul,b.model_id,b.tool_policy_json,b.messaging_policy_json,b.workspace_dir,b.accent_hue,b.is_archived,b.created_at,b.updated_at,c.id,
+const botColumns = `b.id,b.name,b.avatar_path,CASE WHEN b.desktop_id IS NOT NULL THEN b.avatar_preset ELSE '' END,b.role_title,b.soul,b.model_id,b.tool_policy_json,b.messaging_policy_json,b.workspace_dir,b.accent_hue,b.is_archived,b.created_at,b.updated_at,c.id,
  CASE WHEN EXISTS(SELECT 1 FROM runs WHERE bot_id=b.id AND status='waiting_approval') THEN 'waiting_approval' WHEN EXISTS(SELECT 1 FROM runs WHERE bot_id=b.id AND status IN('running','queued')) THEN 'running' ELSE 'idle' END`
 const botJoin = " FROM bots b JOIN conversations c ON c.bot_id=b.id AND c.kind='direct' AND c.source!='routine' "
 
@@ -125,7 +125,7 @@ func scanBot(row scanner) (domain.Bot, error) {
 	var bot domain.Bot
 	var tools, messaging string
 	var created, updated int64
-	err := row.Scan(&bot.ID, &bot.Name, &bot.AvatarPath, &bot.RoleTitle, &bot.Soul, &bot.ModelID, &tools, &messaging, &bot.WorkspaceDir, &bot.AccentHue, &bot.IsArchived, &created, &updated, &bot.ConversationID, &bot.Status)
+	err := row.Scan(&bot.ID, &bot.Name, &bot.AvatarPath, &bot.AvatarPreset, &bot.RoleTitle, &bot.Soul, &bot.ModelID, &tools, &messaging, &bot.WorkspaceDir, &bot.AccentHue, &bot.IsArchived, &created, &updated, &bot.ConversationID, &bot.Status)
 	if err != nil {
 		return bot, notFound(err)
 	}
@@ -471,7 +471,7 @@ func requireBotGroupIdle(ctx context.Context, tx *sql.Tx, id string) error {
 
 // ToolNames 返回设置页可配置的工具标识，客户端不再维护第二份白名单。
 func ToolNames() []string {
-	names := []string{"file_read", "file_write", "file_edit", "file_list", "file_glob", "file_search", "computer_shell", "terminal_session", "browser", "message_bot", "post_to_group", "group_members", "delegate_task", "memory_search", "memory_write", "memory_delete", "conversation_search", "conversation_read", "ask_user", "routine_list", "routine_upsert", "routine_delete"}
+	names := []string{"file_read", "file_write", "file_edit", "file_list", "file_glob", "file_search", "computer_shell", "terminal_session", "browser", "message_bot", "message_user", "post_to_group", "group_members", "delegate_task", "memory_search", "memory_write", "memory_delete", "conversation_search", "conversation_read", "ask_user", "routine_list", "routine_upsert", "routine_delete"}
 	sort.Strings(names)
 	return names
 }

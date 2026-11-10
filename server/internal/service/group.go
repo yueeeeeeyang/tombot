@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -20,38 +21,33 @@ type Groups struct {
 func NewGroups(db *sql.DB, events *bus.Bus) *Groups { return &Groups{db: db, events: events} }
 
 type GroupInput struct {
-	Name             string   `json:"name"`
-	Purpose          string   `json:"purpose"`
-	Routing          string   `json:"routing"`
-	CoordinatorBotID *string  `json:"coordinator_bot_id"`
-	Members          []string `json:"members"`
-	MaxSpeakers      *int     `json:"max_speakers"`
-	MaxCostMicro     *int64   `json:"max_cost_micro"`
-	AutoSummary      *bool    `json:"auto_summary"`
+	Name         string   `json:"name"`
+	Purpose      string   `json:"purpose"`
+	Members      []string `json:"members"`
+	MaxCostMicro *int64   `json:"max_cost_micro"`
 }
 type GroupPatch struct {
-	Revision         int64          `json:"revision"`
-	Name             Field[string]  `json:"name"`
-	Purpose          Field[string]  `json:"purpose"`
-	Routing          Field[string]  `json:"routing"`
-	CoordinatorBotID Field[*string] `json:"coordinator_bot_id"`
-	MaxSpeakers      Field[int]     `json:"max_speakers"`
-	MaxCostMicro     Field[int64]   `json:"max_cost_micro"`
-	AutoSummary      Field[bool]    `json:"auto_summary"`
+	Revision     int64         `json:"revision"`
+	Name         Field[string] `json:"name"`
+	Purpose      Field[string] `json:"purpose"`
+	MaxCostMicro Field[int64]  `json:"max_cost_micro"`
 }
 type GroupMembersInput struct {
-	Revision  int64             `json:"revision"`
-	BotIDs    []string          `json:"bot_ids"`
-	RoleNotes map[string]string `json:"role_notes,omitempty"`
+	Revision int64    `json:"revision"`
+	BotIDs   []string `json:"bot_ids"`
 }
 
-const groupColumns = `g.id,g.name,g.purpose,g.coordinator_bot_id,g.routing,g.max_speakers,g.max_cost_micro,g.auto_summary,g.revision,c.id,g.created_at,g.updated_at`
+const groupColumns = `g.id,g.name,g.purpose,g.avatar_presets_json,g.max_cost_micro,g.revision,c.id,g.created_at,g.updated_at`
 const groupJoin = ` FROM groups g JOIN conversations c ON c.group_id=g.id AND c.kind='group' AND c.source!='routine' `
 
 func scanGroup(row scanner) (group domain.Group, err error) {
 	var created, updated int64
 	var budget sql.NullInt64
-	err = row.Scan(&group.ID, &group.Name, &group.Purpose, &group.CoordinatorBotID, &group.Routing, &group.MaxSpeakers, &budget, &group.AutoSummary, &group.Revision, &group.ConversationID, &created, &updated)
+	var avatars string
+	err = row.Scan(&group.ID, &group.Name, &group.Purpose, &avatars, &budget, &group.Revision, &group.ConversationID, &created, &updated)
+	if err == nil {
+		err = json.Unmarshal([]byte(avatars), &group.AvatarPresets)
+	}
 	group.MaxCostMicro = domain.DefaultGroupBudgetMicro
 	if budget.Valid {
 		group.MaxCostMicro = budget.Int64
@@ -67,14 +63,14 @@ func ReadGroup(ctx context.Context, tx *sql.Tx, id string) (domain.Group, error)
 	if err != nil {
 		return group, err
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT b.id,b.name,b.role_title,m.role_note,b.accent_hue,b.is_archived FROM group_members m JOIN bots b ON b.id=m.bot_id WHERE m.group_id=? ORDER BY m.joined_at,b.id LIMIT ?`, id, domain.MaxGroupMembers+1)
+	rows, err := tx.QueryContext(ctx, `SELECT b.id,b.name,b.role_title,b.accent_hue,b.is_archived FROM group_members m JOIN bots b ON b.id=m.bot_id WHERE m.group_id=? ORDER BY m.joined_at,b.id LIMIT ?`, id, domain.MaxGroupMembers+1)
 	if err != nil {
 		return group, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var member domain.GroupMember
-		if err = rows.Scan(&member.BotID, &member.Name, &member.RoleTitle, &member.RoleNote, &member.AccentHue, &member.IsArchived); err != nil {
+		if err = rows.Scan(&member.BotID, &member.Name, &member.RoleTitle, &member.AccentHue, &member.IsArchived); err != nil {
 			return group, err
 		}
 		group.Members = append(group.Members, member)
@@ -114,25 +110,8 @@ func (s *Groups) List(ctx context.Context, cursor string, limit int) ([]domain.G
 func validateGroup(group *domain.Group) error {
 	group.Name = strings.TrimSpace(group.Name)
 	group.Purpose = strings.TrimSpace(group.Purpose)
-	if group.Name == "" || len(group.Name) > 200 || len(group.Purpose) > 8192 || group.MaxSpeakers < 1 || group.MaxSpeakers > domain.MaxGroupSpeakers || group.MaxCostMicro < 1 || group.MaxCostMicro > 1_000_000_000 {
+	if group.Name == "" || len(group.Name) > 200 || len(group.Purpose) > 8192 || group.MaxCostMicro < 1 || group.MaxCostMicro > 1_000_000_000 {
 		return badInput("Invalid group name, purpose, speaker limit, or budget.")
-	}
-	if group.Routing != "mention" && group.Routing != "coordinator" && group.Routing != "all" {
-		return badInput("Unknown group routing policy.")
-	}
-	if group.Routing == "coordinator" && group.CoordinatorBotID == nil {
-		return badInput("Coordinator routing requires a coordinator.")
-	}
-	if group.CoordinatorBotID != nil {
-		found := false
-		for _, member := range group.Members {
-			if member.BotID == *group.CoordinatorBotID && !member.IsArchived {
-				found = true
-			}
-		}
-		if !found {
-			return badInput("The coordinator must be an active group member.")
-		}
 	}
 	return nil
 }
@@ -151,18 +130,9 @@ func validateMemberIDs(ids []string) error {
 	return nil
 }
 
-func addGroupMembers(ctx context.Context, tx *sql.Tx, groupID string, ids []string, notes map[string]string) error {
+func addGroupMembers(ctx context.Context, tx *sql.Tx, groupID string, ids []string) error {
 	if err := validateMemberIDs(ids); err != nil {
 		return err
-	}
-	allowedNotes := map[string]bool{}
-	for _, id := range ids {
-		allowedNotes[id] = true
-	}
-	for id, note := range notes {
-		if !allowedNotes[id] || len(note) > 2000 {
-			return badInput("Role notes must refer to added members and contain at most 2000 bytes.")
-		}
 	}
 	for _, id := range ids {
 		var archived, accepts bool
@@ -172,8 +142,7 @@ func addGroupMembers(ctx context.Context, tx *sql.Tx, groupID string, ids []stri
 		if archived || !accepts {
 			return domain.NewError(403, "GROUP_INVITE_DENIED", "The bot does not accept group invitations.")
 		}
-		_, supplied := notes[id]
-		if _, err := tx.ExecContext(ctx, `INSERT INTO group_members(group_id,bot_id,role_note,joined_at) VALUES(?,?,?,?) ON CONFLICT(group_id,bot_id) DO UPDATE SET role_note=CASE WHEN ? THEN excluded.role_note ELSE group_members.role_note END`, groupID, id, notes[id], time.Now().UnixMilli(), supplied); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO group_members(group_id,bot_id,joined_at) VALUES(?,?,?) ON CONFLICT(group_id,bot_id) DO NOTHING`, groupID, id, time.Now().UnixMilli()); err != nil {
 			return err
 		}
 	}
@@ -192,27 +161,33 @@ func (s *Groups) Create(ctx context.Context, input GroupInput, actor string) (gr
 		return
 	}
 	now := time.Now().UTC()
-	group = domain.Group{ID: ids.New(), ConversationID: ids.New(), Name: input.Name, Purpose: input.Purpose, CoordinatorBotID: input.CoordinatorBotID, Routing: input.Routing, MaxSpeakers: 3, MaxCostMicro: domain.DefaultGroupBudgetMicro, AutoSummary: true, Revision: 1, CreatedAt: now, UpdatedAt: now}
-	if group.Routing == "" {
-		group.Routing = "mention"
-	}
-	if input.MaxSpeakers != nil {
-		group.MaxSpeakers = *input.MaxSpeakers
-	}
+	group = domain.Group{ID: ids.New(), ConversationID: ids.New(), Name: input.Name, Purpose: input.Purpose, MaxCostMicro: domain.DefaultGroupBudgetMicro, Revision: 1, CreatedAt: now, UpdatedAt: now}
 	if input.MaxCostMicro != nil {
 		group.MaxCostMicro = *input.MaxCostMicro
 	}
-	if input.AutoSummary != nil {
-		group.AutoSummary = *input.AutoSummary
-	}
 	err = store.Transact(ctx, s.db, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO groups(id,name,purpose,coordinator_bot_id,routing,max_speakers,max_cost_micro,auto_summary,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, group.ID, group.Name, group.Purpose, group.CoordinatorBotID, group.Routing, group.MaxSpeakers, group.MaxCostMicro, group.AutoSummary, now.UnixMilli(), now.UnixMilli()); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO groups(id,name,purpose,max_cost_micro,created_at,updated_at) VALUES(?,?,?,?,?,?)`, group.ID, group.Name, group.Purpose, group.MaxCostMicro, now.UnixMilli(), now.UnixMilli()); err != nil {
 			return store.ConstraintError(err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO conversations(id,kind,source,group_id,title,created_at,updated_at) VALUES(?,'group','user',?,?,?,?)`, group.ConversationID, group.ID, group.Name, now.UnixMilli(), now.UnixMilli()); err != nil {
 			return err
 		}
-		if err := addGroupMembers(ctx, tx, group.ID, input.Members, nil); err != nil {
+		if err := addGroupMembers(ctx, tx, group.ID, input.Members); err != nil {
+			return err
+		}
+		avatars := []string{}
+		for _, id := range input.Members[:min(4, len(input.Members))] {
+			var preset string
+			if err := tx.QueryRowContext(ctx, "SELECT CASE WHEN custom_avatar!='' THEN custom_avatar WHEN avatar_preset='' THEN 'bombay' ELSE avatar_preset END FROM bots WHERE id=?", id).Scan(&preset); err != nil {
+				return err
+			}
+			avatars = append(avatars, preset)
+		}
+		encoded, err := json.Marshal(avatars)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE groups SET avatar_presets_json=? WHERE id=?", string(encoded), group.ID); err != nil {
 			return err
 		}
 		var readErr error
@@ -277,27 +252,15 @@ func (s *Groups) Update(ctx context.Context, id string, patch GroupPatch, actor 
 		if patch.Purpose.Set {
 			group.Purpose = patch.Purpose.Value
 		}
-		if patch.Routing.Set {
-			group.Routing = patch.Routing.Value
-		}
-		if patch.CoordinatorBotID.Set {
-			group.CoordinatorBotID = patch.CoordinatorBotID.Value
-		}
-		if patch.MaxSpeakers.Set {
-			group.MaxSpeakers = patch.MaxSpeakers.Value
-		}
 		if patch.MaxCostMicro.Set {
 			group.MaxCostMicro = patch.MaxCostMicro.Value
-		}
-		if patch.AutoSummary.Set {
-			group.AutoSummary = patch.AutoSummary.Value
 		}
 		if err = validateGroup(&group); err != nil {
 			return err
 		}
 		group.Revision++
 		group.UpdatedAt = time.Now().UTC()
-		if _, err = tx.ExecContext(ctx, `UPDATE groups SET name=?,purpose=?,coordinator_bot_id=?,routing=?,max_speakers=?,max_cost_micro=?,auto_summary=?,revision=?,updated_at=? WHERE id=?`, group.Name, group.Purpose, group.CoordinatorBotID, group.Routing, group.MaxSpeakers, group.MaxCostMicro, group.AutoSummary, group.Revision, group.UpdatedAt.UnixMilli(), id); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE groups SET name=?,purpose=?,max_cost_micro=?,revision=?,updated_at=? WHERE id=?`, group.Name, group.Purpose, group.MaxCostMicro, group.Revision, group.UpdatedAt.UnixMilli(), id); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE conversations SET title=?,updated_at=? WHERE id=?", group.Name, group.UpdatedAt.UnixMilli(), group.ConversationID); err != nil {
@@ -322,13 +285,13 @@ func (s *Groups) ChangeMembers(ctx context.Context, id string, input GroupMember
 			return err
 		}
 		if remove != "" {
-			if group.CoordinatorBotID != nil && *group.CoordinatorBotID == remove {
-				return domain.NewError(409, "GROUP_COORDINATOR_REQUIRED", "Assign or clear the coordinator before removing this member.")
+			if len(group.Members) <= 1 {
+				return domain.NewError(409, "GROUP_LAST_MEMBER", "A group must retain at least one member.")
 			}
 			if err = store.RequireChanged(tx.ExecContext(ctx, "DELETE FROM group_members WHERE group_id=? AND bot_id=?", id, remove)); err != nil {
 				return err
 			}
-		} else if err = addGroupMembers(ctx, tx, id, input.BotIDs, input.RoleNotes); err != nil {
+		} else if err = addGroupMembers(ctx, tx, id, input.BotIDs); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE groups SET revision=revision+1,updated_at=? WHERE id=?", time.Now().UnixMilli(), id); err != nil {

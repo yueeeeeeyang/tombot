@@ -19,7 +19,8 @@ func messagingDefinitions() map[string]definition {
 	text := map[string]string{"type": "string"}
 	paths := map[string]any{"type": "array", "items": text, "maxItems": domain.MaxMessageContextFiles}
 	return map[string]definition{
-		"message_bot":   {"Send explicit text to another bot. The sender must have can_initiate permission and the recipient must accept direct messages. Defaults to waiting for a reply; reply_required=false returns after delivery while the child task remains bounded by the parent's time and budget. Up to four hops; no cycles. context_paths may contain up to eight files under shared/ (combined text at most 32768 bytes). Private prompts, memory and tool history are never forwarded.", map[string]any{"bot_id": text, "message": text, "reply_required": map[string]string{"type": "boolean"}, "context_paths": paths}, []string{"bot_id", "message"}, false},
+		"message_user":  {"Send your own message directly to the human user in your own chat. The human has no bot ID. Use this when asked to notify or send something to the user; never message a bot named Tom as a substitute. This only posts text and does not start another bot. After success do not send the same text again.", map[string]any{"message": text}, []string{"message"}, false},
+		"message_bot":   {"Ask a named bot to execute an explicit task using its own tools. Forward the task before doing the work yourself. When the human asks the recipient to send the result directly to them, set deliver_to_user=true: the runtime delivers the recipient's own final answer to the human in that bot's chat, and returns only a delivery receipt. The human is not a bot; never select Tom or any other bot as a substitute for the user. The sender must have can_initiate permission and the recipient must accept direct messages. Defaults to waiting for a reply; reply_required=false returns after delivery while the child task remains bounded by the parent's time and budget. Up to four hops; no cycles. context_paths may contain up to eight files under shared/ (combined text at most 32768 bytes). Private prompts, memory and tool history are never forwarded.", map[string]any{"bot_id": text, "message": text, "reply_required": map[string]string{"type": "boolean"}, "deliver_to_user": map[string]string{"type": "boolean"}, "context_paths": paths}, []string{"bot_id", "message"}, false},
 		"delegate_task": {"Delegate one deliverable to another bot in a new child conversation. Waits for a structured result containing summary and verified shared artifact paths. Same messaging permissions, four-hop limit, inherited budget and deadline as message_bot. Put deliverables in shared/. context_paths may contain up to eight shared files with at most 32768 combined UTF-8 bytes.", map[string]any{"bot_id": text, "task": text, "context_paths": paths}, []string{"bot_id", "task"}, false},
 	}
 }
@@ -30,12 +31,13 @@ func (e *Executor) prepareMessaging(ctx context.Context, bot domain.Bot, name st
 		Message       string   `json:"message"`
 		Task          string   `json:"task"`
 		ReplyRequired *bool    `json:"reply_required"`
+		DeliverToUser bool     `json:"deliver_to_user"`
 		ContextPaths  []string `json:"context_paths"`
 	}
 	if err = json.Unmarshal(raw, &input); err != nil {
 		return call, domain.NewError(400, "INVALID_TOOL_INPUT", "Invalid messaging arguments.")
 	}
-	request := domain.BotMessageRequest{BotID: input.BotID, Message: strings.TrimSpace(input.Message), ReplyRequired: true, Delegation: name == "delegate_task", ContextFiles: []domain.ContextFile{}}
+	request := domain.BotMessageRequest{BotID: input.BotID, Message: strings.TrimSpace(input.Message), ReplyRequired: true, DeliverToUser: input.DeliverToUser, Delegation: name == "delegate_task", ContextFiles: []domain.ContextFile{}}
 	if input.ReplyRequired != nil {
 		request.ReplyRequired = *input.ReplyRequired
 	}

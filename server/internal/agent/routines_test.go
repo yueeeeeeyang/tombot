@@ -87,7 +87,7 @@ func TestRoutineGroupCompletionAndToolsUseActualConversation(t *testing.T) {
 		}
 		return provider.Usage{InputTokens: 2}, emit(provider.Event{Kind: "text_delta", Text: "群组例程进展"})
 	}), DefaultLimits())
-	group := createTestGroup(t, r, bot, "all", false, 1000)
+	group := createTestGroup(t, r, bot, 1000)
 	routines, routine := createAgentRoutine(t, r, service.RoutineInput{RoutineDefinition: domain.RoutineDefinition{Name: "群组晨会", Cron: "0 8 * * *", Prompt: "协同整理材料", Target: domain.RoutineTarget{GroupID: group.ID}}})
 	ctx := context.Background()
 	trigger, err := routines.RunNow(ctx, routine.ID, routine.Revision, "user")

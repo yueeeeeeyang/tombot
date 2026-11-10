@@ -120,7 +120,7 @@ function StatefulPanel({ agent }: { agent: Agent }) {
 }
 
 describe('会话顶部名称', () => {
-  it('箭头朝右并保留占位，显隐交给样式', () => {
+  it('箭头朝右，宽度与显隐交给样式控制', () => {
     renderPanel()
     const chevron = screen.getByRole('button', { name: '查看小黑资料' }).querySelector('svg')
     expect(chevron).toHaveClass('pill-chevron', 'lucide-chevron-right')
@@ -267,7 +267,7 @@ describe('消息气泡操作', () => {
     })
     await user.click(screen.getByRole('button', { name: '回复' }))
     expect(screen.getByText('回复').closest('.composer-reply')).toHaveTextContent('你好')
-    await user.click(screen.getByRole('button', { name: '保存为本地草稿' }))
+    await user.click(screen.getByRole('button', { name: '发送' }))
     expect(screen.getByText('回复').closest('.composer-reply')).toBeInTheDocument()
     expect(failed.onSave).toHaveBeenCalledWith('message-one', [])
     await user.click(screen.getByRole('button', { name: '取消回复' }))
@@ -280,7 +280,7 @@ describe('消息气泡操作', () => {
       <StatefulPanel agent={createAgent([createMessage({ content: '原来的想法' })], '接着说')} />,
     )
     await user.click(screen.getAllByRole('button', { name: '回复' })[0]!)
-    await user.click(screen.getAllByRole('button', { name: '保存为本地草稿' })[0]!)
+    await user.click(screen.getAllByRole('button', { name: '发送' })[0]!)
     const quote = screen.getByRole('button', { name: '查看原消息：原来的想法' })
     await user.click(quote)
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()

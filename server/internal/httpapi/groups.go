@@ -28,6 +28,17 @@ func (s *Server) groupRoutes(r chi.Router) {
 	r.Post("/groups", handleInput(s, 201, func(ctx context.Context, r *http.Request, input service.GroupInput) (any, error) {
 		return s.Groups.Create(ctx, input, actor(r))
 	}))
+	r.Get("/groups/{id}/artifacts", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
+		before := int64(0)
+		if raw := r.URL.Query().Get("before"); raw != "" {
+			var err error
+			before, err = strconv.ParseInt(raw, 10, 64)
+			if err != nil || before < 0 {
+				return nil, domain.NewError(400, "INVALID_INPUT", "Invalid artifact cursor.")
+			}
+		}
+		return s.Groups.Artifacts(ctx, chi.URLParam(r, "id"), before)
+	}))
 	r.Get("/groups/{id}", handleRead(s, func(ctx context.Context, r *http.Request) (any, error) {
 		return s.Groups.Get(ctx, chi.URLParam(r, "id"))
 	}))

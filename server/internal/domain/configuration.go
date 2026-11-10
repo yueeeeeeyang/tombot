@@ -54,6 +54,7 @@ type Bot struct {
 	ID              string          `json:"id"`
 	Name            string          `json:"name"`
 	AvatarPath      *string         `json:"avatar_path"`
+	AvatarPreset    string          `json:"-"`
 	RoleTitle       string          `json:"role_title"`
 	Soul            string          `json:"soul"`
 	ModelID         *string         `json:"model_id"`
@@ -111,6 +112,8 @@ type ToolResultBlock struct {
 	Artifact   *ArtifactRef `json:"artifact,omitempty"`
 }
 type Message struct {
+	Audience       []string       `json:"audience,omitempty"`
+	Mentions       []string       `json:"mentions,omitempty"`
 	ToolCalls      []ToolActivity `json:"tool_calls,omitempty"`
 	ID             string         `json:"id"`
 	ConversationID string         `json:"conversation_id"`

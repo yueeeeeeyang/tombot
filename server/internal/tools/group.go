@@ -13,15 +13,16 @@ import (
 )
 
 type groupInput struct {
-	GroupID string `json:"group_id"`
-	Message string `json:"message"`
+	Mentions []string `json:"mentions,omitempty"`
+	GroupID  string   `json:"group_id"`
+	Message  string   `json:"message"`
 }
 
 func groupDefinitions() map[string]definition {
 	text := map[string]string{"type": "string"}
 	return map[string]definition{
-		"group_members": {"Read public roles of active and archived members in a group you belong to. Does not read private prompts or memory.", map[string]any{"group_id": text}, []string{"group_id"}, false},
-		"post_to_group": {"Append public text to your current group turn without starting new work. Only available during a group member run; never use this to return from a direct message into a group. Message limit: 16384 UTF-8 bytes; at most 64 public messages per run, including ordinary replies.", map[string]any{"group_id": text, "message": text}, []string{"group_id", "message"}, false},
+		"group_members": {"Read the names and IDs of equal active and archived members in a group you belong to. Does not read private prompts or memory.", map[string]any{"group_id": text}, []string{"group_id"}, false},
+		"post_to_group": {"Post text in your current group turn. Optional mentions are exact member IDs or user for the administrator. Mentioned cats receive this message and can reply after you finish; never wait for them in this call. Without mentions the post inherits the current message audience. Only available during a group member run; never use this to return from a direct message into a group. Message limit: 16384 UTF-8 bytes; at most 64 public messages per run, including ordinary replies.", map[string]any{"group_id": text, "message": text, "mentions": map[string]any{"type": "array", "items": text, "maxItems": domain.MaxGroupMembers + 1}}, []string{"group_id", "message"}, false},
 	}
 }
 
@@ -55,7 +56,7 @@ func (e *Executor) invokeGroup(ctx context.Context, run domain.Run, callID, name
 		}
 		return group.Members, nil
 	}
-	message, err := groups.PostMessage(ctx, input.GroupID, callID, run, input.Message)
+	message, err := groups.PostMessage(ctx, input.GroupID, callID, run, input.Message, input.Mentions...)
 	if err != nil {
 		return nil, err
 	}

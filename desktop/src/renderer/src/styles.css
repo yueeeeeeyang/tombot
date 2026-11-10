@@ -1,3 +1,4 @@
+@import './styles/chat-content.css';
 @import url('./styles/theme.css');
 @import url('./styles/dialogs.css');
 @import url('./styles/sidebar.css');
@@ -378,8 +379,8 @@ button:disabled {
 .chat-agent-pill {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 10px 8px 8px;
+  gap: 0;
+  padding: 8px 14px;
   border-radius: 22px;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -393,15 +394,24 @@ button:disabled {
   white-space: nowrap;
   overflow: hidden;
 }
+.chat-agent-pill > .avatar + span {
+  margin-left: 8px;
+}
 .pill-chevron {
-  width: 14px;
+  width: 0;
+  margin-left: 0;
   color: var(--subtle);
   flex-shrink: 0;
   opacity: 0;
-  transition: opacity 160ms ease;
+  transition:
+    width 160ms ease,
+    margin-left 160ms ease,
+    opacity 160ms ease;
 }
 .chat-agent-pill:hover .pill-chevron,
 .chat-agent-pill:focus-visible .pill-chevron {
+  width: 14px;
+  margin-left: 8px;
   opacity: 1;
 }
 .chat-agent-pill:hover {
@@ -460,72 +470,6 @@ button:disabled {
 .message-bubble p + p {
   margin-top: 6px;
 }
-.greeting {
-  max-width: 76%;
-}
-.greeting > p:first-child {
-  font-size: 15px;
-  font-weight: 550;
-  margin-bottom: 4px;
-}
-.greeting-wave {
-  color: var(--subtle);
-  display: inline-block;
-  padding-left: 3px;
-}
-.guide-bubble {
-  padding: 14px 14px 12px;
-}
-.guide-heading {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.3px;
-  margin-bottom: 6px !important;
-}
-.guide-bubble > p:not(.guide-heading) {
-  color: var(--text-secondary);
-  font-size: 14px;
-}
-.guide-list {
-  list-style: none;
-  padding: 0;
-  margin: 16px 0 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.guide-list li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-.guide-dot {
-  display: block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  margin-top: 7px;
-  flex-shrink: 0;
-}
-.guide-dot--orange {
-  background: #f3a75b;
-}
-.guide-dot--blue {
-  background: #77a9e0;
-}
-.guide-dot--green {
-  background: #79b99c;
-}
-.guide-list strong {
-  font-size: 14px;
-  font-weight: 600;
-}
-.guide-list p {
-  font-size: 13px;
-  color: var(--text-secondary);
-  line-height: 1.6;
-  margin-top: 2px;
-}
 .local-note {
   border-top: 1px solid var(--border-strong);
   padding-top: 10px;
@@ -534,14 +478,6 @@ button:disabled {
   font-size: 11px;
   line-height: 1.7;
   color: var(--muted);
-}
-.local-note-dot {
-  width: 5px;
-  height: 5px;
-  margin-top: 7px;
-  flex-shrink: 0;
-  border-radius: 50%;
-  background: var(--subtle);
 }
 .user-row {
   justify-content: flex-end;

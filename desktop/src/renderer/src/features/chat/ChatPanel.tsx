@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowUp, AudioLines, ChevronRight, Mic, Plus, X } from 'lucide-react'
+import { ArrowUp, ChevronRight, Mic, Plus, X } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import {
   MAX_MESSAGE_LENGTH,
@@ -8,6 +8,9 @@ import {
   type DmNotice,
   type MessageAttachment,
 } from '../workspace/model'
+import { WorkStatus } from './WorkStatus'
+import { useAttachments } from './useAttachments'
+import { pasteFiles } from './pasteFiles'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
 import { messageTimeSeparator } from './messageTime'
@@ -15,6 +18,8 @@ import { messageTimeSeparator } from './messageTime'
 type ChatPanelProps = {
   agent: Agent
   isBlocked: boolean
+  workSummary?: string
+  pendingMessageId?: string
   onDraft: (draft: string) => void
   onSave: (replyToId?: string, attachments?: MessageAttachment[]) => boolean
   onDelete: (messageId: string) => void
@@ -30,10 +35,12 @@ type ChatPanelProps = {
   onOpenDm?: (notice: DmNotice) => void
 }
 
-/** 渲染当前助手的使用指南、消息和输入区；不生成或伪造模型回复。 */
+/** 渲染当前助手的消息、工作状态和输入区。 */
 export function ChatPanel({
   agent,
   isBlocked,
+  workSummary,
+  pendingMessageId,
   onDraft,
   onSave,
   onDelete,
@@ -52,7 +59,16 @@ export function ChatPanel({
   const composer = useRef<HTMLTextAreaElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
-  const [pendingAttachments, setPendingAttachments] = useState<MessageAttachment[]>([])
+  const {
+    pending: pendingAttachments,
+    setPending: setPendingAttachments,
+    addFiles: uploadFiles,
+    isUploading,
+    uploading,
+  } = useAttachments(async (file) => {
+    if (!onUpload) throw new Error('还不能添加附件。')
+    return onUpload(file)
+  })
   const fileInput = useRef<HTMLInputElement>(null)
   const [menu, setMenu] = useState<MessageMenuAnchor>()
   const [replyToId, setReplyToId] = useState<string>()
@@ -104,7 +120,14 @@ export function ChatPanel({
     }
   }
   function submitDraft(): void {
-    if ((!agent.draft.trim() && pendingAttachments.length === 0) || isBlocked) return
+    if (
+      (!agent.draft.trim() && pendingAttachments.length === 0) ||
+      uploading.current ||
+      isBlocked ||
+      workSummary !== undefined ||
+      pendingMessageId !== undefined
+    )
+      return
     if (onSave(replyMessage?.id, pendingAttachments)) {
       setPendingAttachments([])
       setReplyToId(undefined)
@@ -112,25 +135,10 @@ export function ChatPanel({
     }
   }
   async function addFiles(files: File[]): Promise<void> {
-    if (!onUpload) {
-      onError('还不能添加附件。')
-      return
-    }
-    for (const file of files) {
-      if (pendingAttachments.length >= 4) {
-        onError('一条消息最多 4 个附件。')
-        return
-      }
-      try {
-        const uploaded = await onUpload(file)
-        setPendingAttachments((current) =>
-          current.length >= 4 || current.some((item) => item.path === uploaded.path)
-            ? current
-            : [...current, uploaded],
-        )
-      } catch (failure) {
-        onError((failure as Error).message)
-      }
+    try {
+      await uploadFiles(files)
+    } catch (failure) {
+      onError((failure as Error).message)
     }
   }
   function handleSubmit(event: FormEvent): void {
@@ -147,59 +155,18 @@ export function ChatPanel({
           aria-expanded={isDetailsOpen}
           aria-label={`查看${agent.name}资料`}
         >
-          <Avatar preset={agent.avatar} agentId={agent.id} size="small" />
+          <Avatar
+            preset={agent.avatar}
+            customAvatar={agent.customAvatar}
+            agentId={agent.id}
+            size="small"
+          />
           <span>{agent.name}</span>
           <ChevronRight className="pill-chevron" size={14} aria-hidden="true" />
         </button>
       </header>
       <section className="messages-scroll" aria-label={`与${agent.name}的会话`}>
         <div className="conversation">
-          <div className="message-row assistant-row">
-            <div className="message-bubble assistant-bubble greeting">
-              <p>
-                嗨，我是{agent.name}
-                <span className="greeting-wave"> ✦</span>
-              </p>
-              <p>
-                {agent.id === 'assistant'
-                  ? '很高兴见到你。想做点什么？一个灵感、一项计划，或者一个还没想明白的问题，都可以从这里开始。'
-                  : agent.description}
-              </p>
-            </div>
-          </div>
-          <div className="message-row assistant-row">
-            <div className="message-bubble assistant-bubble guide-bubble">
-              <p className="guide-heading">你的想法，有了一个新家。</p>
-              <p>把不同的事情，交给不同的搭档。每个助手都有独立的会话，让思路自然延续。</p>
-              <ul className="guide-list">
-                <li>
-                  <span className="guide-dot guide-dot--orange" />
-                  <div>
-                    <strong>一起创造</strong>
-                    <p>从策划、程序到美术和音效，让好点子逐渐成形。</p>
-                  </div>
-                </li>
-                <li>
-                  <span className="guide-dot guide-dot--blue" />
-                  <div>
-                    <strong>专注当下</strong>
-                    <p>写代码、整理资讯，或是理清手边的工作。</p>
-                  </div>
-                </li>
-                <li>
-                  <span className="guide-dot guide-dot--green" />
-                  <div>
-                    <strong>按你的方式来</strong>
-                    <p>点击侧栏的 ＋，创建属于你的专属助手。</p>
-                  </div>
-                </li>
-              </ul>
-              <div className="local-note">
-                <span className="local-note-dot" />
-                消息会保存到服务。配置模型后，助手才会回复。
-              </div>
-            </div>
-          </div>
           <div className="saved-messages" role="log" aria-label="消息" aria-live="polite">
             {agent.messages.map((message, index) => {
               const label = messageTimeSeparator(
@@ -224,6 +191,9 @@ export function ChatPanel({
                         {message.dmNotice.direction === 'received' ? '收到' : '已发消息给'}
                       </span>
                       <Avatar
+                        customAvatar={
+                          peers.find((peer) => peer.id === message.dmNotice?.peerId)?.customAvatar
+                        }
                         preset={
                           peers.find((peer) => peer.id === message.dmNotice?.peerId)?.avatar ??
                           'bombay'
@@ -239,6 +209,7 @@ export function ChatPanel({
                   ) : (
                     <ChatMessage
                       message={message}
+                      isPending={message.id === pendingMessageId}
                       isHighlighted={highlightedId === message.id}
                       onOpenMenu={openMenu}
                       onReply={startReply}
@@ -270,6 +241,7 @@ export function ChatPanel({
       )}
       <div
         className={`composer-area ${isAttachmentOpen ? 'is-dropping' : ''}`}
+        onPaste={(event) => pasteFiles(event, addFiles, onError)}
         onDragOver={(event) => {
           event.preventDefault()
           setAttachmentOpen(true)
@@ -281,6 +253,7 @@ export function ChatPanel({
           void addFiles([...event.dataTransfer.files])
         }}
       >
+        {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
         {pendingAttachments.length > 0 && (
           <div className="composer-files">
             {pendingAttachments.map((item) => (
@@ -361,27 +334,21 @@ export function ChatPanel({
           >
             <Mic size={18} strokeWidth={1.8} />
           </button>
-          {agent.draft.trim() || pendingAttachments.length > 0 ? (
-            <button
-              className="composer-send"
-              type="submit"
-              disabled={isBlocked}
-              aria-label="保存为本地草稿"
-              title="保存为本地草稿"
-            >
-              <ArrowUp size={18} />
-            </button>
-          ) : (
-            <button
-              className="composer-voice"
-              type="button"
-              disabled
-              aria-label="语音对话（等待服务端接入）"
-              title="语音对话将在服务端接入后可用"
-            >
-              <AudioLines size={18} />
-            </button>
-          )}
+          <button
+            className="composer-send"
+            type="submit"
+            disabled={
+              isUploading ||
+              isBlocked ||
+              workSummary !== undefined ||
+              pendingMessageId !== undefined ||
+              (!agent.draft.trim() && pendingAttachments.length === 0)
+            }
+            aria-label="发送"
+            title="发送"
+          >
+            <ArrowUp size={18} />
+          </button>
         </form>
       </div>
     </main>

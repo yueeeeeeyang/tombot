@@ -63,8 +63,7 @@ func TestRoutineHTTPApprovalManualBotGroupAndHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	summary := false
-	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "例程小组", Routing: "all", Members: []string{bot.ID}, AutoSummary: &summary}, "user")
+	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "例程小组", Members: []string{bot.ID}}, "user")
 	if err != nil {
 		t.Fatal(err)
 	}

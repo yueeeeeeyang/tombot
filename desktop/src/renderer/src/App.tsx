@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
-import { installAgentActivityEvents, setAgentActivity } from './features/avatars/activity'
+import type { GroupSummary } from './features/desktop/backend'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { installAgentActivityEvents } from './features/avatars/activity'
 import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { CatSidePanel } from './features/chat/CatSidePanel'
 import { ChatPanel } from './features/chat/ChatPanel'
+import { useWorkActivity } from './features/chat/useWorkActivity'
 import {
   ConversationPanel,
   DmThreadDialog,
@@ -13,7 +15,6 @@ import {
 import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   addAgent,
-  insertDmNotice,
   saveMessage,
   setAgentComputerUrl,
   setAgentModel,
@@ -54,6 +55,7 @@ import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResiz
 import { type SettingsSection } from './features/settings/settings'
 import { useServerSettings } from './features/settings/useServerSettings'
 import { getModelOptions } from './features/models/modelOptions'
+import { useConnectionStatus } from './features/session/useConnectionStatus'
 import { useSession } from './features/session/useSession'
 import { SessionFrame, SessionGate } from './features/session/SessionGate'
 
@@ -70,7 +72,8 @@ export default function App() {
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
 function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
-  const { workspace, commit, deliver, error, isBlocked, ready } = useWorkspace()
+  const { workspace, commit, deliver, receive, error, isBlocked, ready } = useWorkspace()
+  const connectionStatus = useConnectionStatus()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_WIDTH.default)
@@ -91,52 +94,56 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   } = useServerSettings()
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
-  const [chatGroups, setChatGroups] = useState<Array<{ id: string; name: string }>>([])
+  const [chatGroups, setChatGroups] = useState<GroupSummary[]>([])
   const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
-  const [liveReply, setLiveReply] = useState<{ agentId: string; content: string }>()
+  const [liveReplies, setLiveReplies] = useState<Record<string, string>>({})
+  const { workStates, receiveActivity, clearActivity } = useWorkActivity()
+  const [pendingMessages, setPendingMessages] = useState<Record<string, string>>({})
+  const pendingAgents = useRef(new Set<string>())
 
-  function startDelivery(agentId: string, messageId: string, quietWhenUnconfigured: boolean): void {
-    if (settingsDraft.baseUrl.trim() && settingsDraft.modelName.trim()) {
-      setAgentActivity(agentId, 'working')
-    }
-    let processLine = ''
+  function startDelivery(
+    agentId: string,
+    messageId: string,
+    quietWhenUnconfigured: boolean,
+    isWelcome = false,
+  ): void {
+    if (pendingAgents.current.has(agentId)) return
+    pendingAgents.current.add(agentId)
+    const source = crypto.randomUUID()
+    setPendingMessages((current) => ({ ...current, [agentId]: messageId }))
     let reply = ''
-    void deliver(agentId, messageId, (streamEvent) => {
-      if (
-        streamEvent.type === 'dm' &&
-        streamEvent.messageId &&
-        streamEvent.peerId &&
-        streamEvent.conversationId
-      ) {
-        const notice: DmNotice = {
-          direction: streamEvent.direction ?? 'sent',
-          peerId: streamEvent.peerId,
-          peerName: streamEvent.peerName ?? streamEvent.peerId,
-          conversationId: streamEvent.conversationId,
+    void deliver(
+      agentId,
+      messageId,
+      (streamEvent) => {
+        receiveActivity(source, streamEvent)
+        if (streamEvent.type === 'delta') {
+          reply += streamEvent.text
+          setLiveReplies((current) => ({ ...current, [agentId]: reply }))
         }
-        commit((previous) =>
-          insertDmNotice(previous, agentId, {
-            ...notice,
-            id: streamEvent.messageId!,
-            createdAt: new Date().toISOString(),
-          }),
-        )
-        return
-      }
-      if (streamEvent.type === 'process') processLine = streamEvent.text
-      else if (streamEvent.type === 'delta') reply += streamEvent.text
-      const content = [processLine, reply].filter((part) => part !== '').join('\n')
-      setLiveReply({ agentId, content })
-    }).then((result) => {
-      setLiveReply(undefined)
-      setAgentActivity(agentId, 'idle')
-      void window.desktop?.backend
-        .listGroups?.()
-        .then(setChatGroups)
-        .catch(() => undefined)
-      if (result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) return
-      if (result.message) setNotice(result.message)
-    })
+      },
+      isWelcome,
+    )
+      .then((result) => {
+        if (!(result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) && result.message)
+          setNotice(result.message)
+        refreshRooms()
+      })
+      .catch((failure: Error) => setNotice(failure.message))
+      .finally(() => {
+        pendingAgents.current.delete(agentId)
+        setLiveReplies((current) => {
+          const next = { ...current }
+          delete next[agentId]
+          return next
+        })
+        setPendingMessages((current) => {
+          const next = { ...current }
+          delete next[agentId]
+          return next
+        })
+        clearActivity(source)
+      })
   }
   const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
   const [returnToRecruit, setReturnToRecruit] = useState(false)
@@ -164,7 +171,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     void backend
       ?.listGroups?.()
       .then((rows) => setChatGroups(rows))
-      .catch(() => undefined)
+      .catch((failure: Error) => setNotice(failure.message))
   }, [])
   useEffect(() => {
     if (ready) refreshRooms()
@@ -224,7 +231,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   }
   function createAgent(profile: NewAgent, model: { label: string }): void {
     const id = crypto.randomUUID()
-    commit((previous) => addAgent(previous, profile, id, model.label))
+    const saved = commit((previous) => addAgent(previous, profile, id, model.label))
+    if (!saved) throw new Error('猫咪资料尚未保存，请重试保存。')
+    setSurface({ kind: 'agent', id })
+    setCatPanelOpen(false)
+    startDelivery(id, '', false, true)
     setRecruitProfile(undefined)
     setOpenDialog(null)
   }
@@ -450,22 +461,33 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         }}
         onCreateGroup={() => setOpenDialog('group')}
         serverUrl={serverUrl}
+        connectionStatus={connectionStatus}
+        onError={setNotice}
       />
       <SidebarResizer width={sidebarWidth} onChange={setSidebarWidth} onResizing={setResizing} />
       <div className="chat-stage">
         {surface.kind !== 'agent' ? (
           <ConversationPanel
+            onIncoming={receive}
+            workStates={workStates}
+            onExecutionEvent={receiveActivity}
+            onExecutionEnd={clearActivity}
             key={surface.id}
             id={surface.id}
             agents={workspace.agents}
             onNotice={setNotice}
             onError={setNotice}
+            onGroupChange={(group) =>
+              setChatGroups((current) =>
+                current.map((item) => (item.id === group.id ? group : item)),
+              )
+            }
           />
         ) : (
           <ChatPanel
             key={agent.id}
             agent={
-              liveReply?.agentId === agent.id
+              liveReplies[agent.id]
                 ? {
                     ...agent,
                     messages: [
@@ -473,7 +495,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
                       {
                         id: 'live-reply',
                         role: 'assistant',
-                        content: liveReply.content,
+                        content: liveReplies[agent.id]!,
                         createdAt: new Date().toISOString(),
                         status: 'sent',
                         reactions: [],
@@ -483,6 +505,8 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
                 : agent
             }
             isBlocked={isBlocked}
+            workSummary={workStates[agent.id]?.summary}
+            pendingMessageId={pendingMessages[agent.id]}
             isDetailsOpen={isCatPanelOpen}
             onDraft={(draft) =>
               runAction(() => {
@@ -490,6 +514,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               })
             }
             onSave={(replyToId, attachments) => {
+              if (pendingAgents.current.has(agent.id)) return false
               try {
                 const messageId = crypto.randomUUID()
                 const saved = commit((previous) =>
@@ -659,6 +684,8 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
           agents={workspace.agents}
           activeAgentId={workspace.activeAgentId}
           onSettings={openSettings}
+          onCreate={() => setOpenDialog('create')}
+          onCreateGroup={() => setOpenDialog('group')}
           onClose={() => setOpenDialog(null)}
           onSelect={selectAgent}
         />
@@ -685,6 +712,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         <WorkspaceDialog
           workspace={workspace}
           hiddenAgents={hiddenAgents}
+          connectionStatus={connectionStatus}
           onUnhide={showHiddenAgent}
           onClose={() => setOpenDialog(null)}
         />

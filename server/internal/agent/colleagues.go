@@ -32,7 +32,7 @@ func (r *Runtime) colleagues(ctx context.Context, j *job, tools []provider.ToolS
 	}
 	defer rows.Close()
 	var out strings.Builder
-	out.WriteString("\n\nColleagues (public identity only; use bot_id for messaging, subject to policy and approval):\n")
+	out.WriteString("\n\nColleagues (bots only, never the human user; even Tom is a bot. Use bot_id for messaging, subject to policy and approval):\n")
 	count := 0
 	for rows.Next() {
 		var colleague struct {

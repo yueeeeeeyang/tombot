@@ -41,8 +41,8 @@ func TestHTTPToolApprovalFeedsResultBackToModel(t *testing.T) {
 					}
 					w.Header().Set("Content-Type", "text/event-stream")
 					if calls.Add(1) == 1 {
-						if len(input.Tools) != 1 {
-							t.Error("工具声明未传入模型")
+						if len(input.Tools) != 2 || !strings.Contains(string(input.Tools[0]), toolName) || !strings.Contains(string(input.Tools[1]), "report_progress") {
+							t.Error("业务工具和进度工具声明未传入模型")
 						}
 						argumentsMap := map[string]any{"path": "notes/report.md", "content": "已审批的报告"}
 						if toolName == "computer_shell" {

@@ -54,7 +54,7 @@ func TestLocalModelGroupAssignment(t *testing.T) {
 		bookings[bot.ID], originals[bot.ID] = booking, original
 	}
 	const task = "What is our confirmed event schedule? Each member should quote their own booking record. In the final agenda, list each confirmed session with its time and room on its own line."
-	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "活动日程核对", Purpose: task, Routing: "all", Members: members, CoordinatorBotID: &coordinator.ID}, "user")
+	group, err := server.Groups.Create(ctx, service.GroupInput{Name: "活动日程核对", Purpose: task, Members: members}, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,6 @@ func TestLocalModelGroupAssignment(t *testing.T) {
 		t.Fatal("群任务没有正常完成", turns, err)
 	}
 	confirmed := map[string]bool{}
-	var summary string
 	for _, message := range snapshot.Messages {
 		if message.SenderKind != "bot" {
 			continue
@@ -109,40 +108,23 @@ func TestLocalModelGroupAssignment(t *testing.T) {
 				body.WriteString(block.Text)
 			}
 		}
-		switch run.PlanRole {
-		case "member":
-			booking, ok := bookings[run.BotID]
-			if !ok || confirmed[run.BotID] || !booking.confirmedIn(body.String()) {
-				t.Fatalf("成员未正确核对自己的预订 %s：%s", booking.session, body.String())
-			}
-			confirmed[run.BotID] = true
-		case "coordinator":
-			if run.BotID != members[0] || summary != "" {
-				t.Fatal("协调者身份或汇总次数不正确")
-			}
-			summary = body.String()
-		default:
-			t.Fatal("意外的执行角色", run.PlanRole)
+		if run.PlanRole != "member" {
+			t.Fatal("出现非平等成员身份", run.PlanRole)
 		}
+		booking, ok := bookings[run.BotID]
+		if !ok || confirmed[run.BotID] || !booking.confirmedIn(body.String()) {
+			t.Fatalf("成员预订核对失败 %s：%s", booking.session, body.String())
+		}
+		confirmed[run.BotID] = true
 	}
-	if len(confirmed) != len(members) || summary == "" {
-		t.Fatal("缺少分工核对或协调者汇总", len(confirmed))
+	if len(confirmed) != len(members) {
+		t.Fatal("缺少成员原话", len(confirmed))
 	}
 	for _, member := range members {
-		found := false
-		for line := range strings.SplitSeq(summary, "\n") {
-			if bookings[member].confirmedIn(line) {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Fatalf("汇总缺少对应的场次、时间或房间 %s：%s", bookings[member].session, summary)
-		}
 		memories, err := server.Memories.List(ctx, member)
 		if err != nil || len(memories) != 1 || memories[0].Path != originals[member].Path || memories[0].SHA256 != originals[member].SHA256 {
 			t.Fatal("群任务后成员私有记忆发生变化", bookings[member].session, err)
 		}
 	}
-	t.Log("三名成员各自核对了预订，协调者汇总了三组对应的时间地点，三份私有记忆校验一致")
+	t.Log("三名成员各自核对了预订，保留了三组对应的时间地点原话，三份私有记忆校验一致")
 }

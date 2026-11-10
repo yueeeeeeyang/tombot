@@ -52,4 +52,7 @@ func TestSystemPromptAndToolListExposeMemoryAndRoutines(t *testing.T) {
 	if !strings.Contains(prompt, "call memory_write, memory_search, or memory_delete") || !strings.Contains(prompt, "call routine_list, routine_upsert, or routine_delete") {
 		t.Fatalf("系统提示没有要求使用记忆和例程工具：%s", prompt)
 	}
+	if !strings.Contains(prompt, "responsibilities, ongoing goals and working habits") || !strings.Contains(prompt, "search existing private memories first") {
+		t.Fatal("职责与习惯的持续记忆指引没有进入实际模型请求")
+	}
 }

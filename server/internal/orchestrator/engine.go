@@ -3,12 +3,13 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"unicode/utf8"
 
 	"io.yueyang/tom/internal/domain"
 )
 
 type Task struct {
+	TriggerID   string
+	Depth       int
 	TurnID      string
 	Group       domain.Group
 	Content     string
@@ -16,19 +17,22 @@ type Task struct {
 	HistorySeq  int64
 	Attachments []domain.ArtifactRef
 }
+type Delivery struct {
+	Task Task
+	Step domain.GroupStep
+}
 type Result struct {
-	RunID     string `json:"run_id"`
-	BotID     string `json:"bot_id"`
-	Text      string `json:"text"`
-	ToolCalls int    `json:"tool_calls"`
-	Status    string `json:"status"`
-	ErrorCode string `json:"error_code,omitempty"`
+	Followups []Delivery `json:"-"`
+	RunID     string     `json:"run_id"`
+	BotID     string     `json:"bot_id"`
+	Text      string     `json:"text"`
+	ToolCalls int        `json:"tool_calls"`
+	Status    string     `json:"status"`
+	ErrorCode string     `json:"error_code,omitempty"`
 }
 type Backend interface {
-	Plan(context.Context, Task) (domain.GroupPlan, error)
 	SavePlan(context.Context, Task, domain.GroupPlan) error
 	Run(context.Context, Task, domain.GroupStep) (Result, error)
-	Summarize(context.Context, Task, []Result) error
 	CheckBudget(context.Context, Task) error
 	Notice(context.Context, Task, string, string) error
 }
@@ -49,37 +53,32 @@ func Handle(ctx context.Context, task Task, backend Backend, concurrency int) er
 	}
 	memberCtx, cancelMembers := context.WithCancel(ctx)
 	defer cancelMembers()
-	var plan domain.GroupPlan
+	plan := DirectPlan(task.Group, task.Content, task.Mentions)
 	var err error
-	if task.Group.Routing == "coordinator" {
-		plan, err = backend.Plan(ctx, task)
-	} else {
-		plan = DirectPlan(task.Group, task.Content, task.Mentions)
-	}
-	if err != nil {
-		return err
-	}
-	plan = Guard(plan, task.Group.MaxSpeakers)
 	if err = backend.SavePlan(ctx, task, plan); err != nil {
 		return err
 	}
 	if len(plan.Steps) == 0 {
-		text := "本回合没有需要执行的成员分工。"
-		if task.Group.Routing == "mention" {
-			text = "请 @ 至少一位成员，或为群组指定协调者。"
-		}
-		return backend.Notice(ctx, task, "GROUP_NO_SPEAKERS", text)
+		return backend.Notice(ctx, task, "GROUP_NO_SPEAKERS", "当前没有可回复的猫咪。")
 	}
 	type completion struct {
 		result Result
 		err    error
 	}
-	completed := make(chan completion, len(plan.Steps))
-	active, next, idle := 0, 0, 0
+	completed := make(chan completion, domain.MaxGroupMentionRuns)
+	queue := []Delivery{}
+	for _, step := range plan.Steps {
+		queue = append(queue, Delivery{task, step})
+	}
+	seen := map[string]bool{}
+	for _, delivery := range queue {
+		seen[delivery.Task.TriggerID+":"+delivery.Step.BotID] = true
+	}
+	active, next := 0, 0
 	results := []Result{}
 	var executionErr error
-	for next < len(plan.Steps) || active > 0 {
-		for active-waitingCount() < max(1, concurrency) && next < len(plan.Steps) && executionErr == nil && plan.StopCode == "" && ctx.Err() == nil {
+	for next < len(queue) || active > 0 {
+		for active-waitingCount() < max(1, concurrency) && next < len(queue) && executionErr == nil && plan.StopCode == "" && ctx.Err() == nil {
 			if err = backend.CheckBudget(ctx, task); err != nil {
 				var public *domain.Error
 				if errors.As(err, &public) && public.Code == "TURN_BUDGET_EXCEEDED" {
@@ -90,10 +89,13 @@ func Handle(ctx context.Context, task Task, backend Backend, concurrency int) er
 				}
 				break
 			}
-			step := plan.Steps[next]
+			delivery := queue[next]
 			next++
 			active++
-			go func() { result, err := backend.Run(memberCtx, task, step); completed <- completion{result, err} }()
+			go func() {
+				result, err := backend.Run(memberCtx, delivery.Task, delivery.Step)
+				completed <- completion{result, err}
+			}()
 		}
 		if active == 0 {
 			break
@@ -111,13 +113,17 @@ func Handle(ctx context.Context, task Task, backend Backend, concurrency int) er
 			continue
 		}
 		results = append(results, outcome.result)
-		if outcome.result.Status == "succeeded" && outcome.result.ToolCalls == 0 && utf8.RuneCountInString(outcome.result.Text) < 40 {
-			idle++
-		} else {
-			idle = 0
-		}
-		if idle >= 2 {
-			plan.StopCode = "GROUP_IDLE_LIMIT"
+		for _, delivery := range outcome.result.Followups {
+			key := delivery.Task.TriggerID + ":" + delivery.Step.BotID
+			if seen[key] {
+				continue
+			}
+			if len(queue) >= domain.MaxGroupMentionRuns || delivery.Task.Depth > domain.MaxGroupMentionDepth {
+				plan.StopCode = "GROUP_MENTION_LIMIT"
+				continue
+			}
+			seen[key] = true
+			queue = append(queue, delivery)
 		}
 	}
 	if ctx.Err() != nil {
@@ -130,26 +136,12 @@ func Handle(ctx context.Context, task Task, backend Backend, concurrency int) er
 		if err = backend.SavePlan(ctx, task, plan); err != nil {
 			return err
 		}
-		text := "已连续收到两条简短且未调用工具的回复，本回合提前收口。"
+		text := "本轮成员之间的提及已达到上限，已保留回复。可以发送新消息继续。"
 		if plan.StopCode == "TURN_BUDGET_EXCEEDED" {
 			text = "已达到群组回合费用上限，停止后续成员执行并保留已完成结果。"
 		}
 		if err = backend.Notice(ctx, task, plan.StopCode, text); err != nil {
 			return err
-		}
-	}
-	if task.Group.AutoSummary && task.Group.CoordinatorBotID != nil && !(len(results) == 1 && results[0].BotID == *task.Group.CoordinatorBotID) {
-		if err = backend.Summarize(ctx, task, results); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			var public *domain.Error
-			if !errors.As(err, &public) {
-				return err
-			}
-			if err = backend.Notice(ctx, task, "GROUP_SUMMARY_FAILED", "未能汇总，以下保留各成员原话与执行结果。"); err != nil {
-				return err
-			}
 		}
 	}
 	for _, result := range results {

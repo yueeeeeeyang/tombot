@@ -1,5 +1,19 @@
+import type { Artifact } from '../workspace/model'
 import type { SettingsDraft } from '../settings/settings'
-import type { AppWorkspace } from '../workspace/model'
+import type { Agent, AppWorkspace } from '../workspace/model'
+
+export interface StreamEvent {
+  type: string
+  text: string
+  incoming?: IncomingMessages
+  botId?: string
+  runId?: string
+  isWorking?: boolean
+  isFinished?: boolean
+  messageId?: string
+}
+
+export type IncomingMessages = Array<Pick<Agent, 'id' | 'messages'>>
 
 export type SessionPhase =
   'loading' | 'address' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
@@ -64,6 +78,7 @@ export interface DeliveryResult {
  * 测试用的内存实现会同步保存；真正的服务调用返回 Promise。
  */
 export interface DesktopBackend {
+  readClipboardFiles?: () => Promise<Array<{ name: string; type: string; bytes: Uint8Array }>>
   savesSynchronously?: boolean
   trySessionSync?: () => SessionSnapshot
   session: () => Promise<SessionSnapshot>
@@ -78,23 +93,14 @@ export interface DesktopBackend {
   tryWorkspaceSync?: () => WorkspaceSnapshot
   loadWorkspace: () => Promise<WorkspaceSnapshot>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
+  welcomeAgent: (agentId: string, onEvent?: (event: StreamEvent) => void) => Promise<DeliveryResult>
   deliverMessage: (
     agentId: string,
     messageId: string,
-    onEvent?: (event: {
-      type: string
-      text: string
-      messageId?: string
-      peerId?: string
-      peerName?: string
-      conversationId?: string
-      direction?: 'sent' | 'received'
-    }) => void,
+    onEvent?: (event: StreamEvent) => void,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
-  listMemories?: (
-    agentId: string,
-  ) => Promise<Array<{ path: string; title: string; summary: string; sha256: string }>>
+  loadIntroduction: (agentId: string) => Promise<{ text: string }>
   listRoutines?: (agentId: string) => Promise<
     Array<{
       id: string
@@ -107,20 +113,14 @@ export interface DesktopBackend {
   >
   setRoutineEnabled?: (id: string, revision: number, enabled: boolean) => Promise<void>
   deleteRoutine?: (id: string, revision: number) => Promise<void>
-  listGroups?: () => Promise<
-    Array<{ id: string; name: string; revision: number; conversation_id: string }>
-  >
-  createGroup?: (
-    name: string,
-    memberIds: string[],
-  ) => Promise<{ id: string; name: string; revision: number; conversation_id: string }>
-  groupDetail?: (id: string) => Promise<{
-    id: string
-    name: string
-    revision: number
-    conversation_id: string
-    members: Array<{ bot_id: string; name: string }>
-  }>
+  listGroups?: () => Promise<GroupSummary[]>
+  createGroup?: (name: string, memberIds: string[]) => Promise<GroupSummary>
+  listGroupArtifacts: (
+    id: string,
+    before?: number,
+  ) => Promise<{ artifacts: Artifact[]; next: number }>
+  groupDetail?: (id: string) => Promise<GroupDetail>
+  renameGroup?: (id: string, revision: number, name: string) => Promise<GroupDetail>
   addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>
   removeGroupMember?: (id: string, revision: number, botId: string) => Promise<void>
   listConversationMessages?: (conversationId: string) => Promise<ServerBubble[]>
@@ -129,15 +129,8 @@ export interface DesktopBackend {
     content: string,
     attachments: Array<{ path: string; sha256: string }>,
     replyToId: string | undefined,
-    onEvent?: (event: {
-      type: string
-      text: string
-      messageId?: string
-      peerId?: string
-      peerName?: string
-      conversationId?: string
-      direction?: 'sent' | 'received'
-    }) => void,
+    mentions: string[],
+    onEvent?: (event: StreamEvent) => void,
   ) => Promise<void>
   uploadAttachment?: (
     file: { name: string; type: string; bytes: Uint8Array },
@@ -162,4 +155,21 @@ export function getBackend(): DesktopBackend {
   const backend = window.desktop?.backend
   if (!backend) throw new Error('桌面服务桥不可用。')
   return backend
+}
+
+export type GroupSummary = {
+  avatar_presets: string[]
+  id: string
+  name: string
+  revision: number
+  conversation_id: string
+}
+
+export type GroupDetail = {
+  avatar_presets: string[]
+  id: string
+  name: string
+  revision: number
+  conversation_id: string
+  members: Array<{ bot_id: string; name: string }>
 }

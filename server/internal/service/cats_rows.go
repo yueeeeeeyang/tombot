@@ -14,10 +14,12 @@ import (
 	"io.yueyang/tom/internal/store"
 )
 
+const desktopRole = "助手"
+
 const desktopSoul = "You are the user's cat assistant running on Tom. Think, use tools when they help, and stay inside your workspace. Reply in the user's language. When the user asks you to remember or forget, call memory_write or memory_delete. When the user asks for a reminder or a recurring task, call routine_upsert or routine_delete. When you need another cat, call message_bot. Do not ask the user to edit memory, schedule, or private-message pages."
 
 func desktopToolPolicy() domain.ToolPolicy {
-	return domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search", "memory_write", "memory_delete", "routine_list", "routine_upsert", "routine_delete", "message_bot"}, Approval: "loose"}
+	return domain.ToolPolicy{AllowedTools: []string{"file_read", "file_list", "file_write", "computer_shell", "browser", "terminal_session", "memory_search", "memory_write", "memory_delete", "routine_list", "routine_upsert", "routine_delete", "message_bot", "message_user"}, Approval: "loose"}
 }
 
 const desktopMessaging = `{"accept_dm":true,"can_initiate":true,"accept_group_invite":true}`
@@ -73,7 +75,7 @@ func (s *Service) readState(ctx context.Context) (stateRow, error) {
 }
 
 func (s *Service) readAgents(ctx context.Context) ([]Agent, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, desktop_id, name, description, group_name, avatar_preset, catalog_model_id, draft, computer_url FROM bots WHERE desktop_id IS NOT NULL ORDER BY created_at, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, desktop_id, name, description, group_name, avatar_preset, catalog_model_id, draft, computer_url, custom_avatar FROM bots WHERE desktop_id IS NOT NULL ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +84,7 @@ func (s *Service) readAgents(ctx context.Context) ([]Agent, error) {
 	for rows.Next() {
 		var agent Agent
 		var desktopID string
-		if err = rows.Scan(&agent.ID, &desktopID, &agent.Name, &agent.Description, &agent.Group, &agent.Avatar, &agent.ModelID, &agent.Draft, &agent.ComputerURL); err != nil {
+		if err = rows.Scan(&agent.ID, &desktopID, &agent.Name, &agent.Description, &agent.Group, &agent.Avatar, &agent.ModelID, &agent.Draft, &agent.ComputerURL, &agent.CustomAvatar); err != nil {
 			return nil, err
 		}
 		if desktopID != "" {
@@ -129,6 +131,9 @@ func (s *Service) readMessages(ctx context.Context, agentID string) ([]ChatMessa
 		content := textFromBlocks(encoded)
 		attachments := attachmentsFromBlocks(encoded)
 		notice := dmNoticeFromBlocks(encoded, botID)
+		if sender == "system" && notice == nil {
+			continue
+		}
 		if strings.TrimSpace(content) == "" && len(attachments) == 0 && notice == nil {
 			continue
 		}
@@ -294,8 +299,8 @@ func (s *Service) upsertAgent(ctx context.Context, tx *sql.Tx, agent Agent, inde
 		return "", marshalErr
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO bots(id,name,role_title,soul,tool_policy_json,messaging_policy_json,workspace_dir,accent_hue,created_at,updated_at,desktop_id,group_name,description,avatar_preset,catalog_model_id,draft,computer_url) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			agent.ID, agent.Name, fitRole(agent.Description), desktopSoul, string(tools), desktopMessaging, "bots/"+agent.ID, (index*40)%360, now+int64(index), now+int64(index), agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO bots(id,name,role_title,soul,tool_policy_json,messaging_policy_json,workspace_dir,accent_hue,created_at,updated_at,desktop_id,group_name,description,avatar_preset,catalog_model_id,draft,computer_url,custom_avatar) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			agent.ID, agent.Name, desktopRole, desktopSoulFor(agent), string(tools), desktopMessaging, "bots/"+agent.ID, (index*40)%360, now+int64(index), now+int64(index), agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, agent.CustomAvatar); err != nil {
 			return "", err
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO conversations(id,kind,source,bot_id,title,created_at,updated_at) VALUES(?,'direct','user',?,?,?,?)`, "conv-"+agent.ID, agent.ID, agent.Name, now, now); err != nil {
@@ -306,8 +311,8 @@ func (s *Service) upsertAgent(ctx context.Context, tx *sql.Tx, agent Agent, inde
 	if err != nil {
 		return "", err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE bots SET name=?, role_title=?, soul=?, tool_policy_json=?, messaging_policy_json=?, desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=?, updated_at=? WHERE id=?`,
-		agent.Name, fitRole(agent.Description), desktopSoul, string(tools), desktopMessaging, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, now, botID); err != nil {
+	if _, err = tx.ExecContext(ctx, `UPDATE bots SET name=?, role_title=?, soul=?, tool_policy_json=?, messaging_policy_json=?, desktop_id=?, group_name=?, description=?, avatar_preset=?, catalog_model_id=?, draft=?, computer_url=?, custom_avatar=?, updated_at=? WHERE id=?`,
+		agent.Name, desktopRole, desktopSoulFor(agent), string(tools), desktopMessaging, agent.ID, agent.Group, agent.Description, agent.Avatar, agent.ModelID, agent.Draft, agent.ComputerURL, agent.CustomAvatar, now, botID); err != nil {
 		return "", err
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE conversations SET title=?, updated_at=? WHERE bot_id=? AND kind='direct'`, agent.Name, now, botID); err != nil {

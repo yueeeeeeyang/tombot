@@ -1,9 +1,11 @@
+import type { ConnectionStatus } from '../session/useConnectionStatus'
 import { useState, type FormEvent } from 'react'
-import { Check, HardDrive } from 'lucide-react'
+import { Check, HardDrive, Upload } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { Select, type SelectOption } from '../../components/Select'
 import { CAT_AVATARS } from '../avatars/presets'
+import { createCustomAvatar } from '../avatars/customAvatar'
 import { SessionFrame } from '../session/SessionGate'
 import { type Agent, type NewAgent, type AppWorkspace as Workspace } from './model'
 
@@ -28,19 +30,25 @@ function RecruitCatForm({
   const [profile, setProfile] = useState<NewAgent>(
     initialProfile ?? {
       name: '',
-      description: '',
       avatar: 'bombay',
       group: '未分组',
     },
   )
   const [error, setError] = useState('')
+  const [isCustom, setCustom] = useState(Boolean(initialProfile?.customAvatar))
+  const [isReadingAvatar, setReadingAvatar] = useState(false)
   const [modelValue, setModelValue] = useState(modelOptions[0]?.value ?? '')
   function submit(event: FormEvent): void {
     event.preventDefault()
     try {
       const model = modelOptions.find((option) => option.value === modelValue)
       if (!model) throw new Error('请选择有效模型')
-      onCreate(profile, model)
+      if (isReadingAvatar) return
+      if (isCustom && !profile.customAvatar) throw new Error('请先上传自定义猫咪头像。')
+      onCreate(
+        isCustom ? profile : { name: profile.name, group: profile.group, avatar: profile.avatar },
+        model,
+      )
     } catch (failure) {
       setError((failure as Error).message)
     }
@@ -49,24 +57,81 @@ function RecruitCatForm({
     <form onSubmit={submit} className="agent-form">
       {heading && <h1>{heading}</h1>}
       <p className="dialog-description">选一位猫咪搭档，一起开启下一个想法。</p>
-      <div className="avatar-picker">
-        <div className="avatar-options" role="group" aria-label="预设猫咪头像">
-          {CAT_AVATARS.map((preset) => (
-            <button
-              key={preset.id}
-              type="button"
-              className="avatar-option"
-              onClick={() => setProfile({ ...profile, avatar: preset.id })}
-              aria-label={preset.name}
-              aria-pressed={profile.avatar === preset.id}
-            >
-              <Avatar preset={preset.id} />
-              <span>{preset.name}</span>
-              {profile.avatar === preset.id && <Check className="avatar-option-check" size={11} />}
-            </button>
-          ))}
-        </div>
+      <div className="recruit-kind" role="group" aria-label="猫咪类型">
+        <button type="button" aria-pressed={!isCustom} onClick={() => setCustom(false)}>
+          预设猫咪
+        </button>
+        <button type="button" aria-pressed={isCustom} onClick={() => setCustom(true)}>
+          自定义猫咪
+        </button>
       </div>
+      {isCustom ? (
+        <div className="custom-cat-profile">
+          <label className="custom-avatar-upload">
+            {profile.customAvatar ? (
+              <Avatar preset={profile.avatar} customAvatar={profile.customAvatar} size="large" />
+            ) : (
+              <Upload size={28} />
+            )}
+            <span>
+              {isReadingAvatar
+                ? '正在处理图片…'
+                : profile.customAvatar
+                  ? '更换头像'
+                  : '上传猫咪头像'}
+            </span>
+            <small>PNG、JPEG 或 WebP，最大 4 MiB</small>
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              aria-label="上传猫咪头像"
+              disabled={isReadingAvatar}
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                event.target.value = ''
+                if (!file) return
+                setReadingAvatar(true)
+                setError('')
+                void createCustomAvatar(file)
+                  .then((customAvatar) => setProfile((current) => ({ ...current, customAvatar })))
+                  .catch((failure: Error) => setError(failure.message))
+                  .finally(() => setReadingAvatar(false))
+              }}
+            />
+          </label>
+          <label>
+            猫咪介绍
+            <textarea
+              maxLength={120}
+              rows={3}
+              placeholder="介绍它的性格、擅长的事情，或你希望它怎样与你相处"
+              value={profile.description ?? ''}
+              onChange={(event) => setProfile({ ...profile, description: event.target.value })}
+            />
+          </label>
+        </div>
+      ) : (
+        <div className="avatar-picker">
+          <div className="avatar-options" role="group" aria-label="预设猫咪头像">
+            {CAT_AVATARS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                className="avatar-option"
+                onClick={() => setProfile({ ...profile, avatar: preset.id })}
+                aria-label={preset.name}
+                aria-pressed={profile.avatar === preset.id}
+              >
+                <Avatar preset={preset.id} />
+                <span>{preset.name}</span>
+                {profile.avatar === preset.id && (
+                  <Check className="avatar-option-check" size={11} />
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <label>
         助手名称
         <input
@@ -76,16 +141,6 @@ function RecruitCatForm({
           placeholder="例如：灵感搭档"
           onChange={(event) => setProfile({ ...profile, name: event.target.value })}
           required
-        />
-      </label>
-      <label>
-        一句话介绍 <span className="optional-label">选填</span>
-        <textarea
-          value={profile.description}
-          maxLength={120}
-          rows={2}
-          placeholder="你想和这位搭档一起做什么？"
-          onChange={(event) => setProfile({ ...profile, description: event.target.value })}
         />
       </label>
       <div className="recruit-selects">
@@ -125,12 +180,14 @@ function RecruitCatForm({
           {error}
         </p>
       )}
-      <button className="primary-button" type="submit" disabled={modelOptions.length === 0}>
+      <button
+        className="primary-button"
+        type="submit"
+        disabled={modelOptions.length === 0 || isReadingAvatar}
+      >
         招聘猫咪
       </button>
-      <p className="form-footnote">
-        猫咪资料会保存到服务。这里选中的模型会写进这只猫咪，回复时使用它。
-      </p>
+      <p className="form-footnote">在对话中一起明确分工，猫咪会逐渐记住你的偏好和工作习惯。</p>
     </form>
   )
 }
@@ -162,11 +219,13 @@ export function FirstCatPage(props: RecruitCatFormProps) {
 export function WorkspaceDialog({
   workspace,
   hiddenAgents,
+  connectionStatus,
   onUnhide,
   onClose,
 }: {
   workspace: Workspace
   hiddenAgents: Agent[]
+  connectionStatus: ConnectionStatus
   onUnhide: (id: string) => void
   onClose: () => void
 }) {
@@ -198,12 +257,12 @@ export function WorkspaceDialog({
         <span>已启用</span>
       </div>
       <div className="workspace-status">
-        <span className="connection-dot" />
+        <span className={`connection-dot connection-dot--${connectionStatus}`} />
         <div>
           <strong>服务端连接</strong>
-          <p>助手、消息和模型设置由服务保存。文件上传与语音仍不可用</p>
+          <p>助手、消息和模型设置由服务保存。</p>
         </div>
-        <span>已连接</span>
+        <span>{connectionStatus === 'connected' ? '已连接' : '连接异常'}</span>
       </div>
       {hiddenAgents.length > 0 && (
         <section className="workspace-hidden" aria-label="已隐藏的助手">
@@ -215,7 +274,11 @@ export function WorkspaceDialog({
           <div className="workspace-hidden-list">
             {hiddenAgents.map((agent) => (
               <div className="workspace-hidden-item" key={agent.id}>
-                <Avatar preset={agent.avatar} agentId={agent.id} />
+                <Avatar
+                  preset={agent.avatar}
+                  customAvatar={agent.customAvatar}
+                  agentId={agent.id}
+                />
                 <div>
                   <strong>{agent.name}</strong>
                   <span>{agent.group}</span>

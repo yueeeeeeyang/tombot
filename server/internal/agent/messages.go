@@ -264,6 +264,12 @@ func (r *Runtime) createBotMessageLocked(ctx context.Context, parent *job, callI
 		if _, err = bus.Append(ctx, tx, "run.status", run.ConversationID, map[string]any{"run_id": run.ID, "turn_id": run.TurnID, "bot_id": run.BotID, "status": "queued", "model_name": model.DisplayName, "parent_run_id": parent.run.ID}); err != nil {
 			return err
 		}
+		// 投递完成后调用方让出执行槽；请求尚未结束不代表它仍在工作。
+		if input.ReplyRequired {
+			if _, err = bus.Append(ctx, tx, "run.activity", parent.run.ConversationID, map[string]any{"run_id": parent.run.ID, "turn_id": parent.run.TurnID, "bot_id": parent.run.BotID, "is_working": false}); err != nil {
+				return err
+			}
+		}
 		return appendConversation(ctx, tx, run.ConversationID)
 	})
 	if err != nil {
@@ -278,7 +284,7 @@ func (r *Runtime) createBotMessageLocked(ctx context.Context, parent *job, callI
 		base = ctx
 	}
 	childCtx, cancel := context.WithCancelCause(base)
-	child := &job{run: run, bot: target, model: model, spec: spec, ctx: childCtx, cancel: cancel, start: make(chan struct{}), done: make(chan struct{}), dm: true, peerBotID: parent.bot.ID, replyRequired: input.ReplyRequired}
+	child := &job{run: run, bot: target, model: model, spec: spec, ctx: childCtx, cancel: cancel, start: make(chan struct{}), done: make(chan struct{}), dm: true, peerBotID: parent.bot.ID, replyRequired: input.ReplyRequired, deliverToUser: input.DeliverToUser}
 	parent.children = append(parent.children, child)
 	r.jobs[run.ID] = child
 	r.queue = append(r.queue, child)
@@ -289,8 +295,13 @@ func (r *Runtime) createBotMessageLocked(ctx context.Context, parent *job, callI
 }
 
 func (r *Runtime) readBotReply(ctx context.Context, child *job, reply domain.BotMessageReply) (domain.BotMessageReply, error) {
+	if child.deliverToUser {
+		reply.DeliveredToUser = true
+		reply.Summary = "The recipient performed the task and delivered its result directly to the human user in its own chat. Do not repeat or claim authorship of that result."
+		return reply, nil
+	}
 	var encoded string
-	if err := r.deps.DB.QueryRowContext(ctx, `SELECT blocks_json FROM messages WHERE run_id=? AND sender_kind='bot' AND status='complete' ORDER BY seq DESC LIMIT 1`, child.run.ID).Scan(&encoded); err != nil {
+	if err := r.deps.DB.QueryRowContext(ctx, `SELECT blocks_json FROM messages WHERE run_id=? AND conversation_id=? AND sender_kind='bot' AND status='complete' ORDER BY seq DESC LIMIT 1`, child.run.ID, child.run.ConversationID).Scan(&encoded); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return reply, domain.NewError(502, "BOT_NO_REPLY", "The target bot returned no completed reply.")
 		}

@@ -37,18 +37,18 @@ func groupError(t *testing.T, err error, code string) {
 func TestGroupCRUDRevisionMembershipAndConversation(t *testing.T) {
 	ctx := context.Background()
 	groups, bots, members := groupFixture(t)
-	group, err := groups.Create(ctx, GroupInput{Name: " 方案讨论 ", Purpose: "共享研究与写作", CoordinatorBotID: &members[0].ID, Members: []string{members[0].ID, members[1].ID}}, "user")
+	group, err := groups.Create(ctx, GroupInput{Name: " 方案讨论 ", Purpose: "共享研究与写作", Members: []string{members[0].ID, members[1].ID}}, "user")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if group.Name != "方案讨论" || group.MaxSpeakers != 3 || group.MaxCostMicro != domain.DefaultGroupBudgetMicro || len(group.Members) != 2 || !group.AutoSummary {
+	if group.Name != "方案讨论" || group.MaxCostMicro != domain.DefaultGroupBudgetMicro || len(group.Members) != 2 {
 		t.Fatalf("群默认值错误：%+v", group)
 	}
 	conversation, err := NewConversations(groups.db, groups.events).Get(ctx, group.ConversationID)
 	if err != nil || conversation.Kind != "group" || len(conversation.Members) != 2 || conversation.Title != group.Name {
 		t.Fatalf("群会话或色带元数据错误：%+v %v", conversation, err)
 	}
-	group, err = groups.ChangeMembers(ctx, group.ID, GroupMembersInput{Revision: group.Revision, BotIDs: []string{members[2].ID}, RoleNotes: map[string]string{members[2].ID: "跟进结论"}}, "", "user")
+	group, err = groups.ChangeMembers(ctx, group.ID, GroupMembersInput{Revision: group.Revision, BotIDs: []string{members[2].ID}}, "", "user")
 	if err != nil || len(group.Members) != 3 {
 		t.Fatal(err)
 	}
@@ -81,13 +81,15 @@ func TestGroupCRUDRevisionMembershipAndConversation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = groups.ChangeMembers(ctx, group.ID, GroupMembersInput{Revision: group.Revision}, members[0].ID, "user")
-	groupError(t, err, "GROUP_COORDINATOR_REQUIRED")
+	group, err = groups.ChangeMembers(ctx, group.ID, GroupMembersInput{Revision: group.Revision}, members[0].ID, "user")
+	if err != nil {
+		t.Fatal("第一位成员与其他成员应可平等移出", err)
+	}
 	if err = bots.Delete(ctx, members[0].ID, members[0].Name, "user", false); err != nil {
 		t.Fatal(err)
 	}
 	latest, err := groups.Get(ctx, group.ID)
-	if err != nil || latest.CoordinatorBotID != nil || len(latest.Members) != 2 || latest.Revision != group.Revision+1 {
+	if err != nil || len(latest.Members) != 2 || latest.Revision != group.Revision {
 		t.Fatalf("删除成员未同步群配置：%+v %v", latest, err)
 	}
 	if err = groups.Delete(ctx, latest.ID, latest.Revision, "user"); err != nil {
@@ -105,8 +107,8 @@ func TestGroupInvalidInputAndAuditFailureRollback(t *testing.T) {
 	groups, bots, members := groupFixture(t)
 	for _, input := range []GroupInput{
 		{Name: "无成员"}, {Name: "重复", Members: []string{members[0].ID, members[0].ID}},
-		{Name: "缺协调者", Routing: "coordinator", Members: []string{members[0].ID}},
-		{Name: "越权协调者", CoordinatorBotID: &members[1].ID, Members: []string{members[0].ID}},
+		{Name: " ", Members: []string{members[0].ID}},
+		{Name: "不存在成员", Members: []string{"missing"}},
 	} {
 		if _, err := groups.Create(ctx, input, "user"); err == nil {
 			t.Fatal("无效群被创建", input.Name)
