@@ -1,18 +1,6 @@
-.dialog {
-  -webkit-app-region: no-drag;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  padding: 0;
-  width: min(360px, calc(100vw - 32px));
-  max-height: calc(100dvh - 48px);
-  background: var(--canvas);
-  color: var(--text);
-  box-shadow: 0 30px 100px #00000020;
-}
+.dialog,
 .dialog::backdrop {
   -webkit-app-region: no-drag;
-  background: #22222230;
-  backdrop-filter: blur(5px);
 }
 .dialog--recruit {
   width: min(480px, calc(100vw - 32px));
@@ -101,24 +89,6 @@
   top: 5px;
   right: 5px;
 }
-.agent-form label {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  position: relative;
-  font-size: 13px;
-  color: var(--text-secondary);
-}
-.agent-form input,
-.agent-form textarea {
-  width: 100%;
-  padding: 9px 10px;
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  color: var(--text);
-  font-size: 13px;
-}
 .recruit-selects {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
@@ -179,51 +149,6 @@
 }
 .agent-form input::placeholder {
   color: var(--subtle);
-}
-.primary-button,
-.secondary-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 9px 12px;
-  border-radius: 10px;
-  font-size: 13px;
-  font-weight: 500;
-  width: 100%;
-}
-.primary-button {
-  background: var(--button-background);
-  color: var(--button-text);
-  border: 1px solid var(--button-background);
-}
-.primary-button:hover:not(:disabled) {
-  background: var(--button-hover);
-}
-.secondary-button {
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  color: var(--text-secondary);
-}
-.secondary-button:hover:not(:disabled) {
-  background: var(--hover);
-}
-.form-footnote {
-  margin: 0;
-  font-size: 11px;
-  text-align: center;
-  color: var(--subtle);
-  line-height: 1.8;
-}
-.form-error {
-  color: var(--error-text);
-  background: var(--error-background);
-  border: 1px solid var(--error-border);
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.7;
-  margin: 0;
 }
 .settings-brand {
   display: flex;

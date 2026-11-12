@@ -4,6 +4,10 @@ desktop/release/
 desktop/coverage/
 desktop/test-results/
 desktop/playwright-report/
+admin/dist/
+admin/coverage/
+admin/test-results/
+admin/playwright-report/
 .DS_Store
 *.log
 .env
