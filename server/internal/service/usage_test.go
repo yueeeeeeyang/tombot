@@ -1,0 +1,82 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+	"time"
+
+	"io.yueyang/tom/internal/testkit"
+	"io.yueyang/tom/internal/usage"
+)
+
+func TestUsageGroupsPaginationDeletedObjectsAndRangeValidation(t *testing.T) {
+	db := testkit.Database(t)
+	ctx := context.Background()
+	service := NewUsage(db)
+	from, to := usage.MonthBounds(time.Now())
+	for _, groupBy := range []string{"bot", "model", "day"} {
+		report, err := service.Report(ctx, UsageQuery{From: from, To: to, GroupBy: groupBy, Limit: 1})
+		if err != nil || report.Total.Calls != 0 || report.Total.CostMicro != 0 || report.Monthly.CostMicro != 0 || len(report.Groups) != 0 || report.NextCursor != "" {
+			t.Fatal("用量事件已删除，汇总应为空", report, err)
+		}
+	}
+	for _, query := range []UsageQuery{{From: to, To: from}, {From: from}, {From: from, To: from.Add(367 * 24 * time.Hour)}, {GroupBy: "sql"}, {Limit: 201}, {Cursor: strings.Repeat("a", 129)}} {
+		if _, err := service.Report(ctx, query); err == nil {
+			t.Fatal("无效查询被接受", query)
+		}
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := service.Report(canceled, UsageQuery{}); err == nil {
+		t.Fatal("取消查询仍成功")
+	}
+}
+
+func TestMonthlySettingsCASPartialPatchAndCorruption(t *testing.T) {
+	db := testkit.Database(t)
+	ctx := context.Background()
+	settings := NewSettings(db)
+	update := func(encoded string) error {
+		var patch SettingsPatch
+		if err := json.Unmarshal([]byte(encoded), &patch); err != nil {
+			t.Fatal(err)
+		}
+		_, err := settings.Update(ctx, patch, "user")
+		return err
+	}
+	if err := update(`{"monthly_budget":{"revision":0,"limit_micro":100,"warn_percent":75,"action":"warn"}}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := update(`{"monthly_budget":{"revision":0,"limit_micro":200}}`); err == nil {
+		t.Fatal("旧版本覆盖配置")
+	}
+	if err := update(`{"reviewer":{"enabled":true},"monthly_budget":{"revision":1,"action":"stop"}}`); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := settings.Get(ctx)
+	if err != nil || !saved.Reviewer.Enabled || *saved.MonthlyBudget.LimitMicro != 100 || saved.MonthlyBudget.WarnPercent != 75 || saved.MonthlyBudget.Revision != 2 {
+		t.Fatal(saved, err)
+	}
+	for _, encoded := range []string{`{"monthly_budget":{}}`, `{"monthly_budget":{"revision":2}}`, `{"monthly_budget":{"revision":2,"limit_micro":0}}`, `{"monthly_budget":{"revision":2,"limit_micro":1000000000001}}`, `{"monthly_budget":{"revision":2,"action":null}}`, `{"monthly_budget":{"revision":2,"warn_percent":null}}`, `{"monthly_budget":{"revision":2,"warn_percent":100}}`, `{"monthly_budget":{"revision":2,"action":"ignore"}}`} {
+		if err = update(encoded); err == nil {
+			t.Fatal("无效预算被接受", encoded)
+		}
+	}
+	if err = update(`{"monthly_budget":{"revision":2,"limit_micro":null}}`); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = settings.Get(ctx)
+	if err != nil || saved.MonthlyBudget.LimitMicro != nil || saved.MonthlyBudget.Action != "stop" {
+		t.Fatal(saved, err)
+	}
+	for _, encoded := range []string{"null", "{}", `{"action":"stop","warn_percent":80,"revision":1}`, `{"limit_micro":null,"action":"stop","warn_percent":80,"revision":0}`, `{"limit_micro":null,"action":"stop","warn_percent":80,"revision":1,"extra":0}`, `{"limit_micro":null,"action":"stop","warn_percent":80,"revision":1} {}`} {
+		if _, err = db.Exec("UPDATE settings SET value_json=? WHERE key='monthly_budget'", encoded); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = settings.Get(ctx); err == nil {
+			t.Fatal("损坏预算被放行", encoded)
+		}
+	}
+}

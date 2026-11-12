@@ -1,0 +1,100 @@
+{
+  "version": 2,
+  "node_id": "01K9AX6VSMKDBZ049G41FT4WHW",
+  "socket": "/run/tombot/control.sock",
+  "client_uid": 20001,
+  "client_gid": 20001,
+  "startup_timeout_ms": 120000,
+  "shutdown_timeout_ms": 180000,
+  "api": {
+    "call_timeout_ms": 30000,
+    "shutdown_timeout_ms": 90000,
+    "maximum_connections": 32
+  },
+  "runtime": {
+    "docker_socket": "/run/docker.sock",
+    "state_directory": "/var/lib/tombot-node/runtime",
+    "storage_directory": "/var/lib/tombot-node/workspaces",
+    "call_timeout_ms": 10000,
+    "maximum_lease_ms": 300000,
+    "temporary_bytes": 67108864,
+    "runtime_bytes": 134217728,
+    "shared_memory_bytes": 268435456,
+    "maximum_egress_computers": 8
+  },
+  "storage": {
+    "state_directory": "/var/lib/tombot-node/storage",
+    "command_timeout_ms": 10000,
+    "minimum_free_bytes": 1073741824
+  },
+  "groups": {
+    "grace_period_ms": 20,
+    "poll_interval_ms": 5,
+    "maximum_processes": 64
+  },
+  "sessions": {
+    "maximum_active": 8,
+    "call_timeout_ms": 10000,
+    "poll_interval_ms": 10,
+    "retry_delay_ms": 100,
+    "cleanup_attempts": 2
+  },
+  "probe": {
+    "call_timeout_ms": 10000,
+    "cleanup_timeout_ms": 10000
+  },
+  "agent": {
+    "call_timeout_ms": 10000,
+    "cleanup_timeout_ms": 10000,
+    "retry_delay_ms": 100,
+    "cleanup_attempts": 2,
+    "poll_interval_ms": 10,
+    "shutdown_timeout_ms": 30000,
+    "maximum_active": 8,
+    "maximum_connections": 16,
+    "egress_connect_timeout_ms": 1000,
+    "egress_idle_timeout_ms": 1000,
+    "egress_lifetime_ms": 10000,
+    "egress_maximum_connections": 8,
+    "egress_maximum_transfer_bytes": 1048576
+  },
+  "egress": {
+    "ports": [
+      80,
+      443
+    ],
+    "denied_networks": [],
+    "connect_timeout_ms": 1000,
+    "header_timeout_ms": 1000,
+    "idle_timeout_ms": 1000,
+    "request_timeout_ms": 10000,
+    "tunnel_timeout_ms": 10000,
+    "shutdown_timeout_ms": 2000,
+    "maximum_connections": 8,
+    "maximum_request_bytes": 1048576,
+    "maximum_response_bytes": 1048576,
+    "maximum_tunnel_bytes": 1048576
+  },
+  "browser": {
+    "call_timeout_ms": 10000,
+    "cleanup_timeout_ms": 30000,
+    "shutdown_timeout_ms": 60000,
+    "limits": {
+      "width": 1280,
+      "height": 800,
+      "maximum_windows": 32,
+      "maximum_per_session": 4,
+      "maximum_window_records": 128,
+      "maximum_events": 256,
+      "call_timeout_ms": 5000,
+      "dialog_timeout_ms": 300000,
+      "shutdown_timeout_ms": 5000
+    }
+  },
+  "agent_startup": {
+    "timeout_ms": 5000,
+    "call_timeout_ms": 1000,
+    "retry_delay_ms": 100,
+    "maximum_attempts": 8
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "node": {
+    "version": "24.22.2",
+    "amd64": {"url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-x64.tar.xz", "sha256": "48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75"},
+    "arm64": {"url": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-linux-arm64.tar.xz", "sha256": "eb187837a2230d4047161ac0be008584e16b46f726e9c9490ee35dc6b17d9ba8"}
+  },
+  "go": {
+    "version": "1.27.4",
+    "amd64": {"url": "https://go.dev/dl/go1.27.4.linux-amd64.tar.gz", "sha256": "7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840"},
+    "arm64": {"url": "https://go.dev/dl/go1.27.4.linux-arm64.tar.gz", "sha256": "3392582988a273a87ab5043ee1b2c9c17a2c3c00580bf9326c47a2e0aaaeac92"}
+  },
+  "uv": {
+    "version": "0.13.7",
+    "amd64": {"url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-unknown-linux-gnu.tar.gz", "sha256": "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83"},
+    "arm64": {"url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-aarch64-unknown-linux-gnu.tar.gz", "sha256": "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc"}
+  },
+  "bun": {
+    "version": "1.4.4",
+    "amd64": {"url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-x64-baseline.zip", "sha256": "e0446eb55995772eb9894bebae9a6be368d985a8b9271ee124486f9946eedd76"},
+    "arm64": {"url": "https://github.com/oven-sh/bun/releases/download/bun-v1.4.4/bun-linux-aarch64.zip", "sha256": "baa6bb36f51d6e58561e02bbea825038a9df454f673d6d776e8bbf86f8c7850e"}
+  },
+  "chrome": {
+    "version": "157.0.8103.50-1",
+    "amd64": {"url": "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_157.0.8103.50-1_amd64.deb", "sha256": "92148bd14dc05823a64061c2fafcf20d4d82b3fc56f5831206f16d2ac9ee3f79"},
+    "arm64": {"url": "https://dl.google.com/linux/chrome/deb/pool/main/g/google-chrome-stable/google-chrome-stable_157.0.8103.50-1_arm64.deb", "sha256": "a634e416235cd094981d6c370d020f26ef751d521e2cef5758c220c3f94171a6"}
+  },
+  "pnpm": {
+    "version": "12.18.0",
+    "amd64": {"url": "https://github.com/pnpm/pnpm/releases/download/v12.18.0/pnpm-linux-x64.tar.gz", "sha256": "3726060e236c0db3e7124c0a5af123c840ba0cb76682149b63ea0baf290017c2"},
+    "arm64": {"url": "https://github.com/pnpm/pnpm/releases/download/v12.18.0/pnpm-linux-arm64.tar.gz", "sha256": "700bd1aa4028465b80e62b7c5bec8455be60bbafaf53a3262a4ab8e2057712ac"}
+  }
+}

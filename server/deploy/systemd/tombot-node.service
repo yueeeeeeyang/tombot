@@ -1,0 +1,28 @@
+[Unit]
+Description=TomBot 受信宿主电脑节点
+Requires=tombot-docker-bootstrap.service tombot-image-prepare.service
+After=tombot-docker-bootstrap.service tombot-image-prepare.service
+Before=tomd.service
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=root
+Group=root
+UMask=0077
+Environment=TOM_NODE_CONFIG=/etc/tombot/node.json
+ExecStart=/usr/lib/tombot/tomnode
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=16min
+TimeoutStopSec=11min
+KillMode=control-group
+NoNewPrivileges=true
+RuntimeDirectory=tombot
+RuntimeDirectoryMode=0711
+RuntimeDirectoryPreserve=yes
+StateDirectory=tombot-node/runtime tombot-node/storage tombot-node/workspaces
+StateDirectoryMode=0700
+
+# 磁盘挂载须能被宿主 Docker 看到，不启用 PrivateTmp、ProtectSystem 等私有挂载命名空间。
+# root 权限只属于本节点；API 和 Worker 使用固定非 root 控制身份。

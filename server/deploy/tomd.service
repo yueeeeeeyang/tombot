@@ -1,0 +1,33 @@
+[Unit]
+Description=TomBot 多用户 API 与任务调度
+Wants=network-online.target tombot-node.service
+After=network-online.target tombot-node.service
+
+# 节点维护或失败不能停止登录和历史查询；新增电脑由数据库控制租约与能力验收共同门禁。
+
+[Service]
+Type=simple
+User=tombot-api
+Group=tombot-api
+UMask=0077
+WorkingDirectory=/opt/tombot
+Environment=TOM_SERVER_CONFIG=/etc/tombot/server.json
+ExecStart=/usr/local/bin/tomd
+StandardOutput=journal
+StandardError=journal
+Restart=on-failure
+RestartSec=5s
+KillMode=mixed
+TimeoutStopSec=360s
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+# 部署时固定此账户的 UID/GID，并与节点通道允许的调用身份一致；不要加入 Docker 组。
+# 本单元不创建数据库角色、凭据文件、节点目录或首位管理员。
+[Install]
+WantedBy=multi-user.target

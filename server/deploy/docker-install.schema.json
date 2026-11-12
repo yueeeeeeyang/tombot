@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Docker 自动引导安装清单",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["engine_package_version", "cli_package_version", "containerd_package_version", "e2fsprogs_package_version", "util_linux_package_version", "mount_package_version", "allowed_engine_versions", "repository_fingerprint", "timeout_seconds", "minimum_free_bytes"],
+  "properties": {
+    "engine_package_version": {"type": "string", "description": "经 Linux 验收的 Ubuntu 24.04 Docker CE 完整软件包版本，包含 epoch 和发行版后缀"},
+    "cli_package_version": {"type": "string", "description": "与引擎一致的 Docker CLI 软件包版本"},
+    "containerd_package_version": {"type": "string", "description": "与所选引擎共同验收的 containerd.io 完整软件包版本"},
+    "e2fsprogs_package_version": {"type": "string", "pattern": "^[0-9][0-9A-Za-z.+:~_-]{0,100}$", "description": "宿主 Ubuntu 24.04 的 e2fsprogs 完整受测版本，提供 mke2fs/mkfs.ext4 与 e2fsck"},
+    "util_linux_package_version": {"type": "string", "pattern": "^[0-9][0-9A-Za-z.+:~_-]{0,100}$", "description": "宿主 Ubuntu 24.04 的 util-linux 完整受测版本，提供 fallocate"},
+    "mount_package_version": {"type": "string", "pattern": "^[0-9][0-9A-Za-z.+:~_-]{0,100}$", "description": "宿主 Ubuntu 24.04 的 mount 完整受测版本，提供 losetup、mount 与 umount"},
+    "allowed_engine_versions": {"type": "array", "minItems": 1, "maxItems": 10, "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}, "description": "允许复用的精确 Docker Engine 版本，不使用 latest 或浮动范围"},
+    "repository_fingerprint": {"type": "string", "pattern": "^[0-9A-F]{40}$", "description": "发布流程核验的 Docker 官方仓库主公钥指纹"},
+    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 3600},
+    "minimum_free_bytes": {"type": "integer", "minimum": 1073741824, "maximum": 107374182400}
+  }
+}

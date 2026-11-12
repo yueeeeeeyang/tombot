@@ -1,0 +1,21 @@
+[Unit]
+Description=TomBot Docker 与宿主磁盘工具启动引导
+Wants=network-online.target
+Requires=tombot-deployment-check.service
+After=network-online.target tombot-deployment-check.service
+Before=tombot-node.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/docker-install.json
+ExecStart=/usr/lib/tombot/tomdocker-bootstrap
+TimeoutStartSec=1h
+StateDirectory=tombot-node
+StateDirectoryMode=0700
+PrivateTmp=true
+ProtectHome=true
+
+# 节点服务通过 Requires 和 After 依赖本单元；API 与 Worker 不获得安装或 Docker 权限。

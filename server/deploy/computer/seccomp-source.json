@@ -1,0 +1,12 @@
+{
+  "upstream": "https://github.com/moby/profiles/blob/7b5ccfab2d6b4e0aa64c6cce401a2705788eafeb/seccomp/default.json",
+  "upstreamSha256": "15434cc9c9037d85b35027a60721bf45f381782b4283b01d94663366e71569f8",
+  "basePolicySha256": "996ae7bebe09e9ed08d6e96e660add4da9ccbfd7951fd64a7493f954e211fd85",
+  "addedSyscalls": [
+    "clone",
+    "setns",
+    "unshare",
+    "chroot"
+  ],
+  "license": "Apache-2.0"
+}

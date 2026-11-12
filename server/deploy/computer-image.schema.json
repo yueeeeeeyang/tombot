@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "电脑镜像准备清单",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "node_id", "image_id", "reference", "platform", "docker_socket", "state_directory", "call_timeout_seconds", "timeout_seconds"],
+  "properties": {
+    "version": {"const": 1},
+    "node_id": {"type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"},
+    "image_id": {"type": "string", "pattern": "^[0-7][0-9A-HJKMNP-TV-Z]{25}$"},
+    "reference": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9./:_-]{0,220}@sha256:[0-9a-f]{64}$"},
+    "platform": {"enum": ["linux/amd64", "linux/arm64"]},
+    "docker_socket": {"type": "string", "pattern": "^/", "minLength": 2},
+    "state_directory": {"type": "string", "pattern": "^/", "minLength": 2},
+    "authentication_file": {"type": "string", "pattern": "^/", "minLength": 2},
+    "call_timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 300},
+    "timeout_seconds": {"type": "integer", "minimum": 30, "maximum": 3600}
+  }
+}

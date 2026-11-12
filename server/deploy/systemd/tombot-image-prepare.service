@@ -1,0 +1,24 @@
+[Unit]
+Description=TomBot 固定电脑镜像准备
+Requires=tombot-docker-bootstrap.service
+After=tombot-docker-bootstrap.service
+Before=tombot-node.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json
+ExecStart=/usr/lib/tombot/tomimage-prepare
+TimeoutStartSec=65min
+TimeoutStopSec=30s
+KillMode=control-group
+StateDirectory=tombot-node/images
+StateDirectoryMode=0700
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+
+# 每次依赖启动均重新检查实际镜像，不用上一轮成功状态跳过核验。

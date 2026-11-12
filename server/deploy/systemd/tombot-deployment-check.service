@@ -1,0 +1,26 @@
+[Unit]
+Description=TomBot 安装前部署配置核对
+Before=tombot-docker-bootstrap.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=TOM_SERVER_CONFIG=/etc/tombot/server.json
+Environment=TOM_NODE_CONFIG=/etc/tombot/node.json
+Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/docker-install.json
+Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json
+ExecStart=/usr/lib/tombot/tomdeploy-check
+TimeoutStartSec=30s
+TimeoutStopSec=5s
+KillMode=control-group
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_UNIX
+
+# 不读取凭据内容，不连接数据库或 Docker；每次引导重新检查，不缓存安装许可。
