@@ -1,6 +1,6 @@
 # 节点与镜像登记
 
-`tomnode-register` 为单 Linux 宿主部署登记本机节点与固定镜像版本。它使用与 `tomd` 相同的非 root 身份和服务配置，只写 PostgreSQL 目录与审计，不持有 Docker socket，不启动容器，不提供把节点标为就绪的参数。
+`tomnode-register` 为部署登记本机节点与固定镜像版本。它使用与 `tomd` 相同的非 root 身份和服务配置，只写 PostgreSQL 目录与审计，不持有 Docker socket，不启动容器，不提供把节点标为就绪的参数。
 
 登记成功后新节点为 `bootstrapping`，还不能创建账户。[镜像准备命令](image-preparation.md)及[独立节点服务](../internal/nodeapp/README.md)已接通，[控制心跳租约](node-health.md)也已接入，完整能力探针及就绪发布仍在生产部署阶段继续接入；节点控制通知不改变登记健康状态，不能手工改成 `ready` 来绕过这一边界。
 
@@ -8,7 +8,7 @@
 
 先通过 `tomdb` 在全新 PostgreSQL 执行全部迁移（包含 `0045`），并按[服务配置](../internal/serverapp/README.md)准备四个用途分离的数据库连接。节点 ID 在部署时生成并保留，与 API 的 `node.id` 和后续独立节点配置一致；命令从服务配置读取该 ID，不接受操作文件覆盖。
 
-`make build` 与 `make release` 包含此命令。安装与宿主架构匹配的 Linux 二进制，使用 API 服务身份执行：
+`make build` 与 `make release` 包含此命令。安装与宿主架构匹配的二进制，使用 API 服务身份执行：
 
 ```sh
 # 操作与配置文件不包含明文凭据，只引用各自受保护的文件。
@@ -17,7 +17,7 @@ TOM_NODE_REGISTRATION_REQUEST=/etc/tombot/node-registration.json \
 /usr/local/bin/tomnode-register
 ```
 
-不接受命令行参数，拒绝 root 及非 Linux。配置和操作文件必须使用规范绝对路径，由 root 或当前服务身份持有，不可被组或其他用户写入，拒绝末级链接及非普通文件。数据库连接文件另须仅所有者可读；命令校验四个连接属于同一数据库，只打开控制连接，并复验完整迁移账本。
+不接受命令行参数，拒绝 root；命令本身不限制操作系统，宿主检查由节点程序负责。配置和操作文件必须使用规范绝对路径，由 root 或当前服务身份持有，不可被组或其他用户写入，拒绝末级链接及非普通文件。数据库连接文件另须仅所有者可读；命令校验四个连接属于同一数据库，只打开控制连接，并复验完整迁移账本。
 
 首次并发登记使用覆盖全部唯一约束的 `ON CONFLICT DO NOTHING`，随后读取并核对节点、镜像和完整登记字段；名称或引用被其他身份占用时仍返回冲突，整个事务回滚。相同登记只创建一次资源与审计，不重试未知事务结果。[PostgreSQL INSERT 冲突范围](https://www.postgresql.org/docs/16/sql-insert.html)。
 

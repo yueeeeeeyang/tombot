@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/testkit/pgtest"
+	"io.yueyang/tom/internal/userevents"
 )
 
 func execute(t *testing.T, pool *sql.DB, query string, arguments ...any) {
@@ -126,10 +128,16 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(catalog, executor, gate, logger)
+	userEvents, err := userevents.New(tenant)
 	if err != nil {
 		t.Fatal(err)
 	}
+	handler, err := New(catalog, executor, userEvents, gate, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 联合测试把一次订阅压缩为"读满一轮即收尾"，避免等待真实的分钟级窗口。
+	handler.eventTiming = eventTiming{pollInterval: 10 * time.Millisecond, heartbeat: 20 * time.Millisecond, drainMargin: 500 * time.Millisecond, minimumWindow: time.Hour}
 	mux := http.NewServeMux()
 	mux.Handle("/api/v2/auth/", gate)
 	mux.Handle("/", handler)
@@ -175,7 +183,7 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	for index := range sessions {
 		user, computer, activation, password := ids.New(), ids.New(), randomValue(t), randomValue(t)
 		username := strings.ToLower(user)
-		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'业务用户','user','provisioning')`, user, username)
+		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'业务用户','provisioning')`, user, username)
 		execute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, user, computer, node, imageID)
 		execute(t, pool, `UPDATE tombot.users SET status='pending_activation' WHERE id=$1`, user)
 		execute(t, pool, `INSERT INTO tombot.user_limits(user_id,concurrent_model_calls,concurrent_desktops,queued_runs,monthly_token_limit) VALUES($1,2,2,10,100000)`, user)
@@ -374,6 +382,8 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if workspace.ActiveBotID != nil || workspace.PrimaryBotID == nil {
 		t.Fatal("工作空间选择语义错误")
 	}
+	verifyEventStream(t, server.URL, client, first, second, created.Bot.ID, snapshot.EventSequence)
+	verifyExpiredEventCursor(t, server.URL, client, first, open(postgres.ControlRole), sessions[0].Principal.UserID)
 	group = decode[groupReply](t, call("POST", groupPath+"/state", map[string]any{"expected_revision": group.Group.Revision, "is_archived": true}, first, nil), 200)
 	if !group.Group.IsArchived {
 		t.Fatal("群组归档未生效")
@@ -447,5 +457,130 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	execute(t, pool, `UPDATE tombot.users SET status='disabled' WHERE id=$1`, sessions[1].Principal.UserID)
 	if response := call("GET", "/api/v2/workspace", nil, second, nil); response.status != 401 {
 		t.Fatal("禁用后仍读取内容")
+	}
+}
+
+// eventFrame 是测试从 SSE 正文中解析出的一帧；只校验协议必需字段。
+type eventFrame struct {
+	kind string
+	id   int64
+	data string
+}
+
+// parseEventStream 按空行切分帧，忽略重连提示与心跳注释。
+func parseEventStream(t *testing.T, content string) []eventFrame {
+	t.Helper()
+	frames := make([]eventFrame, 0, 8)
+	for _, block := range strings.Split(content, "\n\n") {
+		if strings.TrimSpace(block) == "" || strings.HasPrefix(block, ":") || strings.HasPrefix(block, "retry:") {
+			continue
+		}
+		var frame eventFrame
+		for _, line := range strings.Split(block, "\n") {
+			switch {
+			case strings.HasPrefix(line, "event: "):
+				frame.kind = strings.TrimPrefix(line, "event: ")
+			case strings.HasPrefix(line, "id: "):
+				value, err := strconv.ParseInt(strings.TrimPrefix(line, "id: "), 10, 64)
+				if err != nil {
+					t.Fatal("事件帧序号不是整数", line)
+				}
+				frame.id = value
+			case strings.HasPrefix(line, "data: "):
+				frame.data = strings.TrimPrefix(line, "data: ")
+			}
+		}
+		// 错误帧不推进游标，因此没有有效序号；普通事件必须带序号。
+		if frame.kind == "" || frame.data == "" || frame.kind != "error" && frame.id == 0 {
+			t.Fatal("事件帧缺少必要字段", block)
+		}
+		frames = append(frames, frame)
+	}
+	return frames
+}
+
+// readEventStream 发起一次订阅并读到服务端收尾；调用方必须先把 timing 收窄到立即收尾。
+func readEventStream(t *testing.T, baseURL string, client *http.Client, token identity.Credential, query string, headers map[string]string) []eventFrame {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/api/v2/events"+query, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+string(token))
+	request.Header.Set("Accept", "text/event-stream")
+	for key, value := range headers {
+		request.Header.Set(key, value)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal("事件流请求失败", err)
+	}
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	closeErr := response.Body.Close()
+	if response.StatusCode != 200 || readErr != nil || closeErr != nil {
+		t.Fatal("事件流未正常返回", response.StatusCode, readErr, closeErr)
+	}
+	if !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatal("事件流内容类型错误", response.Header.Get("Content-Type"))
+	}
+	if response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatal("事件流缺少缓存禁止头")
+	}
+	return parseEventStream(t, string(content))
+}
+
+// verifyEventStream 覆盖首订阅、按序号续订、Last-Event-ID 续订和跨用户隔离。
+func verifyEventStream(t *testing.T, baseURL string, client *http.Client, first, second identity.Credential, botID string, watermark int64) {
+	t.Helper()
+	all := readEventStream(t, baseURL, client, first, "?after=0", nil)
+	if len(all) == 0 {
+		t.Fatal("事件流没有返回已提交事件")
+	}
+	created := false
+	// 快照水位是读取时刻的提交位置；此后的新事件天然更大，只校验单调递增与合法性。
+	var previous int64
+	for _, frame := range all {
+		if frame.kind == "bot.created" && strings.Contains(frame.data, botID) {
+			created = true
+		}
+		if frame.id < 1 || frame.id <= previous {
+			t.Fatal("事件序号不是严格递增", frame.id, previous)
+		}
+		previous = frame.id
+	}
+	if !created {
+		t.Fatal("事件流未包含机器人创建")
+	}
+	last := all[len(all)-1].id
+	if len(readEventStream(t, baseURL, client, first, "?after="+strconv.FormatInt(last, 10), nil)) != 0 {
+		t.Fatal("按序号续订重复返回事件")
+	}
+	if len(readEventStream(t, baseURL, client, first, "", map[string]string{"Last-Event-ID": strconv.FormatInt(last, 10)})) != 0 {
+		t.Fatal("Last-Event-ID 续订重复返回事件")
+	}
+	for _, frame := range readEventStream(t, baseURL, client, second, "?after=0", nil) {
+		if strings.Contains(frame.data, botID) {
+			t.Fatal("跨用户事件泄漏", frame.data)
+		}
+	}
+}
+
+// verifyExpiredEventCursor 清理到只剩最新事件后，旧游标必须收到明确的重新同步指令，
+// 而不是静默返回空批次——否则客户端会永久错过已删除的变更。
+func verifyExpiredEventCursor(t *testing.T, baseURL string, client *http.Client, token identity.Credential, control *postgres.Database, userID string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := control.Platform(ctx, func(transaction *sql.Tx) error {
+		_, err := postgres.PruneUserEvents(ctx, transaction, userID, 1, 100)
+		return err
+	}); err != nil {
+		t.Fatal("清理用户事件失败", err)
+	}
+	frames := readEventStream(t, baseURL, client, token, "?after=0", nil)
+	if len(frames) != 1 || frames[0].kind != "error" || !strings.Contains(frames[0].data, "EVENT_CURSOR_EXPIRED") {
+		t.Fatal("过期游标未要求重新同步", frames)
 	}
 }

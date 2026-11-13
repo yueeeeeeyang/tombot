@@ -1,37 +1,66 @@
 package nodeapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
-	"net"
-	"path/filepath"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/infra/ids"
 )
 
+// ClientOptions 描述跨主机节点端点；URL 只接受明确的 HTTPS 来源，凭据来自客户端证书。
 type ClientOptions struct {
 	NodeID      string
-	Socket      string
+	URL         string
 	CallTimeout time.Duration
+	TLS         *tls.Config
 }
 
 type Client struct {
 	options ClientOptions
-	dial    func(context.Context) (*net.UnixConn, error)
+	http    *http.Client
 }
 
-// NewClient 固定本机节点和受保护 socket；每次连接都核对内核 root 对端，不读取代理或 Docker 环境。
+// NewClient 构造受指纹固定的 HTTPS 客户端。
+// 保留连接复用：终端与 Agent 读取是高频短请求，每次重新握手会把往返延迟放大成可用性问题。
 func NewClient(options ClientOptions) (*Client, error) {
-	if !validNode(options.NodeID) || !validTimeout(options.CallTimeout) || !filepath.IsAbs(options.Socket) || filepath.Clean(options.Socket) != options.Socket || options.Socket == "/" || len(options.Socket) > 100 {
+	if !validNode(options.NodeID) || !validTimeout(options.CallTimeout) || options.TLS == nil || len(options.TLS.Certificates) == 0 || options.TLS.MinVersion < tls.VersionTLS13 {
 		return nil, errors.New("节点客户端配置无效")
 	}
-	return &Client{options: options, dial: func(ctx context.Context) (*net.UnixConn, error) { return dialControl(ctx, options.Socket) }}, nil
+	endpoint, err := url.Parse(options.URL)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return nil, errors.New("节点客户端地址必须是明确的 HTTPS 来源")
+	}
+	transport := &http.Transport{
+		TLSClientConfig:     options.TLS,
+		ForceAttemptHTTP2:   true,
+		MaxIdleConns:        32,
+		MaxIdleConnsPerHost: 32,
+		IdleConnTimeout:     90 * time.Second,
+	}
+	return &Client{options: options, http: &http.Client{Transport: transport, Timeout: options.CallTimeout}}, nil
 }
 
-// exchange 不重发任何动作；节点调用期限和授权期限都使用同一内核的绝对单调时钟。
+// CloseIdle 释放空闲连接；不等待仍在进行的调用。
+func (client *Client) CloseIdle() error {
+	if transport, ok := client.http.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
+	}
+	return nil
+}
+
+// exchange 只发送一次动作。
+// 传输失败、超时、取消或响应无法校验都必须按结果未知处理：网络不等于执行失败，
+// 上层据此对账而不是补发。
 func (client *Client) exchange(ctx context.Context, action string, input, target any) (failure error) {
 	encoded, err := agentchannel.Encode(input)
 	if err != nil {
@@ -41,54 +70,40 @@ func (client *Client) exchange(ctx context.Context, action string, input, target
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, client.options.CallTimeout)
+	callCtx, cancel := context.WithTimeout(ctx, client.options.CallTimeout)
 	defer cancel()
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	callDeadline, _ := ctx.Deadline()
-	deadline, err := agentchannel.FromDeadline(callDeadline)
-	if err != nil {
-		return err
-	}
-	content := request{NodeID: client.options.NodeID, Action: action, Deadline: deadline, Input: encoded}
+	requestID := ids.New()
+	content := request{RequestID: requestID, NodeID: client.options.NodeID, Action: action, RemainingMillis: remaining(deadlineOf(callCtx), client.options.CallTimeout), Input: encoded}
 	if lifetime > 0 {
-		leaseDeadline, err := agentchannel.FromDeadline(computer.LeaseDeadline(ctx, lifetime))
-		if err != nil {
-			return err
+		lease := remaining(computer.LeaseDeadline(ctx, lifetime), lifetime)
+		if lease < 1 {
+			return errors.New("执行租约在发送前已到期")
 		}
-		content.LeaseDeadline = &leaseDeadline
+		content.LeaseRemainMillis = &lease
 	}
 	body, err := agentchannel.Encode(content)
 	if err != nil {
 		return err
 	}
-	connection, err := client.dial(ctx)
+	request, err := http.NewRequestWithContext(callCtx, http.MethodPost, strings.TrimSuffix(client.options.URL, "/")+"/v2/actions", bytes.NewReader(body))
 	if err != nil {
-		return errors.Join(errors.New("连接受信电脑节点失败"), ctx.Err())
+		return errors.New("节点请求无法构造")
 	}
-	channel, peer, err := agentchannel.New(connection, client.options.CallTimeout)
+	request.Header.Set("Content-Type", "application/json")
+	reply, err := client.http.Do(request)
 	if err != nil {
-		return errors.Join(err, connection.Close())
+		return errors.Join(errors.New("连接受信电脑节点失败"), callCtx.Err())
 	}
-	defer func() { failure = errors.Join(failure, channel.Close()) }()
-	if peer.UID != 0 || peer.PID <= 1 {
-		return errors.New("电脑节点对端不是宿主受信进程")
+	defer func() { failure = errors.Join(failure, reply.Body.Close()) }()
+	if reply.StatusCode != http.StatusOK {
+		return errors.New("电脑节点拒绝了请求")
 	}
-	message := agentchannel.Message{Version: 1, ID: ids.New(), Method: "node_control", Body: body}
-	if err := channel.Send(ctx, message, nil); err != nil {
-		return err
-	}
-	reply, files, err := channel.Receive(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { failure = errors.Join(failure, agentchannel.CloseFiles(files)) }()
-	if reply.Method != "result" || reply.ID != message.ID || reply.Files != 0 {
-		return errors.New("电脑节点响应身份或描述符无效")
+	replyBody, err := io.ReadAll(io.LimitReader(reply.Body, agentchannel.MaximumBytes+1))
+	if err != nil || len(replyBody) > agentchannel.MaximumBytes {
+		return errors.New("电脑节点响应无法读取或超过限制")
 	}
 	var result response
-	if agentchannel.Decode(reply.Body, &result) != nil || result.NodeID != client.options.NodeID || result.Action != action {
+	if agentchannel.Decode(replyBody, &result) != nil || result.RequestID != requestID || result.NodeID != client.options.NodeID || result.Action != action {
 		return errors.New("电脑节点响应内容或归属无效")
 	}
 	if result.Failure != nil {
@@ -101,4 +116,17 @@ func (client *Client) exchange(ctx context.Context, action string, input, target
 		return errors.New("电脑节点结果无效")
 	}
 	return nil
+}
+
+func deadlineOf(ctx context.Context) time.Time {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return time.Now()
+	}
+	return deadline
+}
+
+func validID(value string) bool {
+	id, err := ulid.ParseStrict(value)
+	return err == nil && id.String() == value
 }

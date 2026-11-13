@@ -15,35 +15,27 @@ func (service *Service) Retry(ctx context.Context, actor identity.Principal, ope
 	if err := service.authorizer.RequireAdmin(ctx, actor, true); err != nil {
 		return Operation{}, err
 	}
-	return service.retry(ctx, actor.UserID, operationID, requestID, false)
+	return service.retry(ctx, actor.UserID, operationID, requestID)
 }
 
-// RetryBootstrap 供受保护的部署命令恢复首次开户失败，不要求尚未激活的管理员先登录。
-func (service *Service) RetryBootstrap(ctx context.Context, operationID, requestID string) (Operation, error) {
-	return service.retry(ctx, "", operationID, requestID, true)
-}
-
-func (service *Service) retry(ctx context.Context, actorID, operationID, requestID string, initial bool) (Operation, error) {
+func (service *Service) retry(ctx context.Context, actorID, operationID, requestID string) (Operation, error) {
 	for _, id := range []string{operationID, requestID} {
 		if _, err := ulid.ParseStrict(id); err != nil {
 			return Operation{}, ErrInvalidInput
 		}
 	}
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		var status, userID, computerID, nodeID, imageID, userStatus, computerStatus, role string
+		var status, userID, computerID, nodeID, imageID, userStatus, computerStatus string
 		var creator sql.NullString
 		var reserved bool
-		err := transaction.QueryRowContext(ctx, `SELECT o.status,o.user_id,o.computer_id,o.capacity_reserved,c.node_id,c.image_id,u.status,c.status,u.role,o.actor_id
+		err := transaction.QueryRowContext(ctx, `SELECT o.status,o.user_id,o.computer_id,o.capacity_reserved,c.node_id,c.image_id,u.status,c.status,o.actor_id
 			FROM tombot.user_creation_operations o JOIN tombot.computers c ON (c.user_id,c.id)=(o.user_id,o.computer_id) JOIN tombot.users u ON u.id=o.user_id
-			WHERE o.id=$1 FOR UPDATE OF o`, operationID).Scan(&status, &userID, &computerID, &reserved, &nodeID, &imageID, &userStatus, &computerStatus, &role, &creator)
+			WHERE o.id=$1 FOR UPDATE OF o`, operationID).Scan(&status, &userID, &computerID, &reserved, &nodeID, &imageID, &userStatus, &computerStatus, &creator)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
-		}
-		if initial && (creator.Valid || role != "admin") {
-			return ErrNotFound
 		}
 		if status == "quarantined" {
 			return ErrQuarantined

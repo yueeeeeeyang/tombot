@@ -21,10 +21,10 @@ import (
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/modelregistry"
-	"io.yueyang/tom/internal/nodeapi"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userapi"
+	"io.yueyang/tom/internal/userevents"
 	adminweb "io.yueyang/tom/web/admin"
 )
 
@@ -115,7 +115,7 @@ func Open(ctx context.Context, configuration Config, logger *slog.Logger) (appli
 		}
 		databases[role] = database
 	}
-	node, err := nodeapi.NewClient(nodeapi.ClientOptions{NodeID: configuration.Node.ID, Socket: configuration.Node.Socket, CallTimeout: configuration.Node.CallTimeout.Value()})
+	node, err := newNodeClient(configuration.Node)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	models, err := modelregistry.New(databases[postgres.ControlRole], databases[postgres.TenantRole], authentication, keyring, gateway, modelregistry.Options{VerificationTimeout: configuration.Models.VerificationTimeout.Value()})
+	models, err := modelregistry.New(databases[postgres.ControlRole], databases[postgres.TenantRole], authentication, keyring, gateway, gateway, modelregistry.Options{VerificationTimeout: configuration.Models.VerificationTimeout.Value()})
 	if err != nil {
 		return nil, err
 	}
@@ -194,11 +194,23 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	management, err := adminapi.New(users, models, gate, logger)
+	nodeCatalog, err := nodecatalog.NewAdmin(nodes, authentication)
 	if err != nil {
 		return nil, err
 	}
-	user, err := userapi.New(catalog, executor, gate, logger)
+	management, err := adminapi.New(users, authentication, nodeCatalog, models, gate, logger)
+	if err != nil {
+		return nil, err
+	}
+	userEvents, err := userevents.New(databases[postgres.TenantRole])
+	if err != nil {
+		return nil, err
+	}
+	eventRetention, err := userevents.NewRetention(databases[postgres.ControlRole], configuration.Events.retentionOptions(), logger)
+	if err != nil {
+		return nil, err
+	}
+	user, err := userapi.New(catalog, executor, userEvents, gate, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +218,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{observer.Run, verifier.Run, users.Run, worker.Serve}}
+	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{observer.Run, verifier.Run, users.Run, worker.Serve, eventRetention.Run}}
 	router := http.NewServeMux()
 	router.Handle("/api/v2/auth/", gate)
 	router.Handle("/api/v2/admin/auth/", gate)

@@ -23,15 +23,20 @@ import (
 
 // identityStub 只替换传输边界；身份语义另由真实 PostgreSQL 集成测试覆盖。
 type identityStub struct {
-	session      identity.Session
-	err          error
-	calls        []string
-	loginRequest identity.LoginRequest
-	attempt      identity.Attempt
-	principal    identity.Principal
-	refresh      string
-	scope        string
-	hasDeadline  bool
+	session            identity.Session
+	err                error
+	calls              []string
+	loginRequest       identity.LoginRequest
+	attempt            identity.Attempt
+	principal          identity.Principal
+	refresh            string
+	scope              string
+	hasDeadline        bool
+	authorizationID    string
+	authorizationState string
+	authorizationCode  string
+	redirectURI        string
+	challenge          string
 }
 
 func (stub *identityStub) record(name string, ctx context.Context, attempt identity.Attempt) {
@@ -43,9 +48,13 @@ func (stub *identityStub) Activate(ctx context.Context, _, _, _ string, attempt 
 	stub.record("activate", ctx, attempt)
 	return stub.err
 }
-func (stub *identityStub) BeginAdminEnrollment(ctx context.Context, _ string, attempt identity.Attempt) (identity.Credential, error) {
-	stub.record("enrollment", ctx, attempt)
-	return identity.Credential("测试响应材料"), stub.err
+func (stub *identityStub) AdministratorsExist(ctx context.Context) (bool, error) {
+	stub.calls = append(stub.calls, "administrators-exist")
+	return false, stub.err
+}
+func (stub *identityStub) CreateFirstAdministrator(ctx context.Context, username, displayName, _ string, attempt identity.Attempt) (identity.AdministratorSetup, error) {
+	stub.record("create-first-administrator", ctx, attempt)
+	return identity.AdministratorSetup{AdministratorID: ids.New(), Username: username, DisplayName: displayName, Secret: identity.Credential("测试验证器密钥"), Period: 30, Digits: 6, Algorithm: "SHA1"}, stub.err
 }
 func (stub *identityStub) Login(ctx context.Context, request identity.LoginRequest, attempt identity.Attempt) (identity.Session, error) {
 	stub.record("login", ctx, attempt)
@@ -92,6 +101,26 @@ func (stub *identityStub) RevokeDevice(ctx context.Context, principal identity.P
 	stub.record("revoke", ctx, identity.Attempt{RequestID: requestID})
 	stub.principal = principal
 	return stub.err
+}
+
+// 浏览器登录的传输测试只需要固定返回值；领域语义由身份服务集成测试覆盖。
+func (stub *identityStub) BeginBrowserAuthorization(ctx context.Context, request identity.BrowserAuthorizationRequest) (identity.Authorization, error) {
+	stub.record("browser-start", ctx, identity.Attempt{})
+	stub.redirectURI = request.RedirectURI
+	return identity.Authorization{ID: stub.authorizationID, State: request.State, RedirectURI: request.RedirectURI, DeviceName: request.DeviceName, Platform: request.Platform}, stub.err
+}
+func (stub *identityStub) PendingAuthorization(ctx context.Context, _, _ string) (identity.Authorization, error) {
+	stub.record("browser-pending", ctx, identity.Attempt{})
+	return identity.Authorization{ID: stub.authorizationID, State: stub.authorizationState, RedirectURI: stub.redirectURI, DeviceName: "测试桌面", Platform: "linux"}, stub.err
+}
+func (stub *identityStub) ApproveBrowserAuthorization(ctx context.Context, _, _, _, _ string, attempt identity.Attempt) (string, error) {
+	stub.record("browser-approve", ctx, attempt)
+	return stub.authorizationCode, stub.err
+}
+func (stub *identityStub) ExchangeBrowserAuthorization(ctx context.Context, code, verifier, state string, attempt identity.Attempt) (identity.Session, error) {
+	stub.record("browser-exchange", ctx, attempt)
+	stub.authorizationCode, stub.challenge, stub.authorizationState = code, verifier, state
+	return stub.session, stub.err
 }
 
 func randomValue(t *testing.T) string {
@@ -345,7 +374,8 @@ func TestRemainingRoutesCarryVerifiedIdentity(t *testing.T) {
 		status                   int
 	}{
 		{"POST", "/api/v2/auth/activate", `{}`, "activate", 204},
-		{"POST", "/api/v2/auth/admin-enrollment", `{}`, "enrollment", 200},
+		{"GET", "/api/v2/auth/admin-setup", ``, "administrators-exist", 200},
+		{"POST", "/api/v2/auth/admin-setup", `{"username":"first-admin","display_name":"首位管理员","password":"` + strings.Repeat("a", 16) + `"}`, "create-first-administrator", 201},
 		{"POST", "/api/v2/auth/refresh", `{}`, "refresh", 200},
 		{"POST", "/api/v2/auth/password", `{}`, "password", 204},
 		{"POST", "/api/v2/auth/verify", `{}`, "verify", 204},

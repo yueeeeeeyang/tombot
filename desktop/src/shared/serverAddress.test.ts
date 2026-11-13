@@ -70,23 +70,53 @@ describe('服务地址', () => {
   })
 
   it('旧会话文件没有地址时保持空白，损坏内容不会变成默认主机', () => {
+    // 旧版本只存设备令牌，v2 不能把它当作访问凭据，必须视为未登录。
     expect(parseStoredSession('{"deviceToken":"saved-device"}')).toEqual({
-      deviceToken: 'saved-device',
+      accessToken: '',
+      refreshToken: '',
+      accessExpiresAt: '',
       serverUrl: '',
+      username: '',
     })
-    expect(parseStoredSession('not-json')).toEqual({ deviceToken: '', serverUrl: '' })
+    expect(parseStoredSession('not-json')).toEqual({
+      accessToken: '',
+      refreshToken: '',
+      accessExpiresAt: '',
+      serverUrl: '',
+      username: '',
+    })
     expect(
       parseStoredSession('{"deviceToken":"saved-device","serverUrl":"ftp://example.com"}'),
-    ).toEqual({ deviceToken: 'saved-device', serverUrl: '' })
+    ).toEqual({
+      accessToken: '',
+      refreshToken: '',
+      accessExpiresAt: '',
+      serverUrl: '',
+      username: '',
+    })
     const roundTrip = serializeStoredSession({
-      deviceToken: 'saved-device',
+      accessToken: 'access-value',
+      refreshToken: 'refresh-value',
+      accessExpiresAt: '2026-11-12T10:00:00Z',
       serverUrl: 'https://tom.example.com',
+      username: 'owner',
     })
     expect(parseStoredSession(roundTrip)).toEqual({
-      deviceToken: 'saved-device',
+      accessToken: 'access-value',
+      refreshToken: 'refresh-value',
+      accessExpiresAt: '2026-11-12T10:00:00Z',
       serverUrl: 'https://tom.example.com',
+      username: 'owner',
     })
-    expect(serializeStoredSession({ deviceToken: '', serverUrl: '' })).not.toContain('127.0.0.1')
+    expect(
+      serializeStoredSession({
+        accessToken: '',
+        refreshToken: '',
+        accessExpiresAt: '',
+        serverUrl: '',
+        username: '',
+      }),
+    ).not.toContain('127.0.0.1')
   })
 
   it('主进程不再在缺少地址时回退到本机 8787', () => {

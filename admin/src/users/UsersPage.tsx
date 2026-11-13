@@ -24,7 +24,6 @@ const GIB = 1024 ** 3
 type Creation = {
   username: string
   display_name: string
-  role: string
   node_id: string
   image_id: string
   resources: { cpu_millis: number; memory_bytes: number; disk_bytes: number; process_limit: number }
@@ -70,7 +69,6 @@ export function UsersPage({ client }: { client: AdminClient }) {
               <thead>
                 <tr>
                   <th>用户</th>
-                  <th>角色</th>
                   <th>账户</th>
                   <th>电脑</th>
                   <th>操作</th>
@@ -83,7 +81,6 @@ export function UsersPage({ client }: { client: AdminClient }) {
                       <strong>{user.display_name}</strong>
                       <small>{user.username}</small>
                     </td>
-                    <td>{user.role === 'admin' ? '管理员' : '用户'}</td>
                     <td>
                       <Status value={user.status} />
                     </td>
@@ -181,7 +178,6 @@ function CreateUser({
       request.current = {
         username: String(fields.get('username')).trim(),
         display_name: String(fields.get('display_name')).trim(),
-        role: String(fields.get('role')),
         node_id: String(fields.get('node_id')),
         image_id: String(fields.get('image_id')),
         idempotency_key: crypto.randomUUID(),
@@ -248,12 +244,6 @@ function CreateUser({
           </Field>
           <Field label="显示名称">
             <input name="display_name" required maxLength={120} />
-          </Field>
-          <Field label="角色">
-            <select name="role">
-              <option value="user">用户</option>
-              <option value="admin">管理员</option>
-            </select>
           </Field>
           <Field label="电脑节点">
             <select name="node_id" required defaultValue="">

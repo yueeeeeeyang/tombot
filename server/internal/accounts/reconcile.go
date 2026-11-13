@@ -15,36 +15,27 @@ func (service *Service) Reconcile(ctx context.Context, actor identity.Principal,
 	if err := service.authorizer.RequireAdmin(ctx, actor, true); err != nil {
 		return Operation{}, err
 	}
-	return service.reconcile(ctx, actor.UserID, operationID, requestID, false)
+	return service.reconcile(ctx, actor.UserID, operationID, requestID)
 }
 
-// ReconcileBootstrap 仅供受保护的本地部署命令恢复首位管理员的隔离资源。
-func (service *Service) ReconcileBootstrap(ctx context.Context, operationID, requestID string) (Operation, error) {
-	return service.reconcile(ctx, "", operationID, requestID, true)
-}
-
-func (service *Service) reconcile(ctx context.Context, actorID, operationID, requestID string, initial bool) (Operation, error) {
+func (service *Service) reconcile(ctx context.Context, actorID, operationID, requestID string) (Operation, error) {
 	for _, id := range []string{operationID, requestID} {
 		if _, err := ulid.ParseStrict(id); err != nil {
 			return Operation{}, ErrInvalidInput
 		}
 	}
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		var userID, computerID, status, userStatus, computerStatus, role string
-		var creator sql.NullString
+		var userID, computerID, status, userStatus, computerStatus string
 		var reserved, wasReady, hasActivation bool
-		err := transaction.QueryRowContext(ctx, `SELECT o.user_id,o.computer_id,o.status,u.status,c.status,u.role,o.actor_id,o.capacity_reserved,c.ready_at IS NOT NULL,
+		err := transaction.QueryRowContext(ctx, `SELECT o.user_id,o.computer_id,o.status,u.status,c.status,o.capacity_reserved,c.ready_at IS NOT NULL,
 			EXISTS(SELECT 1 FROM tombot.activation_tokens WHERE user_id=u.id)
 			FROM tombot.user_creation_operations o JOIN tombot.users u ON u.id=o.user_id JOIN tombot.computers c ON (c.user_id,c.id)=(o.user_id,o.computer_id)
-			WHERE o.id=$1 FOR UPDATE OF o,u,c`, operationID).Scan(&userID, &computerID, &status, &userStatus, &computerStatus, &role, &creator, &reserved, &wasReady, &hasActivation)
+			WHERE o.id=$1 FOR UPDATE OF o,u,c`, operationID).Scan(&userID, &computerID, &status, &userStatus, &computerStatus, &reserved, &wasReady, &hasActivation)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
-		}
-		if initial && (creator.Valid || role != "admin") {
-			return ErrNotFound
 		}
 		if status != "quarantined" || userStatus != "provision_failed" || computerStatus != "quarantined" || !reserved || wasReady || hasActivation {
 			return ErrConflict

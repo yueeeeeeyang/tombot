@@ -103,7 +103,7 @@ func TestPostgreSQLAndHTTPSIdentityFlow(t *testing.T) {
 	for index := range 2 {
 		user, computer, activation, password := ids.New(), ids.New(), randomValue(t), randomValue(t)
 		username := strings.ToLower(user)
-		integrationExecute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'联合测试用户','user','provisioning')`, user, username)
+		integrationExecute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'联合测试用户','provisioning')`, user, username)
 		integrationExecute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit)
 			VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, user, computer, node, image)
 		integrationExecute(t, pool, `UPDATE tombot.users SET status='pending_activation' WHERE id=$1`, user)

@@ -24,12 +24,12 @@ func TestDesktopConcurrencyProvisioning(t *testing.T) {
 	}
 	fixture.service.options.DesktopConcurrency = 7
 	request := fixture.request()
-	operation, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, request, false)
+	operation, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture.service.options.DesktopConcurrency = 9
-	replayed, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, request, false)
+	replayed, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, request)
 	if err != nil || replayed.ID != operation.ID {
 		t.Fatal("开户重试未复用操作", err)
 	}

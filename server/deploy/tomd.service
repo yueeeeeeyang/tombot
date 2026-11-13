@@ -1,9 +1,11 @@
 [Unit]
 Description=TomBot 多用户 API 与任务调度
-Wants=network-online.target tombot-node.service
-After=network-online.target tombot-node.service
+Wants=network-online.target
+After=network-online.target
 
-# 节点维护或失败不能停止登录和历史查询；新增电脑由数据库控制租约与能力验收共同门禁。
+# 节点可以与本服务同机，也可以在另一台主机上；两者通过 HTTPS 与证书指纹互相认证。
+# 因此本单元不再拉取或等待 tombot-node.service：节点维护、重启或跨主机部署都不影响登录与历史查询。
+# 新增电脑仍由数据库控制租约与能力验收共同门禁。
 
 [Service]
 Type=simple
@@ -27,7 +29,8 @@ PrivateTmp=true
 PrivateDevices=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
-# 部署时固定此账户的 UID/GID，并与节点通道允许的调用身份一致；不要加入 Docker 组。
+# 部署时固定此账户的 UID/GID 并保持非 root；不要加入 Docker 组。
+# 节点通道的调用身份由 API 客户端证书的指纹决定，不再依赖 UID/GID。
 # 本单元不创建数据库角色、凭据文件、节点目录或首位管理员。
 [Install]
 WantedBy=multi-user.target

@@ -1,26 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
-import {
-  getBackend,
-  type BootstrapStatus,
-  type SessionPhase,
-  type SessionSnapshot,
-} from '../desktop/backend'
+import { getBackend, type SessionPhase, type SessionSnapshot } from '../desktop/backend'
 
-/** 先确认服务地址和身份，再等主机引导。引导未完成时不进入工作空间。 */
+/** 先确认服务地址，再让用户在系统浏览器里完成登录；未登录不进入工作空间。 */
 export function useSession() {
   const backend = getBackend()
   const syncSession = backend.trySessionSync?.() ?? null
   const [phase, setPhase] = useState<SessionPhase>(syncSession?.phase ?? 'loading')
   const [serverUrl, setServerUrl] = useState(syncSession?.serverUrl ?? '')
-  const [bootstrap, setBootstrap] = useState<BootstrapStatus | undefined>(syncSession?.bootstrap)
   const [message, setMessage] = useState(syncSession?.message ?? '')
   const [pending, setPending] = useState(false)
   const apply = useCallback((result: SessionSnapshot) => {
     setPhase(result.phase)
     setMessage(result.message ?? '')
     if (result.serverUrl !== undefined) setServerUrl(result.serverUrl)
-    setBootstrap(result.bootstrap)
   }, [])
 
   useEffect(() => {
@@ -45,48 +38,12 @@ export function useSession() {
     }
   }, [apply, backend])
 
-  useEffect(() => {
-    if (phase !== 'bootstrap' || !backend.watchBootstrap) return
-    let cancelled = false
-    // 必须作为方法调用，内存实现依赖 this；拆成变量再调用会丢掉接收者。
-    const stop = backend.watchBootstrap(
-      (status) => {
-        if (cancelled) return
-        setBootstrap(status)
-        setMessage(status.phase === 'failed' ? (status.error ?? '') : '')
-        if (status.phase === 'ready') setPhase('ready')
-      },
-      (error) => {
-        if (cancelled) return
-        setMessage(error.message)
-      },
-    )
-    return () => {
-      cancelled = true
-      stop()
-    }
-  }, [backend, phase])
-
-  async function submitSetup(input: { setupCode: string; password: string }): Promise<void> {
+  /** 打开系统浏览器登录；授权完成后客户端自动拿到会话并进入工作空间。 */
+  async function startBrowserLogin(): Promise<void> {
     setPending(true)
     setMessage('')
     try {
-      await backend.setup(input)
-      await backend.login(input.password)
-      apply(await backend.session())
-    } catch (error) {
-      setMessage((error as Error).message)
-    } finally {
-      setPending(false)
-    }
-  }
-
-  async function submitLogin(password: string): Promise<void> {
-    setPending(true)
-    setMessage('')
-    try {
-      await backend.login(password)
-      apply(await backend.session())
+      apply(await backend.browserLogin())
     } catch (error) {
       setMessage((error as Error).message)
     } finally {
@@ -122,16 +79,13 @@ export function useSession() {
     }
   }
 
-  async function retryBootstrap(): Promise<void> {
-    if (!backend.startBootstrap) {
-      setMessage('无法重新准备。')
-      return
-    }
+  /** 本地退出：服务端会撤销会话，本地凭据随即清除。 */
+  async function signOut(): Promise<void> {
+    if (!backend.logout) return
     setPending(true)
-    setMessage('')
     try {
-      // 接口接受后就返回，结果由引导事件推进，不能把 202 当成已经完成。
-      await backend.startBootstrap()
+      await backend.logout()
+      apply(await backend.session())
     } catch (error) {
       setMessage((error as Error).message)
     } finally {
@@ -139,18 +93,13 @@ export function useSession() {
     }
   }
 
-  const visibleMessage =
-    phase === 'bootstrap' && !backend.watchBootstrap ? '无法订阅引导进度。' : message
-
   return {
     phase,
     serverUrl,
-    bootstrap,
-    message: visibleMessage,
+    message,
     pending,
-    submitSetup,
-    submitLogin,
+    startBrowserLogin,
     connect,
-    retryBootstrap,
+    signOut,
   }
 }

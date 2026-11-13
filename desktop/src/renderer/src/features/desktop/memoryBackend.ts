@@ -2,12 +2,13 @@ import { createSettingsDraft, type SettingsDraft } from '../settings/settings'
 import { createWorkspace, type AppWorkspace, type ChatMessage } from '../workspace/model'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
-  BootstrapStatus,
   DeliveryResult,
   DesktopBackend,
+  LoginCredentials,
   SessionPhase,
   SessionSnapshot,
   SettingsView,
+  UserEvent,
   WorkspaceSnapshot,
 } from './backend'
 
@@ -19,14 +20,11 @@ export class MemoryBackend implements DesktopBackend {
   phase: SessionPhase = 'ready'
   serverUrl = ''
   connectError: string | null = null
-  setupCode = 'memory-setup-code'
+  /** 测试用账号：用户名与密码都匹配才进入工作空间。 */
+  username = 'owner'
   password = ''
   failSave: Error | null = null
   sessionError: Error | null = null
-  /** 为 true 时，下一次重试仍失败，用来验证失败不会进入工作空间。 */
-  failNextBootstrap = false
-  bootstrap: BootstrapStatus = { phase: 'ready', steps: [], cursor: 0 }
-  private listeners = new Set<(status: BootstrapStatus) => void>()
   private workspace = createWorkspace()
   private pristine = true
   private settings: SettingsDraft = {
@@ -38,18 +36,16 @@ export class MemoryBackend implements DesktopBackend {
   }
   private apiKey = 'memory-key'
 
-  /** 地址、初始化和密码优先于引导。已验证且引导未完成时才停在进度页。 */
+  /** 地址与密码优先；其余阶段直接反映已登录状态。 */
   private gatePhase(): SessionPhase {
     if (
       this.phase === 'address' ||
       this.phase === 'offline' ||
-      this.phase === 'setup' ||
       this.phase === 'login' ||
       this.phase === 'loading'
     ) {
       return this.phase
     }
-    if (this.bootstrap.phase !== 'ready') return 'bootstrap'
     return 'ready'
   }
 
@@ -59,7 +55,6 @@ export class MemoryBackend implements DesktopBackend {
       phase,
       serverUrl: this.serverUrl,
       ...(phase === 'offline' && this.connectError ? { message: this.connectError } : {}),
-      ...(phase === 'bootstrap' ? { bootstrap: this.bootstrap } : {}),
     }
   }
 
@@ -76,36 +71,37 @@ export class MemoryBackend implements DesktopBackend {
       return { phase: 'offline', message: this.connectError, serverUrl }
     }
     if (this.phase === 'address' || this.phase === 'offline' || this.phase === 'loading') {
-      this.phase = this.password ? 'login' : 'setup'
+      this.phase = 'login'
     }
     return this.trySessionSync()
   }
 
-  watchBootstrap(onStatus: (status: BootstrapStatus) => void): () => void {
-    this.listeners.add(onStatus)
-    return () => this.listeners.delete(onStatus)
-  }
-
-  publishBootstrap(status: BootstrapStatus): void {
-    this.bootstrap = status
-    if (status.phase === 'ready') this.phase = 'ready'
-    for (const listener of this.listeners) listener(status)
-  }
-
-  async setup(input: { setupCode: string; password: string }): Promise<void> {
-    if ([...input.password].length < 12) {
-      throw new Error('密码至少 12 个字符，且不能超过 1024 字节。')
+  async login(credentials: LoginCredentials): Promise<void> {
+    if (credentials.username !== this.username || credentials.password !== this.password) {
+      throw new Error('用户名或密码不正确。')
     }
-    if (input.setupCode.trim() !== this.setupCode) throw new Error('初始化码不正确。')
-    this.password = input.password
     this.phase = 'ready'
   }
 
-  async login(password: string): Promise<void> {
-    if (this.phase === 'setup') throw new Error('请先完成初始化。')
-    if (password !== this.password) throw new Error('密码不正确。')
+  async browserLogin(): Promise<SessionSnapshot> {
+    // 内存实现没有系统浏览器；直接视为用户已在网页完成登录。
     this.phase = 'ready'
+    return this.trySessionSync()
   }
+
+  async logout(): Promise<void> {
+    this.phase = 'login'
+  }
+
+  watchEvents(onEvent: (event: UserEvent) => void): () => void {
+    this.eventListeners.add(onEvent)
+    return () => this.eventListeners.delete(onEvent)
+  }
+
+  publishEvent(event: UserEvent): void {
+    for (const listener of this.eventListeners) listener(event)
+  }
+  private eventListeners = new Set<(event: UserEvent) => void>()
 
   tryWorkspaceSync(): WorkspaceSnapshot {
     return { workspace: this.workspace, pristine: this.pristine }
@@ -150,107 +146,51 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve()
   }
 
-  startBootstrap(): Promise<void> {
-    if (this.bootstrap.phase !== 'failed') return Promise.resolve()
-    if (this.failNextBootstrap) {
-      this.failNextBootstrap = false
-      this.publishBootstrap({
-        ...this.bootstrap,
-        cursor: this.bootstrap.cursor + 1,
-        error: this.bootstrap.error ?? '准备失败',
-      })
-      return Promise.resolve()
-    }
-    this.publishBootstrap({
-      phase: 'ready',
-      cursor: this.bootstrap.cursor + 1,
-      steps: this.bootstrap.steps.map((step) => ({ ...step, status: 'ok', detail: undefined })),
-    })
-    return Promise.resolve()
-  }
-
   openComputer(): Promise<string> {
-    return Promise.resolve('http://127.0.0.1:9/api/v1/computer/view?agent=memory&ticket=memory')
-  }
-
-  async welcomeAgent(
-    agentId: string,
-    onEvent?: (event: { type: string; text: string }) => void,
-  ): Promise<DeliveryResult> {
-    const agent = this.workspace.agents.find((item) => item.id === agentId)
-    if (!agent) return { code: 'AGENT_NOT_FOUND', message: '助手不存在' }
-    if (agent.messages.length) return { workspace: this.workspace }
-    if (!this.settings.baseUrl.trim() || !this.settings.modelName.trim())
-      return { code: 'MODEL_NOT_READY', message: modelNotReady }
-    onEvent?.({ type: 'delta', text: '内存测试欢迎内容' })
-    this.workspace = {
-      ...this.workspace,
-      agents: this.workspace.agents.map((item) =>
-        item.id === agentId
-          ? {
-              ...item,
-              messages: [
-                {
-                  id: `welcome-${agentId}`,
-                  role: 'assistant',
-                  content: '内存测试欢迎内容',
-                  status: 'sent',
-                  createdAt: new Date().toISOString(),
-                  reactions: [],
-                },
-              ],
-            }
-          : item,
-      ),
-    }
-    return { workspace: this.workspace }
+    return Promise.resolve('')
   }
 
   async deliverMessage(
     agentId: string,
-    messageId: string,
+    content: string,
     onEvent?: (event: { type: string; text: string }) => void,
   ): Promise<DeliveryResult> {
     const agent = this.workspace.agents.find((item) => item.id === agentId)
-    const message = agent?.messages.find((item) => item.id === messageId)
-    if (!agent || !message || message.role !== 'user') {
-      return { code: 'MESSAGE_NOT_FOUND', message: '消息不存在' }
-    }
-    if (message.status === 'sent') return { workspace: this.workspace }
+    if (!agent) return { code: 'AGENT_NOT_FOUND', message: '助手不存在' }
+    if (!content.trim()) return { code: 'INPUT_INVALID', message: '消息不能为空' }
     if (!this.settings.baseUrl.trim() || !this.settings.modelName.trim()) {
       return { code: 'MODEL_NOT_READY', message: modelNotReady }
     }
     onEvent?.({ type: 'process', text: '正在思考' })
-    onEvent?.({ type: 'delta', text: '内存测试回复' })
     const sent: ChatMessage = {
-      ...message,
+      id: `sent-${Date.now()}`,
+      role: 'user',
+      content,
+      createdAt: new Date().toISOString(),
       status: 'sent',
-      requestId: message.requestId ?? 'memory-request',
+      reactions: [],
     }
     const reply: ChatMessage = {
-      id: `reply-${message.id}`,
+      id: `reply-${Date.now()}`,
       role: 'assistant',
       content: '内存测试回复',
       createdAt: new Date().toISOString(),
       status: 'sent',
-      requestId: sent.requestId,
       reactions: [],
     }
-    this.workspace = {
-      ...this.workspace,
-      agents: this.workspace.agents.map((item) =>
-        item.id === agentId
-          ? {
-              ...item,
-              messages: item.messages
-                .map((entry) => (entry.id === messageId ? sent : entry))
-                .concat(reply),
-            }
-          : item,
-      ),
+    // 内存实现返回服务端视角的完整列表，与真实服务端一致，由调用方整体替换。
+    return {
+      messages: [...agent.messages, sent, reply].map((message, index) => ({
+        id: message.id,
+        sequence: index + 1,
+        role: message.role,
+        speaker: message.role === 'assistant' ? agentId : '',
+        content: message.content,
+        createdAt: message.createdAt,
+        reactions: message.reactions.map((reaction) => ({ ...reaction })),
+        attachments: [],
+      })),
     }
-    this.pristine = false
-    return { workspace: this.workspace }
   }
 
   trySettingsSync(): SettingsView {
@@ -302,9 +242,7 @@ export class MemoryBackend implements DesktopBackend {
     this.password = ''
     this.failSave = null
     this.sessionError = null
-    this.failNextBootstrap = false
-    this.bootstrap = { phase: 'ready', steps: [], cursor: 0 }
-    this.listeners.clear()
+    this.eventListeners.clear()
     this.workspace = createWorkspace()
     this.pristine = true
     this.settings = {

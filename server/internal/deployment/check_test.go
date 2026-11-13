@@ -39,11 +39,14 @@ func fixtureConfiguration(t *testing.T) (configuration, Paths, account) {
 	for _, role := range []postgres.Role{postgres.IdentityRole, postgres.ControlRole, postgres.TenantRole, postgres.DispatchRole} {
 		server.Database.DSNFiles[role] = "/etc/tombot/private/" + string(role) + ".connection"
 	}
-	server.Node.ID, server.Node.Socket, server.Node.Verification.ImageID = node.NodeID, node.Socket, ids.New()
+	server.Node.ID, server.Node.Verification.ImageID = node.NodeID, ids.New()
+	server.Node.URL = "https://" + node.Listen
+	server.Node.CertificateFile, server.Node.PrivateKeyFile = "/etc/tombot/tls/api-certificate.pem", "/etc/tombot/private/api.key"
+	server.Node.ServerFingerprints = []string{strings.Repeat("b", 64)}
 	server.Models.Origins = []serverapp.Origin{{URL: "https://model.example.test"}}
 	image := dockernode.ImageManifest{Version: 1, NodeID: node.NodeID, ImageID: server.Node.Verification.ImageID, Reference: "example.test/computer@sha256:" + strings.Repeat("a", 64), Platform: "linux/arm64", Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", CallTimeoutSeconds: 30, TimeoutSeconds: 60}
 	paths := Paths{Server: "/etc/tombot/server.json", Node: "/etc/tombot/node.json", Docker: "/etc/tombot/docker-install.json", Image: "/etc/tombot/computer-image.json"}
-	return configuration{server: server, node: node, image: image}, paths, account{uid: node.ClientUID, gid: node.ClientGID}
+	return configuration{server: server, node: node, image: image}, paths, account{uid: 20001, gid: 20001}
 }
 
 func TestDeploymentGraph(t *testing.T) {
@@ -60,12 +63,12 @@ func TestDeploymentGraph(t *testing.T) {
 		}, "租约"},
 		{"节点身份", func(c *configuration, _ *Paths, _ *account) { c.node.NodeID = ids.New() }, "身份"},
 		{"镜像身份", func(c *configuration, _ *Paths, _ *account) { c.image.ImageID = ids.New() }, "身份"},
-		{"用户身份", func(_ *configuration, _ *Paths, a *account) { a.uid++ }, "账户"},
-		{"root 身份", func(c *configuration, _ *Paths, a *account) { a.uid, c.node.ClientUID = 0, 0 }, "账户"},
-		{"控制端点", func(c *configuration, _ *Paths, _ *account) { c.server.Node.Socket = "/run/other.sock" }, "端点"},
-		{"状态目录误用端点作为父目录", func(c *configuration, _ *Paths, _ *account) {
-			c.node.Runtime.StateDirectory = c.node.Socket + "/runtime"
-		}, "端点"},
+		{"用户身份", func(_ *configuration, _ *Paths, a *account) { a.uid = 0 }, "账户"},
+		{"root 身份", func(_ *configuration, _ *Paths, a *account) { a.uid = 0 }, "账户"},
+		{"节点端口不一致", func(c *configuration, _ *Paths, _ *account) { c.server.Node.URL = "https://10.0.0.5:9444" }, "端口"},
+		{"状态目录包含节点证书", func(c *configuration, _ *Paths, _ *account) {
+			c.node.Runtime.StateDirectory = "/etc/tombot/private"
+		}, "重叠"},
 		{"引导引擎", func(c *configuration, _ *Paths, _ *account) {
 			c.node.Runtime.Socket, c.image.Socket = "/run/other.sock", "/run/other.sock"
 		}, "端点"},
@@ -78,9 +81,7 @@ func TestDeploymentGraph(t *testing.T) {
 			c.image.StateDirectory = c.node.Runtime.StateDirectory + "/images"
 		}, "重叠"},
 		{"引导记录被包含", func(c *configuration, _ *Paths, _ *account) { c.image.StateDirectory = "/var/lib/tombot-node" }, "重叠"},
-		{"端点位于私有运行目录", func(c *configuration, _ *Paths, _ *account) {
-			c.node.Socket, c.server.Node.Socket = "/run/tombot-node/control.sock", "/run/tombot-node/control.sock"
-		}, "端点"},
+
 		{"管理端包含私有文件", func(c *configuration, _ *Paths, _ *account) { c.server.AdminDirectory = "/etc/tombot" }, "重叠"},
 		{"私有文件复用", func(c *configuration, _ *Paths, _ *account) { c.server.CSRFKeyFile = c.server.IdentityKeyFile }, "复用"},
 		{"配置与镜像记录重叠", func(c *configuration, p *Paths, _ *account) { p.Image = c.image.StateDirectory + "/config.json" }, "重叠"},
@@ -155,7 +156,6 @@ func filesystemFixture(t *testing.T) (filesystem, configuration, Paths, account)
 	if fs.owner != 0 {
 		api = account{uid: fs.owner, gid: uint32(os.Getegid())}
 	}
-	value.node.ClientUID, value.node.ClientGID = api.uid, api.gid
 	materializeFixture(t, fs, value, paths, api)
 	return fs, value, paths, api
 }

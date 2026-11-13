@@ -31,6 +31,18 @@ type preparation struct {
 	Docker   json.RawMessage `json:"docker"`
 	Server   json.RawMessage `json:"server"`
 	Node     json.RawMessage `json:"node,omitempty"`
+	Control  controlSettings `json:"control"`
+}
+
+// controlSettings 由部署提供两侧证书指纹。生成器不读取凭据文件，
+// 因此指纹必须显式传入；写错只会在首次握手被拒绝，不会降低信任。
+// allow_public_listen 表示是否允许监听非私网地址。默认 true：云主机常以公网或运营商
+// 私有地址承载控制端口，私网限制容易被误判为可用；显式 false 时由节点自行拒绝公开地址。
+type controlSettings struct {
+	NodeFingerprint   string `json:"node_certificate_fingerprint"`
+	ClientFingerprint string `json:"api_certificate_fingerprint"`
+	Listen            string `json:"listen"`
+	AllowPublic       *bool  `json:"allow_public_listen,omitempty"`
 }
 
 type imageSettings struct {
@@ -95,7 +107,14 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	if err != nil {
 		return nil, Report{}, errors.New("随包节点配置基线无效")
 	}
-	node.NodeID, node.ClientUID, node.ClientGID = request.NodeID, api.uid, api.gid
+	node.NodeID = request.NodeID
+	node.Listen, node.AllowPublic = request.Control.Listen, true
+	if request.Control.AllowPublic != nil {
+		node.AllowPublic = *request.Control.AllowPublic
+	}
+	node.Control.CertificateFile = "/etc/tombot/tls/node-certificate.pem"
+	node.Control.PrivateKeyFile = "/etc/tombot/private/node.key"
+	node.Control.ClientFingerprints = []string{request.Control.ClientFingerprint}
 	if len(request.Node) != 0 && decodePreparation(request.Node, &node) != nil {
 		return nil, Report{}, errors.New("节点配置覆盖参数无效")
 	}
@@ -105,7 +124,11 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	server.IdentityKeyFile, server.CSRFKeyFile = "/etc/tombot/private/identity.key", "/etc/tombot/private/csrf.key"
 	server.ActiveModelKey, server.ModelKeyFiles = "current", map[string]string{"current": "/etc/tombot/private/model.key"}
 	server.Database.DSNFiles = map[postgres.Role]string{postgres.IdentityRole: "/etc/tombot/private/identity.connection", postgres.ControlRole: "/etc/tombot/private/control.connection", postgres.TenantRole: "/etc/tombot/private/tenant.connection", postgres.DispatchRole: "/etc/tombot/private/dispatch.connection"}
-	server.Node.ID, server.Node.Socket, server.Node.Verification.ImageID = request.NodeID, node.Socket, request.ImageID
+	server.Node.ID, server.Node.Verification.ImageID = request.NodeID, request.ImageID
+	server.Node.URL = "https://" + node.Listen
+	server.Node.CertificateFile = "/etc/tombot/tls/api-certificate.pem"
+	server.Node.PrivateKeyFile = "/etc/tombot/private/api.key"
+	server.Node.ServerFingerprints = []string{request.Control.NodeFingerprint}
 	// 显式提供映射时整体替换，不能让空映射静默继承旧密钥或连接引用。
 	var overrides map[string]json.RawMessage
 	if json.Unmarshal(request.Server, &overrides) != nil {
@@ -132,7 +155,7 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 		return nil, Report{}, errors.New("Docker 与宿主软件清单无效")
 	}
 	registration := nodecatalog.Registration{Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, ImageReference: image.Reference}
-	if registration.Validate() != nil || node.NodeID != request.NodeID || node.ClientUID != api.uid || node.ClientGID != api.gid {
+	if registration.Validate() != nil || node.NodeID != request.NodeID {
 		return nil, Report{}, errors.New("节点登记参数或配置身份冲突")
 	}
 	if request.Capacity >= node.Runtime.MaximumEgressComputers {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -42,7 +43,7 @@ func seedUser(t *testing.T, control *Database) string {
 	t.Helper()
 	userID := ids.New()
 	err := control.Platform(context.Background(), func(transaction *sql.Tx) error {
-		_, err := transaction.Exec(`INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'测试用户','user','provisioning')`, userID, strings.ToLower(userID))
+		_, err := transaction.Exec(`INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'测试用户','provisioning')`, userID, strings.ToLower(userID))
 		return err
 	})
 	if err != nil {
@@ -223,6 +224,9 @@ func TestPostgreSQLIntegration(t *testing.T) {
 
 	t.Run("事件头锁防止提交顺序反转", func(t *testing.T) {
 		testEventCommitOrder(t, tenant, userA, userB)
+	})
+	t.Run("事件按保留条数清理并推进边界", func(t *testing.T) {
+		testEventRetention(t, tenant, control)
 	})
 	t.Run("取消事务不遗留身份或修改", func(t *testing.T) {
 		canceled, cancel := context.WithCancel(ctx)
@@ -425,5 +429,91 @@ func TestConfigurationAndMigrationValidation(t *testing.T) {
 	}
 	if _, err := Open(context.Background(), testOptions("host=database.invalid sslmode=disable", TenantRole)); err == nil || !strings.Contains(err.Error(), "TLS") {
 		t.Fatal("允许远程明文数据库连接", err)
+	}
+}
+
+// testEventRetention 验证清理只删除保留条数之外的事件，并把边界留给游标判断。
+func testEventRetention(t *testing.T, tenant, control *Database) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	userID := seedUser(t, control)
+	const total, retention = 12, 5
+	for index := range total {
+		if err := tenant.Tenant(ctx, userID, func(transaction *sql.Tx) error {
+			_, err := AppendEvent(ctx, transaction, userID, "bot.updated", "bot-"+strconv.Itoa(index), json.RawMessage(`{}`))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var prunedThrough int64
+	if err := control.Platform(ctx, func(transaction *sql.Tx) error {
+		users, err := PrunableUsers(ctx, transaction, retention, 10)
+		if err != nil {
+			return err
+		}
+		if len(users) != 1 || users[0] != userID {
+			return fmt.Errorf("待清理用户不正确: %v", users)
+		}
+		prunedThrough, err = PruneUserEvents(ctx, transaction, userID, retention, 100)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if prunedThrough != total-retention {
+		t.Fatalf("清理边界不正确: %d", prunedThrough)
+	}
+	// 重复清理幂等：序号未再增长时不推进边界，也不再删除行。
+	if err := control.Platform(ctx, func(transaction *sql.Tx) error {
+		boundary, err := PruneUserEvents(ctx, transaction, userID, retention, 100)
+		if err != nil {
+			return err
+		}
+		if boundary != total-retention {
+			return fmt.Errorf("重复清理推进了边界: %d", boundary)
+		}
+		users, err := PrunableUsers(ctx, transaction, retention, 10)
+		if err != nil {
+			return err
+		}
+		if len(users) != 0 {
+			return fmt.Errorf("清理后仍有待清理用户: %v", users)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenant.Snapshot(ctx, userID, func(transaction *sql.Tx) error {
+		events, err := ReadEvents(ctx, transaction, userID, 0, 100)
+		if err != nil {
+			return err
+		}
+		if len(events) != retention || events[0].Sequence != prunedThrough+1 {
+			return fmt.Errorf("保留事件不正确: %+v", events)
+		}
+		boundary, err := PrunedThrough(ctx, transaction, userID)
+		if err != nil {
+			return err
+		}
+		if boundary != prunedThrough {
+			return fmt.Errorf("清理边界读取不正确: %d", boundary)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// 清理不得影响其他用户：边界与序号都按用户独立保存。
+	if err := control.Platform(ctx, func(transaction *sql.Tx) error {
+		boundary, err := PrunedThrough(ctx, transaction, ids.New())
+		if err != nil {
+			return err
+		}
+		if boundary != 0 {
+			return fmt.Errorf("未知用户出现清理边界: %d", boundary)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

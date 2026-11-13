@@ -33,8 +33,15 @@ func (stub *modelsStub) record(method string, actor identity.Principal, requestI
 	stub.arguments = arguments
 	return stub.err
 }
-func (stub *modelsStub) CreateProvider(_ context.Context, a identity.Principal, r, n, p, u string) (modelregistry.Provider, error) {
-	return modelregistry.Provider{ID: ids.New()}, stub.record("CreateProvider", a, r, n, p, u)
+func (stub *modelsStub) CreateProvider(_ context.Context, a identity.Principal, r, n, p, u string, credential []byte) (modelregistry.Provider, error) {
+	stub.borrowed = credential
+	return modelregistry.Provider{ID: ids.New()}, stub.record("CreateProvider", a, r, n, p, u, len(credential))
+}
+func (stub *modelsStub) ListRemoteModels(_ context.Context, a identity.Principal, providerID string) ([]modelregistry.DiscoveredModel, error) {
+	if err := stub.record("ListRemoteModels", a, "", providerID); err != nil {
+		return nil, err
+	}
+	return []modelregistry.DiscoveredModel{{ModelKey: "remote-model", DisplayName: "远端模型"}}, nil
 }
 func (stub *modelsStub) ListProviders(_ context.Context, a identity.Principal, b string, l int) ([]modelregistry.Provider, error) {
 	return []modelregistry.Provider{}, stub.record("ListProviders", a, "", b, l)
@@ -83,6 +90,9 @@ func (stub *modelsStub) RevokeVersion(_ context.Context, a identity.Principal, r
 func (stub *modelsStub) SetEnabled(_ context.Context, a identity.Principal, r, k, id string, revision int64, enabled bool) error {
 	return stub.record("SetEnabled", a, r, k, id, revision, enabled)
 }
+func (stub *modelsStub) DeleteProvider(_ context.Context, a identity.Principal, r, id string, revision int64) error {
+	return stub.record("DeleteProvider", a, r, id, revision)
+}
 func (stub *modelsStub) SetDefault(_ context.Context, a identity.Principal, r, id string, revision int64) error {
 	return stub.record("SetDefault", a, r, id, revision)
 }
@@ -97,7 +107,7 @@ func TestModelManagementRoutes(t *testing.T) {
 		status                      int
 	}{
 		{"GET", "/model-providers?limit=10", "", "ListProviders", 200},
-		{"POST", "/model-providers", `{"name":"测试供应商","protocol":"anthropic","base_url":"https://model.example.test"}`, "CreateProvider", 201},
+		{"POST", "/model-providers", `{"name":"测试供应商","protocol":"anthropic","base_url":"https://model.example.test","credential":"test-credential"}`, "CreateProvider", 201},
 		{"GET", "/model-providers/" + id + "/models", "", "ListModels", 200},
 		{"POST", "/model-providers/" + id + "/models", `{"model_key":"test-model","display_name":"测试模型","context_limit":4096,"output_limit":256,"supports_tools":true,"supports_vision":true}`, "CreateModel", 201},
 		{"GET", "/model-providers/" + id + "/credentials?before=4&limit=2", "", "ListCredentials", 200},

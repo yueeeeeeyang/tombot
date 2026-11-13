@@ -47,7 +47,6 @@ build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomdocker-bootstrap ./cmd/tomdocker-bootstrap
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomdeploy-check ./cmd/tomdeploy-check
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomdeploy-config ./cmd/tomdeploy-config
-	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomadmin-bootstrap ./cmd/tomadmin-bootstrap
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomnode-register ./cmd/tomnode-register
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomimage-prepare ./cmd/tomimage-prepare
 	CGO_ENABLED=0 $(GO) build -trimpath -o bin/tomnode ./cmd/tomnode

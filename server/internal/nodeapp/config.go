@@ -3,10 +3,12 @@ package nodeapp
 
 import (
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,9 +32,9 @@ func (value Milliseconds) duration() time.Duration {
 type Config struct {
 	Version         int                          `json:"version"`
 	NodeID          string                       `json:"node_id"`
-	Socket          string                       `json:"socket"`
-	ClientUID       uint32                       `json:"client_uid"`
-	ClientGID       uint32                       `json:"client_gid"`
+	Listen          string                       `json:"listen"`
+	AllowPublic     bool                         `json:"allow_public_listen"`
+	Control         ControlTLS                   `json:"control_tls"`
 	StartupTimeout  Milliseconds                 `json:"startup_timeout_ms"`
 	ShutdownTimeout Milliseconds                 `json:"shutdown_timeout_ms"`
 	API             APIConfig                    `json:"api"`
@@ -46,6 +48,14 @@ type Config struct {
 	AgentStartup    AgentStartupConfig           `json:"agent_startup"`
 	Egress          EgressConfig                 `json:"egress"`
 }
+
+// ControlTLS 固定本机证书与允许的 API 客户端指纹；节点不再依赖同机内核凭据。
+type ControlTLS struct {
+	CertificateFile    string   `json:"certificate_file"`
+	PrivateKeyFile     string   `json:"private_key_file"`
+	ClientFingerprints []string `json:"client_fingerprints"`
+}
+
 type APIConfig struct {
 	CallTimeout        Milliseconds `json:"call_timeout_ms"`
 	ShutdownTimeout    Milliseconds `json:"shutdown_timeout_ms"`
@@ -116,7 +126,7 @@ type EgressConfig struct {
 }
 
 func (configuration Config) apiOptions() nodeapi.ServerOptions {
-	return nodeapi.ServerOptions{NodeID: configuration.NodeID, ClientUID: configuration.ClientUID, ClientGID: configuration.ClientGID, CallTimeout: configuration.API.CallTimeout.duration(), ShutdownTimeout: configuration.API.ShutdownTimeout.duration(), MaximumConnections: configuration.API.MaximumConnections}
+	return nodeapi.ServerOptions{NodeID: configuration.NodeID, CallTimeout: configuration.API.CallTimeout.duration(), ShutdownTimeout: configuration.API.ShutdownTimeout.duration(), MaximumConnections: configuration.API.MaximumConnections}
 }
 func (configuration GroupConfig) options() processgroup.Options {
 	return processgroup.Options{GracePeriod: configuration.GracePeriod.duration(), PollInterval: configuration.PollInterval.duration(), MaximumProcesses: configuration.MaximumProcesses}
@@ -157,15 +167,23 @@ func (configuration Config) Validate() error {
 	if configuration.API.CallTimeout.duration() < configuration.AgentStartup.Timeout.duration()+configuration.Browser.CallTimeout.duration()+configuration.Probe.CallTimeout.duration() {
 		return errors.New("节点调用预算不足以确认代理、浏览器与基础探针")
 	}
-	if !filepath.IsAbs(configuration.Socket) || filepath.Clean(configuration.Socket) != configuration.Socket || len(configuration.Socket) > 100 || configuration.Socket == "/" || configuration.Socket == configuration.Runtime.Socket || strings.ContainsAny(configuration.Socket+configuration.Runtime.Socket, "\x00\r\n") {
-		return errors.New("节点控制端点路径无效")
+	if !validListen(configuration.Listen) || strings.ContainsAny(configuration.Runtime.Socket, "\x00\r\n") {
+		return errors.New("节点控制监听地址或 Docker 入口无效")
+	}
+	if _, err := nodeapi.ParseFingerprints(configuration.Control.ClientFingerprints); err != nil {
+		return err
+	}
+	for _, path := range []string{configuration.Control.CertificateFile, configuration.Control.PrivateKeyFile} {
+		if !filepath.IsAbs(path) || filepath.Clean(path) != path || path == "/" || strings.ContainsAny(path, "\x00\r\n") {
+			return errors.New("节点控制证书路径无效")
+		}
 	}
 	directories := []string{configuration.Runtime.StateDirectory, configuration.Runtime.StorageDirectory, configuration.Storage.StateDirectory}
 	for index, directory := range directories {
 		if directory == "/" || strings.ContainsAny(directory, "\x00\r\n") {
 			return errors.New("节点数据目录无效")
 		}
-		if within(configuration.Socket, directory) || within(configuration.Runtime.Socket, directory) {
+		if within(configuration.Control.CertificateFile, directory) || within(configuration.Control.PrivateKeyFile, directory) || within(configuration.Runtime.Socket, directory) {
 			return errors.New("节点或 Docker 控制入口不得放入私有数据目录")
 		}
 		for _, other := range directories[index+1:] {
@@ -176,6 +194,17 @@ func (configuration Config) Validate() error {
 	}
 	return nil
 }
+
+// validListen 只接受 host:port 形式；是否允许公网地址在监听时再按显式开关判断。
+func validListen(value string) bool {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil || host == "" || port == "" || strings.ContainsAny(value, "\x00\r\n") || len(value) > 255 {
+		return false
+	}
+	number, err := strconv.Atoi(port)
+	return err == nil && number > 0 && number < 65536
+}
+
 func within(value, directory string) bool {
 	return value == directory || strings.HasPrefix(value, directory+string(filepath.Separator))
 }

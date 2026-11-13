@@ -329,7 +329,7 @@ func TestNodeVerificationLifecycle(t *testing.T) {
 		verifier, node := verifierFixture(t, control)
 		processVerification(t, verifier)
 		owner := node.identities[0].UserID
-		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'业务账户','user','provisioning')`, owner, strings.ToLower(owner))
+		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'业务账户','provisioning')`, owner, strings.ToLower(owner))
 		if _, err := verifier.ProcessNext(t.Context()); !errors.Is(err, ErrConflict) {
 			t.Fatal("验收记录覆盖了业务归属", err)
 		}

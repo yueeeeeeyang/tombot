@@ -3,8 +3,10 @@ package nodeapi
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 	"time"
 
@@ -14,16 +16,15 @@ import (
 
 type ServerOptions struct {
 	NodeID                       string
-	ClientUID, ClientGID         uint32
 	CallTimeout, ShutdownTimeout time.Duration
 	MaximumConnections           int
 }
 
 var ErrUnfinishedOperations = errors.New("节点在途动作未确认收尾，进程必须退出")
 
-// Validate 检查节点身份、唯一控制账户与调用/退出时限；不替代监听时的内核对端认证。
+// Validate 检查节点身份、调用与退出时限；请求方身份由 TLS 证书指纹在握手期确认。
 func (options ServerOptions) Validate() error {
-	if !validNode(options.NodeID) || options.ClientUID == 0 || options.ClientGID == 0 || options.ClientUID == ^uint32(0) || options.ClientGID == ^uint32(0) || !validTimeout(options.CallTimeout) || options.ShutdownTimeout < options.CallTimeout || options.ShutdownTimeout > 2*time.Minute || options.MaximumConnections < 1 || options.MaximumConnections > 1024 {
+	if !validNode(options.NodeID) || !validTimeout(options.CallTimeout) || options.ShutdownTimeout < options.CallTimeout || options.ShutdownTimeout > 2*time.Minute || options.MaximumConnections < 1 || options.MaximumConnections > 1024 {
 		return errors.New("电脑节点服务配置无效")
 	}
 	return nil
@@ -35,7 +36,7 @@ type Server struct {
 	logger     *slog.Logger
 }
 
-// NewServer 固定唯一非 root 控制身份及节点标识，缺少任一电脑能力实现时拒绝构造。
+// NewServer 固定节点标识与调用预算，缺少任一电脑能力实现时拒绝构造。
 func NewServer(operations Operations, options ServerOptions, logger *slog.Logger) (*Server, error) {
 	if operations.Node == nil || operations.Computers == nil || operations.Sessions == nil || operations.Terminals == nil || operations.Desktops == nil || operations.Agents == nil || options.Validate() != nil || logger == nil {
 		return nil, errors.New("电脑节点服务配置无效")
@@ -43,119 +44,106 @@ func NewServer(operations Operations, options ServerOptions, logger *slog.Logger
 	return &Server{operations: operations, options: options, logger: logger}, nil
 }
 
-// Serve 只接受已受保护的顺序包监听器；连接数量有上限，取消关闭监听并等待在途动作收尾。
-func (server *Server) Serve(ctx context.Context, listener *net.UnixListener) (failure error) {
+// Serve 在已终止 TLS 的监听器上提供固定动作端点；连接数有上限，取消后等待在途动作收尾。
+func (server *Server) Serve(ctx context.Context, listener net.Listener) (failure error) {
 	if listener == nil {
 		return errors.New("电脑节点监听器缺失")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	var closeOnce sync.Once
-	var closeErr error
-	closeListener := func() { closeOnce.Do(func() { closeErr = listener.Close() }) }
+	limited := newLimitListener(listener, server.options.MaximumConnections)
+	httpServer := &http.Server{
+		Handler:           http.HandlerFunc(server.serveAction),
+		ReadHeaderTimeout: server.options.CallTimeout,
+		ReadTimeout:       server.options.CallTimeout,
+		WriteTimeout:      server.options.CallTimeout,
+		IdleTimeout:       server.options.CallTimeout,
+		MaxHeaderBytes:    16 << 10,
+		BaseContext:       func(net.Listener) context.Context { return ctx },
+		ErrorLog:          nil,
+	}
 	stopped := make(chan struct{})
-	stop := context.AfterFunc(ctx, func() { closeListener(); close(stopped) })
-	defer func() {
-		if !stop() {
-			<-stopped
-		}
-		closeListener()
-		failure = errors.Join(failure, closeErr)
-	}()
-	var pending sync.WaitGroup
-	capacity := make(chan struct{}, server.options.MaximumConnections)
-	for ctx.Err() == nil {
-		connection, err := listener.AcceptUnix()
-		if err != nil {
-			if ctx.Err() == nil {
+	stop := context.AfterFunc(ctx, func() { close(stopped) })
+	defer func() { stop() }()
+	result := make(chan error, 1)
+	go func() { result <- httpServer.Serve(limited) }()
+	select {
+	case <-ctx.Done():
+	case err := <-result:
+		if ctx.Err() == nil {
+			failure = errors.New("电脑节点监听提前结束")
+			if !errors.Is(err, http.ErrServerClosed) {
 				failure = errors.New("电脑节点监听失败")
 			}
-			break
-		}
-		select {
-		case capacity <- struct{}{}:
-			pending.Add(1)
-			go func() {
-				defer pending.Done()
-				defer func() { <-capacity }()
-				if err := server.serveConnection(ctx, connection); err != nil && ctx.Err() == nil {
-					server.logger.WarnContext(ctx, "电脑节点请求未能完成", "node_id", server.options.NodeID)
-				}
-			}()
-		default:
-			if err := connection.Close(); err != nil {
-				failure = errors.New("关闭超额节点连接失败")
-			}
-		}
-		if failure != nil {
-			break
 		}
 	}
-	cancel()
-	done := make(chan struct{})
-	go func() { pending.Wait(); close(done) }()
-	timer := time.NewTimer(server.options.ShutdownTimeout)
-	defer timer.Stop()
+	shutdown, finish := context.WithTimeout(context.WithoutCancel(ctx), server.options.ShutdownTimeout)
+	defer finish()
+	if err := httpServer.Shutdown(shutdown); err != nil {
+		// 连接未在预算内收尾说明仍有在途动作，进程必须退出并由持久记录恢复。
+		return errors.Join(failure, ErrUnfinishedOperations, err)
+	}
+	if err := limited.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		failure = errors.Join(failure, errors.New("关闭节点监听失败"))
+	}
 	select {
-	case <-done:
-	case <-timer.C:
-		return errors.Join(failure, ErrUnfinishedOperations)
+	case err := <-result:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+			failure = errors.Join(failure, errors.New("电脑节点监听退出异常"))
+		}
+	default:
 	}
 	return failure
 }
 
-func (server *Server) serveConnection(parent context.Context, connection *net.UnixConn) (failure error) {
-	channel, peer, err := agentchannel.New(connection, server.options.CallTimeout)
-	if err != nil {
-		return errors.Join(err, connection.Close())
+// serveAction 只接受一个固定动作；请求期限按收包时刻重建，传输耗时不延长任何授权。
+func (server *Server) serveAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost || r.URL.Path != "/v2/actions" || r.URL.RawQuery != "" {
+		writeFailure(w, http.StatusNotFound)
+		return
 	}
-	defer func() { failure = errors.Join(failure, channel.Close()) }()
-	if peer.PID <= 1 || peer.UID != server.options.ClientUID || peer.GID != server.options.ClientGID {
-		return errors.New("节点请求方不是配置的控制服务身份")
-	}
-	ctx, cancel := context.WithTimeout(parent, server.options.CallTimeout)
-	defer cancel()
-	message, files, err := channel.Receive(ctx)
-	if err != nil {
-		return err
-	}
-	if err := agentchannel.CloseFiles(files); err != nil {
-		return err
-	}
-	if message.Method != "node_control" || message.Files != 0 {
-		return errors.New("节点请求不接受其他协议或描述符")
+	encoded, err := io.ReadAll(http.MaxBytesReader(w, r.Body, agentchannel.MaximumBytes))
+	if err != nil || len(encoded) == 0 {
+		writeFailure(w, http.StatusBadRequest)
+		return
 	}
 	var content request
-	if agentchannel.Decode(message.Body, &content) != nil || content.NodeID != server.options.NodeID {
-		return errors.New("节点请求内容或目标无效")
+	if agentchannel.Decode(encoded, &content) != nil {
+		writeFailure(w, http.StatusBadRequest)
+		return
 	}
-	deadline, err := content.Deadline.Local(server.options.CallTimeout)
-	if err != nil {
-		return err
+	if !validID(content.RequestID) || content.NodeID != server.options.NodeID {
+		writeFailure(w, http.StatusBadRequest)
+		return
 	}
-	ctx, stop := context.WithDeadline(ctx, deadline)
-	defer stop()
+	if content.RemainingMillis < 1 || content.RemainingMillis > server.options.CallTimeout.Milliseconds() {
+		writeFailure(w, http.StatusBadRequest)
+		return
+	}
 	input, lifetime, err := decodeInput(server.options.NodeID, content.Action, content.Input)
 	if err != nil {
-		return err
+		writeFailure(w, http.StatusBadRequest)
+		return
 	}
+	// 租约只能收紧：接收方按自己的时钟重算剩余时长，请求方无法借此延长执行权。
+	var leaseDeadline time.Time
 	if lifetime > 0 {
-		if content.LeaseDeadline == nil {
-			return errors.New("跨进程执行租约缺少绝对期限")
+		if content.LeaseRemainMillis == nil || *content.LeaseRemainMillis < 1 || *content.LeaseRemainMillis > lifetime.Milliseconds() {
+			writeFailure(w, http.StatusBadRequest)
+			return
 		}
-		leaseDeadline, err := content.LeaseDeadline.Local(lifetime)
-		if err != nil {
-			return err
-		}
-		ctx = computer.WithLeaseDeadline(ctx, leaseDeadline)
-	} else if content.LeaseDeadline != nil {
-		return errors.New("当前节点动作不接受新的执行租约")
+		leaseDeadline = time.Now().Add(time.Duration(*content.LeaseRemainMillis) * time.Millisecond)
+	} else if content.LeaseRemainMillis != nil {
+		writeFailure(w, http.StatusBadRequest)
+		return
 	}
-	if err := ctx.Err(); err != nil {
-		return err
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(content.RemainingMillis)*time.Millisecond)
+	defer cancel()
+	if lifetime > 0 {
+		ctx = computer.WithLeaseDeadline(ctx, leaseDeadline)
 	}
 	output, callErr := server.operations.invoke(ctx, content.Action, input)
-	result := response{NodeID: server.options.NodeID, Action: content.Action}
+	result := response{RequestID: content.RequestID, NodeID: server.options.NodeID, Action: content.Action}
 	if callErr == nil {
 		callErr = ctx.Err()
 	}
@@ -172,11 +160,62 @@ func (server *Server) serveConnection(parent context.Context, connection *net.Un
 		if errors.As(callErr, &classified) && codePattern.MatchString(classified.Code) {
 			result.Failure = &computer.Failure{Code: classified.Code, IsPermanent: classified.IsPermanent}
 		}
-		server.logger.WarnContext(ctx, "电脑节点动作未确认成功", "node_id", server.options.NodeID, "request_id", message.ID, "action", content.Action)
+		server.logger.WarnContext(ctx, "电脑节点动作未确认成功", "node_id", server.options.NodeID, "request_id", content.RequestID, "action", content.Action)
 	}
-	encoded, err := agentchannel.Encode(result)
+	body, err := agentchannel.Encode(result)
 	if err != nil {
-		return err
+		writeFailure(w, http.StatusInternalServerError)
+		return
 	}
-	return channel.Send(ctx, agentchannel.Message{Version: 1, ID: message.ID, Method: "result", Body: encoded}, nil)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(body); err != nil {
+		server.logger.WarnContext(ctx, "电脑节点响应未发送完成", "node_id", server.options.NodeID, "request_id", content.RequestID)
+	}
+}
+
+// writeFailure 只返回状态码；拒绝原因不回给调用方，避免暴露内部判定顺序。
+func writeFailure(w http.ResponseWriter, status int) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(status)
+}
+
+// limitListener 限制同时存活的连接；超出的连接立即关闭，不排队等待。
+type limitListener struct {
+	net.Listener
+	sem chan struct{}
+}
+
+func newLimitListener(listener net.Listener, maximum int) *limitListener {
+	return &limitListener{Listener: listener, sem: make(chan struct{}, maximum)}
+}
+
+func (listener *limitListener) Accept() (net.Conn, error) {
+	for {
+		connection, err := listener.Listener.Accept()
+		if err != nil {
+			return nil, err
+		}
+		select {
+		case listener.sem <- struct{}{}:
+			return &limitConn{Conn: connection, release: func() { <-listener.sem }}, nil
+		default:
+			if err := connection.Close(); err != nil {
+				continue
+			}
+		}
+	}
+}
+
+type limitConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (connection *limitConn) Close() error {
+	err := connection.Conn.Close()
+	connection.once.Do(connection.release)
+	return err
 }

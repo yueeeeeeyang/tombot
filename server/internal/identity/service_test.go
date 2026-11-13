@@ -21,8 +21,14 @@ import (
 type identityFixture struct {
 	pool    *sql.DB
 	service *Service
+	// key 用于直接写入管理员动态验证材料；完整性测试不构造服务，也从不读取该材料。
+	key []byte
 }
-type testAccount struct{ id, username, password, activation string }
+type testAccount struct {
+	id, username, password, activation string
+	// secret 是管理员动态验证器密钥，只有管理员用例使用。
+	secret []byte
+}
 
 func randomValue(t *testing.T) string {
 	t.Helper()
@@ -44,12 +50,12 @@ func execute(t *testing.T, pool *sql.DB, query string, arguments ...any) {
 	}
 }
 
-func (fixture identityFixture) pending(t *testing.T, role string) testAccount {
+func (fixture identityFixture) pending(t *testing.T) testAccount {
 	t.Helper()
 	account := testAccount{id: ids.New(), password: randomValue(t), activation: randomValue(t)}
 	account.username = strings.ToLower(account.id)
 	node, image, computer := ids.New(), ids.New(), ids.New()
-	execute(t, fixture.pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'测试用户',$3,'provisioning')`, account.id, account.username, role)
+	execute(t, fixture.pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'测试用户','provisioning')`, account.id, account.username)
 	execute(t, fixture.pool, `INSERT INTO tombot.computer_images(id,reference) VALUES($1,$2)`, image, "registry.example.test/computer@sha256:"+secure.Hash(randomValue(t)))
 	execute(t, fixture.pool, `INSERT INTO tombot.computer_nodes(id,name,status,capacity,runtime_id,control_sequence,last_seen_at,control_expires_at,verified_image_id,capability_expires_at) VALUES($1,$1,'ready',10,$1,1,clock_timestamp(),clock_timestamp()+interval '5 minutes',$2,clock_timestamp()+interval '15 minutes')`, node, image)
 	execute(t, fixture.pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit)
@@ -59,9 +65,51 @@ func (fixture identityFixture) pending(t *testing.T, role string) testAccount {
 	return account
 }
 
+// administrator 建立已启用的管理员身份并登记动态验证：管理员没有电脑，也不在用户表中。
+// 口令与验证器密钥直接写入，对应"创建时设定口令"的开户方式。
+func (fixture identityFixture) administrator(t *testing.T) testAccount {
+	t.Helper()
+	account := testAccount{id: ids.New(), password: randomValue(t)}
+	account.username = strings.ToLower(account.id)
+	secret, err := secure.Random(20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { clear(secret) })
+	hash, err := hashPassword(account.password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, nonce, err := secure.Seal(fixture.sealKey(t), secret, account.id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execute(t, fixture.pool, `INSERT INTO tombot.administrators(id,username,display_name,status) VALUES($1,$2,'测试管理员','active')`, account.id, account.username)
+	execute(t, fixture.pool, `INSERT INTO tombot.administrator_credentials(administrator_id,password_hash) VALUES($1,$2)`, account.id, hash)
+	execute(t, fixture.pool, `INSERT INTO tombot.administrator_mfa(administrator_id,ciphertext,nonce) VALUES($1,$2,$3)`, account.id, ciphertext, nonce)
+	account.secret = secret
+	return account
+}
+
+// sealKey 优先使用真实服务密钥；未构造服务的用例使用独立测试密钥。
+func (fixture identityFixture) sealKey(t *testing.T) []byte {
+	t.Helper()
+	if fixture.service != nil {
+		return fixture.service.options.EncryptionKey
+	}
+	if fixture.key == nil {
+		key, err := secure.Random(32)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fixture.key = key
+	}
+	return fixture.key
+}
+
 func (fixture identityFixture) active(t *testing.T) testAccount {
 	t.Helper()
-	account := fixture.pending(t, "user")
+	account := fixture.pending(t)
 	if err := fixture.service.Activate(context.Background(), account.activation, account.password, "", attempt()); err != nil {
 		t.Fatal(err)
 	}
@@ -115,10 +163,10 @@ func TestIdentityIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := identityFixture{pool, service}
+	fixture := identityFixture{pool: pool, service: service}
 
 	t.Run("激活原子性与电脑就绪", func(t *testing.T) {
-		account := fixture.pending(t, "user")
+		account := fixture.pending(t)
 		if _, err := service.Login(ctx, loginRequest(account), attempt()); err == nil {
 			t.Fatal("未激活账户允许登录")
 		}
@@ -161,7 +209,7 @@ func TestIdentityIntegration(t *testing.T) {
 	})
 
 	t.Run("过期激活值与权限范围", func(t *testing.T) {
-		account := fixture.pending(t, "user")
+		account := fixture.pending(t)
 		execute(t, pool, `UPDATE tombot.activation_tokens SET created_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour' WHERE user_id=$1`, account.id)
 		requireError(t, service.Activate(ctx, account.activation, account.password, "", attempt()), ErrInvalidActivation)
 		account = fixture.active(t)
@@ -311,62 +359,40 @@ func TestIdentityIntegration(t *testing.T) {
 		requireError(t, err, ErrInvalidSession)
 	})
 
-	t.Run("管理员登记原子消费验证信息", func(t *testing.T) {
-		account := fixture.pending(t, "admin")
-		requireError(t, service.Activate(ctx, account.activation, account.password, "", attempt()), ErrInvalidCredentials)
-		encoded, err := service.BeginAdminEnrollment(ctx, account.activation, attempt())
+	t.Run("首位管理员创建唯一且验证材料加密保存", func(t *testing.T) {
+		setup, err := service.CreateFirstAdministrator(ctx, "first-admin", "首位管理员", randomValue(t), attempt())
 		if err != nil {
 			t.Fatal(err)
 		}
-		again, err := service.BeginAdminEnrollment(ctx, account.activation, attempt())
-		if err != nil || encoded != again {
-			t.Fatal("重复登记轮换了材料", err)
+		if setup.Secret == "" || setup.Username != "first-admin" || setup.Period != 30 || setup.Digits != 6 {
+			t.Fatal("首位管理员材料不完整", setup)
 		}
-		secret, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(string(encoded))
-		if err != nil {
-			t.Fatal("登记材料格式错误")
-		}
-		defer clear(secret)
-		code := totpCode(secret, time.Now().Unix()/30)
-		if err = service.Activate(ctx, account.activation, account.password, code, attempt()); err != nil {
-			t.Fatal(err)
-		}
-		request := loginRequest(account)
-		request.Scope = "admin"
-		request.Platform = "web"
-		request.Code = code
-		_, err = service.Login(ctx, request, attempt())
-		requireError(t, err, ErrInvalidCredentials)
+		// 唯一性由全库互斥保证：再次创建必须明确拒绝，而不是静默覆盖。
+		requireError(t, func() error {
+			_, err := service.CreateFirstAdministrator(ctx, "second-admin", "第二管理员", randomValue(t), attempt())
+			return err
+		}(), ErrAdministratorExists)
 		var ciphertext []byte
-		if err = pool.QueryRow(`SELECT ciphertext FROM tombot.user_mfa WHERE user_id=$1`, account.id).Scan(&ciphertext); err != nil {
+		if err = pool.QueryRow(`SELECT ciphertext FROM tombot.administrator_mfa WHERE administrator_id=$1`, setup.AdministratorID).Scan(&ciphertext); err != nil {
 			t.Fatal(err)
 		}
-		if string(ciphertext) == string(secret) {
+		if strings.Contains(string(ciphertext), string(setup.Secret)) {
 			t.Fatal("管理员验证材料以明文持久化")
 		}
-		_, err = service.BeginAdminEnrollment(ctx, account.activation, attempt())
-		requireError(t, err, ErrInvalidActivation)
+		secret, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(string(setup.Secret))
+		if err != nil || len(secret) != 20 {
+			t.Fatal("验证器密钥格式错误", err)
+		}
+		defer clear(secret)
+		request := LoginRequest{Username: setup.Username, Password: "", DeviceName: "测试浏览器", Platform: "web", Scope: "admin", Code: totpCode(secret, time.Now().Unix()/30)}
+		_, err = service.Login(ctx, request, attempt())
+		requireError(t, err, ErrInvalidCredentials)
 	})
 
 	t.Run("管理员登录与再次验证重放", func(t *testing.T) {
 		// 使用已完成登记的独立账户快照，不依赖上一条测试耗时恰好落在同一时间步。
-		account := fixture.pending(t, "admin")
-		secret, err := secure.Random(20)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer clear(secret)
-		ciphertext, nonce, err := secure.Seal(service.options.EncryptionKey, secret, account.id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		hash, err := hashPassword(account.password)
-		if err != nil {
-			t.Fatal(err)
-		}
-		execute(t, pool, `INSERT INTO tombot.user_credentials(user_id,password_hash) VALUES($1,$2)`, account.id, hash)
-		execute(t, pool, `INSERT INTO tombot.user_mfa(user_id,ciphertext,nonce) VALUES($1,$2,$3)`, account.id, ciphertext, nonce)
-		execute(t, pool, `UPDATE tombot.users SET status='active' WHERE id=$1`, account.id)
+		account := fixture.administrator(t)
+		secret := account.secret
 		request := loginRequest(account)
 		request.Scope = "admin"
 		request.Platform = "web"
@@ -382,8 +408,8 @@ func TestIdentityIntegration(t *testing.T) {
 		if err = service.RequireAdmin(ctx, session.Principal, true); err != nil {
 			t.Fatal(err)
 		}
-		execute(t, pool, `UPDATE tombot.user_sessions SET verified_at=clock_timestamp()-interval '10 minutes' WHERE id=$1`, session.Principal.SessionID)
-		requireError(t, service.RequireAdmin(ctx, session.Principal, true), ErrForbidden)
+		execute(t, pool, `UPDATE tombot.administrator_sessions SET verified_at=clock_timestamp()-interval '10 minutes' WHERE id=$1`, session.Principal.SessionID)
+		requireError(t, service.RequireAdmin(ctx, session.Principal, true), ErrVerificationRequired)
 		if err = service.RequireAdmin(ctx, session.Principal, false); err != nil {
 			t.Fatal(err)
 		}
@@ -419,7 +445,7 @@ func TestIdentityIntegration(t *testing.T) {
 		request.Username = strings.ToLower(ids.New())
 		_, err = limited.Login(ctx, request, source)
 		requireError(t, err, ErrRateLimited)
-		execute(t, pool, `UPDATE tombot.auth_rate_limits SET expires_at=clock_timestamp()-interval '1 second' WHERE bucket_digest=$1 OR bucket_digest=$2`, digest("subject:login:"+account.username), digest("source:"+source.Source.String()))
+		execute(t, pool, `UPDATE tombot.auth_rate_limits SET expires_at=clock_timestamp()-interval '1 second' WHERE bucket_digest=$1 OR bucket_digest=$2`, digest("subject:login:desktop:"+account.username), digest("source:"+source.Source.String()))
 		request.Username = account.username
 		if _, err = limited.Login(ctx, request, source); err != nil {
 			t.Fatal("过期窗口未恢复", err)
@@ -505,23 +531,22 @@ func TestIdentityIntegration(t *testing.T) {
 		if err == nil || errors.Is(err, ErrInvalidCredentials) {
 			t.Fatal("损坏凭据被当成普通认证结果", err)
 		}
-		admin := fixture.pending(t, "admin")
-		if _, err = service.BeginAdminEnrollment(ctx, admin.activation, attempt()); err != nil {
-			t.Fatal(err)
-		}
+		admin := fixture.administrator(t)
+		request := LoginRequest{Username: admin.username, Password: admin.password, DeviceName: "测试浏览器", Platform: "web", Scope: "admin", Code: totpCode(admin.secret, time.Now().Unix()/30)}
 		wrong := *service
 		wrong.options.EncryptionKey, err = secure.Random(32)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = wrong.BeginAdminEnrollment(ctx, admin.activation, attempt()); err == nil {
-			t.Fatal("错误主密钥仍解开了管理员材料")
+		if _, err = wrong.Login(ctx, request, attempt()); err == nil {
+			t.Fatal("错误主密钥仍解开了管理员验证材料")
 		}
 	})
 
 	t.Run("认证角色不能提权或修改业务内容", func(t *testing.T) {
 		account := fixture.active(t)
-		for _, statement := range []string{`UPDATE tombot.users SET role='admin' WHERE id=$1`, `UPDATE tombot.users SET status='disabled' WHERE id=$1`, `SELECT id FROM tombot.bots WHERE user_id=$1`} {
+		// 认证连接只能读写身份表；开户操作与审计属于控制职责，任何读取都必须被拒绝。
+		for _, statement := range []string{`SELECT id FROM tombot.user_creation_operations WHERE user_id=$1`, `UPDATE tombot.users SET status='disabled' WHERE id=$1`, `SELECT id FROM tombot.bots WHERE user_id=$1`} {
 			err := database.Platform(ctx, func(transaction *sql.Tx) error {
 				_, err := transaction.ExecContext(ctx, statement, account.id)
 				return err

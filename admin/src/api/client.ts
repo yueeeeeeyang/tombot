@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import {
-  enrollmentSchema,
+  adminSetupStatusSchema,
+  administratorSetupSchema,
   operationSchema,
   sessionSchema,
   type Operation,
@@ -46,9 +47,16 @@ export class AdminClient {
   private listeners = new Set<() => void>()
   private pending = new Set<AbortController>()
   private refreshPromise: Promise<void> | null = null
+  private refreshTimer: ReturnType<typeof setTimeout> | null = null
+  private accessExpiresAt = 0
+  private verifier: (() => Promise<void>) | null = null
 
   constructor(private readonly fetcher: typeof fetch = window.fetch.bind(window)) {}
   snapshot = () => this.state
+  /** 页面注册再验证界面；只在服务端明确要求重新验证时调用，验证成功后重放被拒绝的那一次请求。 */
+  setVerifier(verifier: (() => Promise<void>) | null) {
+    this.verifier = verifier
+  }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
     return () => {
@@ -62,9 +70,46 @@ export class AdminClient {
   private clear() {
     this.epoch++
     this.csrf = ''
+    this.accessExpiresAt = 0
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer)
+      this.refreshTimer = null
+    }
     this.pending.forEach((controller) => controller.abort())
     this.pending.clear()
     this.update({ phase: 'anonymous' })
+  }
+
+  /**
+   * 自动续期在访问凭据到期前 60 秒触发；提前量足够覆盖一次网络往返，
+   * 又不会因为时钟误差在凭据刚签发时立刻重放续期值。
+   * 续期失败时不自动重试：轮换是单次的，重放旧的续期值会让服务端按泄漏撤销整个会话。
+   */
+  private scheduleRefresh(expiresAt: string | undefined) {
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer)
+      this.refreshTimer = null
+    }
+    if (!expiresAt) return
+    const expires = Date.parse(expiresAt)
+    if (!Number.isFinite(expires)) return
+    this.accessExpiresAt = expires
+    const delay = Math.max(expires - Date.now() - 60_000, 5_000)
+    this.refreshTimer = setTimeout(() => {
+      this.refreshTimer = null
+      void this.refresh().catch(() => undefined)
+    }, delay)
+  }
+
+  /** 页面回到前台时按当前时间重新排期，避免后台标签页的定时器被浏览器推迟。 */
+  resumeSessionClock() {
+    if (this.state.phase !== 'authenticated' || !this.accessExpiresAt) return
+    const remaining = this.accessExpiresAt - Date.now()
+    if (remaining <= 0) {
+      void this.refresh().catch(() => undefined)
+      return
+    }
+    this.scheduleRefresh(new Date(this.accessExpiresAt).toISOString())
   }
 
   async request<T>(path: string, schema: z.ZodType<T>, options: RequestOptions = {}): Promise<T> {
@@ -79,6 +124,7 @@ export class AdminClient {
     options: RequestOptions,
     adminSession: boolean,
     expectedStatus?: number,
+    isReplay = false,
   ): Promise<T> {
     const generation = this.epoch
     const controller = new AbortController()
@@ -147,6 +193,17 @@ export class AdminClient {
       if (!response.ok) {
         const failure = failureSchema.safeParse(value)
         if (!failure.success) throw new ApiError('SERVICE_UNAVAILABLE', '服务暂不可用，请稍后重试')
+        // 服务端在进入业务事务前拒绝了请求，因此验证通过后重放同一次调用是安全的；
+        // 只重放一次，避免验证反复失败时形成循环。
+        if (
+          !isReplay &&
+          adminSession &&
+          failure.data.code === 'VERIFICATION_REQUIRED' &&
+          this.verifier
+        ) {
+          await this.verifier()
+          return this.exchange(path, schema, options, adminSession, expectedStatus, true)
+        }
         throw new ApiError(
           failure.data.code,
           failure.data.message,
@@ -169,18 +226,28 @@ export class AdminClient {
     }
   }
 
-  /** 登记只使用本次输入的激活材料，不发送管理 Cookie，也不改变当前会话。 */
-  beginEnrollment(activationToken: string, signal: AbortSignal) {
+  /** 首位管理员状态是公开只读接口，不需要会话；只返回是否还需要创建。 */
+  adminSetupStatus(signal?: AbortSignal) {
+    return this.exchange('/api/v2/auth/admin-setup', adminSetupStatusSchema, { signal }, false, 200)
+  }
+
+  /** 首位管理员由创建者当场设定口令；动态验证器密钥只在本次响应返回一次。 */
+  createFirstAdministrator(
+    username: string,
+    displayName: string,
+    password: string,
+    signal: AbortSignal,
+  ) {
     return this.exchange(
-      '/api/v2/auth/admin-enrollment',
-      enrollmentSchema,
-      { method: 'POST', body: { activation_token: activationToken }, signal },
+      '/api/v2/auth/admin-setup',
+      administratorSetupSchema,
+      { method: 'POST', body: { username, display_name: displayName, password }, signal },
       false,
-      200,
+      201,
     )
   }
 
-  /** 激活不隐式登录，提交一次后由页面处理明确失败或未知结果。 */
+  /** 激活只作用于普通用户：管理员在创建时已设置口令与验证器。 */
   activate(activationToken: string, password: string, code: string, signal: AbortSignal) {
     return this.exchange(
       '/api/v2/auth/activate',
@@ -197,6 +264,7 @@ export class AdminClient {
       const result = await this.request('/auth/session', sessionSchema)
       if (generation !== this.epoch) return
       this.csrf = result.csrf_token
+      this.scheduleRefresh(result.access_expires_at)
       this.update({ phase: 'authenticated', principal: result.principal })
     } catch (error) {
       if (generation !== this.epoch) return
@@ -210,6 +278,7 @@ export class AdminClient {
       body: { username, password, code, device_name: 'Web 管理平台' },
     })
     this.csrf = result.csrf_token
+    this.scheduleRefresh(result.access_expires_at)
     this.update({ phase: 'authenticated', principal: result.principal })
   }
   async logout() {
@@ -232,6 +301,7 @@ export class AdminClient {
         body: {},
       })
       this.csrf = result.csrf_token
+      this.scheduleRefresh(result.access_expires_at)
       this.update({ phase: 'authenticated', principal: result.principal })
     }
     this.refreshPromise = (

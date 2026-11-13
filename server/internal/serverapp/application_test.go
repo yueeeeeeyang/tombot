@@ -2,14 +2,18 @@ package serverapp
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -49,6 +53,7 @@ func prepareApplication(t *testing.T, cluster *pgtest.Cluster) (Config, *x509.Ce
 		login := cluster.Login(t, string(role))
 		writeTestFile(t, path, []byte(cluster.DSN(name, login)))
 	}
+	writeNodeClientCertificate(t, configuration.Node)
 	if err := os.MkdirAll(filepath.Join(configuration.AdminDirectory, "assets"), 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +325,7 @@ func verifyUserRoutes(t *testing.T, running *runningApplication, pool *sql.DB, n
 	sessions := make([]identity.Session, 2)
 	for index := range sessions {
 		user, computer, activation, password := ids.New(), ids.New(), randomValue(), randomValue()
-		execute(`INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'组合测试用户','user','provisioning')`, user, strings.ToLower(user))
+		execute(`INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'组合测试用户','provisioning')`, user, strings.ToLower(user))
 		execute(`INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, user, computer, nodeID, image)
 		execute(`UPDATE tombot.users SET status='pending_activation' WHERE id=$1`, user)
 		execute(`INSERT INTO tombot.activation_tokens(id,user_id,token_digest,expires_at) VALUES($1,$2,decode($3,'hex'),clock_timestamp()+interval '1 hour')`, ids.New(), user, secure.Hash(activation))
@@ -444,4 +449,34 @@ func TestShutdownTimeoutRetainsResources(t *testing.T) {
 	if application.state.Load() != stateStopping || application.Close() == nil {
 		t.Fatal("仍有在途工作却释放资源")
 	}
+}
+
+// writeNodeClientCertificate 为节点客户端生成一次性证书。
+// 服务启动期不连接节点，因此这里只需要可解析的证书与私钥文件，不建立真实连接。
+func writeNodeClientCertificate(t *testing.T, configuration NodeConfig) {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "tombot-api-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, configuration.CertificateFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	writeTestFile(t, configuration.PrivateKeyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
+	clear(private)
+	clear(encoded)
 }

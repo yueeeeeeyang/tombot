@@ -17,11 +17,10 @@ function installBackend(overrides: Partial<DesktopBackend> = {}): DesktopBackend
       .fn()
       .mockResolvedValue({ phase: 'address', serverUrl: '' } satisfies SessionSnapshot),
     connect: vi.fn().mockResolvedValue({
-      phase: 'setup',
+      phase: 'login',
       serverUrl: 'https://tom.example.com',
     } satisfies SessionSnapshot),
-    setup: vi.fn(),
-    login: vi.fn(),
+    browserLogin: vi.fn().mockResolvedValue({ phase: 'ready' } satisfies SessionSnapshot),
     loadWorkspace: vi.fn(),
     saveWorkspace: vi.fn(),
     deliverMessage: vi.fn(),
@@ -66,7 +65,7 @@ describe('服务地址', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('无法连接服务')
     await user.type(screen.getByLabelText('服务地址'), 'https://tom.example.com')
     await user.click(screen.getByRole('button', { name: '重新连接' }))
-    expect(await screen.findByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(backend.connect).toHaveBeenCalledWith('https://tom.example.com')
   })
 
@@ -84,14 +83,14 @@ describe('服务地址', () => {
     expect(screen.getByRole('button', { name: '重新连接' })).toBeEnabled()
   })
 
-  it('填写合法地址后才进入初始化', async () => {
+  it('填写合法地址后进入浏览器登录页', async () => {
     memoryBackend.phase = 'address'
     const user = userEvent.setup()
     render(<App />)
     expect(screen.getByRole('heading', { name: '连接服务' })).toBeInTheDocument()
     await user.type(screen.getByLabelText('服务地址'), 'https://tom.example.com')
     await user.click(screen.getByRole('button', { name: '连接' }))
-    expect(await screen.findByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(memoryBackend.serverUrl).toBe('https://tom.example.com')
   })
 
@@ -122,7 +121,7 @@ describe('服务地址', () => {
     await user.clear(screen.getByLabelText('服务地址'))
     await user.type(screen.getByLabelText('服务地址'), 'https://tom.example.com')
     await user.click(screen.getByRole('button', { name: '重新连接' }))
-    expect(await screen.findByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(memoryBackend.serverUrl).toBe('https://tom.example.com')
   })
 })

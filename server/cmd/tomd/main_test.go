@@ -8,15 +8,15 @@ import (
 )
 
 func TestServiceHost(t *testing.T) {
+	// 服务端不再限制平台，只要求专用非 root 身份。
 	for _, fixture := range []struct {
-		platform string
-		uid      int
-		valid    bool
+		uid   int
+		valid bool
 	}{
-		{"linux", 20001, true}, {"linux", 0, false}, {"linux", -1, false}, {"darwin", 501, false}, {"windows", 20001, false},
+		{20001, true}, {501, true}, {0, false}, {-1, false},
 	} {
-		if err := validateHost(fixture.platform, fixture.uid); (err == nil) != fixture.valid {
-			t.Errorf("%s/%d: %v", fixture.platform, fixture.uid, err)
+		if err := validateHost(fixture.uid); (err == nil) != fixture.valid {
+			t.Errorf("%d: %v", fixture.uid, err)
 		}
 	}
 }

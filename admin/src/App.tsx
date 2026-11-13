@@ -1,19 +1,22 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import {
   Bot,
   Users,
   Boxes,
   SlidersHorizontal,
+  Server,
   ShieldCheck,
   LogOut,
   Menu,
   SunMoon,
 } from 'lucide-react'
-import { AdminClient, errorMessage } from './api/client'
+import { AdminClient, ApiError, errorMessage } from './api/client'
 import { Alert, Dialog, Field } from './components'
 import { UsersPage } from './users/UsersPage'
+import { AdministratorsPage } from './users/AdministratorsPage'
+import { NodesPage } from './users/NodesPage'
 import { ModelsPage, PoliciesPage } from './models/ModelsPage'
-import { AdminActivation } from './auth/AdminActivation'
+import { AdminSetup } from './auth/AdminSetup'
 
 type Theme = 'system' | 'light' | 'dark'
 function readTheme(): Theme {
@@ -95,16 +98,31 @@ export function App({ client }: { client: AdminClient }) {
 function Login({ client }: { client: AdminClient }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>()
-  const [activating, setActivating] = useState(false)
+  const [setupRequired, setSetupRequired] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [notice, setNotice] = useState('')
-  if (activating)
+  // 只有平台还没有任何管理员时才查询并展示首建入口；已有管理员时该接口返回 required=false。
+  useEffect(() => {
+    const controller = new AbortController()
+    client.adminSetupStatus(controller.signal).then(
+      (status) => {
+        if (!controller.signal.aborted) setSetupRequired(status.required)
+      },
+      (cause) => {
+        // 状态查询失败不能让入口无声消失：明确告知无法判断，登录本身仍可尝试。
+        if (!controller.signal.aborted) setNotice(errorMessage(cause))
+      },
+    )
+    return () => controller.abort()
+  }, [client])
+  if (creating)
     return (
       <main className="auth-shell">
         <div className="auth-card activation-card">
-          <AdminActivation
+          <AdminSetup
             client={client}
             onBack={(message) => {
-              setActivating(false)
+              setCreating(false)
               setNotice(message)
             }}
           />
@@ -181,18 +199,20 @@ function Login({ client }: { client: AdminClient }) {
             {busy ? '正在登录…' : '登录管理平台'}
           </button>
         </form>
-        <button
-          type="button"
-          className="secondary-button auth-secondary"
-          disabled={busy}
-          onClick={() => {
-            setError(undefined)
-            setNotice('')
-            setActivating(true)
-          }}
-        >
-          激活管理员账户
-        </button>
+        {setupRequired && (
+          <button
+            type="button"
+            className="secondary-button auth-secondary"
+            disabled={busy}
+            onClick={() => {
+              setError(undefined)
+              setNotice('')
+              setCreating(true)
+            }}
+          >
+            创建首位管理员
+          </button>
+        )}
         <ThemePicker />
       </div>
     </main>
@@ -200,9 +220,32 @@ function Login({ client }: { client: AdminClient }) {
 }
 
 function Workspace({ client }: { client: AdminClient }) {
-  const [page, setPage] = useState<'users' | 'models' | 'policies'>('users')
+  const [page, setPage] = useState<'users' | 'administrators' | 'nodes' | 'models' | 'policies'>(
+    'users',
+  )
+  // 后台标签页的定时器可能被浏览器推迟，回到前台时按真实剩余时间重新排期。
+  useEffect(() => {
+    const resume = () => {
+      if (document.visibilityState === 'visible') client.resumeSessionClock()
+    }
+    document.addEventListener('visibilitychange', resume)
+    return () => document.removeEventListener('visibilitychange', resume)
+  }, [client])
   const [menu, setMenu] = useState(false)
-  const [verifying, setVerifying] = useState(false)
+  const [isVerifying, setIsVerifying] = useState(false)
+  // 待完成的再验证请求保存在 ref 中：它不参与渲染，只有"是否显示验证弹窗"需要进入状态。
+  const verifier = useRef<{ resolve: () => void; reject: (error: Error) => void } | null>(null)
+  // 客户端在收到「需要重新验证」时调用这里：返回的 Promise 在弹窗完成后兑现，随后原请求被重放。
+  useEffect(() => {
+    client.setVerifier(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          verifier.current = { resolve, reject }
+          setIsVerifying(true)
+        }),
+    )
+    return () => client.setVerifier(null)
+  }, [client])
   const [error, setError] = useState<unknown>()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
@@ -221,6 +264,8 @@ function Workspace({ client }: { client: AdminClient }) {
   }
   const navigation = [
     { id: 'users', title: '用户', icon: Users },
+    { id: 'administrators', title: '管理员', icon: ShieldCheck },
+    { id: 'nodes', title: '电脑节点', icon: Server },
     { id: 'models', title: '模型供应商', icon: Boxes },
     { id: 'policies', title: '模型策略', icon: SlidersHorizontal },
   ] as const
@@ -261,7 +306,8 @@ function Workspace({ client }: { client: AdminClient }) {
         </div>
       </aside>
       <div className="workspace">
-        <header className="topbar">
+        <main id="main" className="page-content">
+          {/* 窄屏下导航默认收起，这个按钮是唯一入口，因此保留在内容区顶部。 */}
           <button
             className="icon-button mobile-menu"
             aria-label="切换导航"
@@ -270,22 +316,6 @@ function Workspace({ client }: { client: AdminClient }) {
           >
             <Menu size={19} />
           </button>
-          <span>服务端管理</span>
-          <div className="actions">
-            <button
-              className="text-button"
-              disabled={busy}
-              onClick={() => void sessionAction(() => client.refresh(), '管理会话已续期')}
-            >
-              续期会话
-            </button>
-            <button className="secondary-button" onClick={() => setVerifying(true)}>
-              <ShieldCheck size={15} />
-              验证管理身份
-            </button>
-          </div>
-        </header>
-        <main id="main" className="page-content">
           <Alert error={error} />
           {notice && (
             <p role="status" className="notice">
@@ -294,6 +324,10 @@ function Workspace({ client }: { client: AdminClient }) {
           )}
           {page === 'users' ? (
             <UsersPage client={client} />
+          ) : page === 'administrators' ? (
+            <AdministratorsPage client={client} />
+          ) : page === 'nodes' ? (
+            <NodesPage client={client} />
           ) : page === 'models' ? (
             <ModelsPage client={client} />
           ) : (
@@ -301,13 +335,20 @@ function Workspace({ client }: { client: AdminClient }) {
           )}
         </main>
       </div>
-      {verifying && (
+      {isVerifying && (
         <Verification
           client={client}
-          onClose={() => setVerifying(false)}
+          onClose={() => {
+            const pending = verifier.current
+            verifier.current = null
+            setIsVerifying(false)
+            pending?.reject(new ApiError('VERIFICATION_CANCELED', '已取消身份验证，操作未执行'))
+          }}
           onVerified={() => {
-            setVerifying(false)
-            setNotice('管理身份已验证，请重新确认需要执行的操作')
+            const pending = verifier.current
+            verifier.current = null
+            setIsVerifying(false)
+            pending?.resolve()
           }}
         />
       )}
@@ -329,7 +370,7 @@ function Verification({
   return (
     <Dialog title="验证管理身份" onClose={onClose} busy={busy}>
       <p className="description">
-        修改账户和模型配置前，需要近期验证密码及动态验证码。验证成功后请重新确认原操作。
+        这是一项敏感操作，请先验证当前密码与动态验证码。验证通过后会自动继续刚才的操作。
       </p>
       <form
         onSubmit={async (event) => {

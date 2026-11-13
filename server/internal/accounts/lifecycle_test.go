@@ -47,7 +47,7 @@ func TestActivationAndRecoveryIntegration(t *testing.T) {
 		fixture := newFixture(t, cluster, true)
 		identityService := fixture.identity(t)
 		request := fixture.request()
-		operation, err := fixture.service.reserve(ctx, fixture.actor.UserID, request, false)
+		operation, err := fixture.service.reserve(ctx, fixture.actor.UserID, request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -120,43 +120,5 @@ func TestActivationAndRecoveryIntegration(t *testing.T) {
 		}
 		fixture.process(t)
 		fixture.assertState(t, operation, "succeeded", "pending_activation", "ready", 1)
-	})
-	t.Run("首位管理员失败可恢复且部署接口不能操作普通账户", func(t *testing.T) {
-		fixture := newFixture(t, cluster, false)
-		operation, err := fixture.service.Bootstrap(ctx, fixture.request())
-		if !errors.Is(err, ErrPending) {
-			t.Fatal(err)
-		}
-		fixture.runtime.ensureError = &computer.Failure{IsPermanent: true}
-		fixture.process(t)
-		fixture.process(t)
-		fixture.assertState(t, operation, "failed", "provision_failed", "error", 0)
-		fixture.runtime.ensureError = nil
-		retried, err := fixture.service.RetryBootstrap(ctx, operation.ID, ids.New())
-		if !errors.Is(err, ErrPending) || retried.Attempt != 2 || retried.UserID != operation.UserID {
-			t.Fatal("首位管理员不能恢复开户", err)
-		}
-		fixture.process(t)
-		if _, err = fixture.service.BootstrapActivation(ctx, operation.ID, ids.New()); err != nil {
-			t.Fatal(err)
-		}
-		queried, err := fixture.service.GetBootstrap(ctx, operation.ID)
-		if err != nil || queried.ID != operation.ID || queried.Status != "succeeded" || queried.Attempt != 2 {
-			t.Fatal("部署查询没有返回首位管理员恢复后的操作", err)
-		}
-		other := newFixture(t, cluster, true)
-		ordinary := other.reserve(t)
-		if _, err = other.service.GetBootstrap(ctx, ordinary.ID); !errors.Is(err, ErrNotFound) {
-			t.Fatal("部署查询可读取普通开户", err)
-		}
-		if _, err = other.service.GetBootstrap(ctx, "invalid"); !errors.Is(err, ErrInvalidInput) {
-			t.Fatal("部署查询未校验操作标识", err)
-		}
-		if _, err = other.service.RetryBootstrap(ctx, ordinary.ID, ids.New()); !errors.Is(err, ErrNotFound) {
-			t.Fatal("部署重试操作可作用于普通用户", err)
-		}
-		if _, err = other.service.ReconcileBootstrap(ctx, ordinary.ID, ids.New()); !errors.Is(err, ErrNotFound) {
-			t.Fatal("部署对账操作可作用于普通用户", err)
-		}
 	})
 }

@@ -23,7 +23,7 @@ type testAuthorizer struct {
 }
 
 func (authorizer *testAuthorizer) RequireAdmin(_ context.Context, principal identity.Principal, _ bool) error {
-	if authorizer.denied || principal.UserID == "" || principal.UserID != authorizer.userID || principal.Role != "admin" {
+	if authorizer.denied || principal.UserID == "" || principal.UserID != authorizer.userID || principal.Scope != "admin" {
 		return identity.ErrForbidden
 	}
 	return nil
@@ -164,7 +164,7 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster, withAdmin bool) fixture {
 	execute(t, pool, `INSERT INTO tombot.computer_nodes(id,name,status,capacity,runtime_id,control_sequence,last_seen_at,control_expires_at,verified_image_id,capability_expires_at) VALUES($1,$1,'ready',20,$1,1,clock_timestamp(),clock_timestamp()+interval '5 minutes',$2,clock_timestamp()+interval '15 minutes')`, fixture.nodeID, fixture.imageID)
 	if withAdmin {
 		admin, node, computerID := ids.New(), ids.New(), ids.New()
-		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'管理员测试快照','admin','provisioning')`, admin, strings.ToLower(admin))
+		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'管理员测试快照','provisioning')`, admin, strings.ToLower(admin))
 		execute(t, pool, `INSERT INTO tombot.computer_nodes(id,name,status,capacity,reserved,runtime_id,control_sequence,last_seen_at,control_expires_at,verified_image_id,capability_expires_at) VALUES($1,$1,'ready',1,1,$1,1,clock_timestamp(),clock_timestamp()+interval '5 minutes',$2,clock_timestamp()+interval '15 minutes')`, node, fixture.imageID)
 		execute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit)
 			VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, admin, computerID, node, fixture.imageID)
@@ -176,13 +176,13 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster, withAdmin bool) fixture {
 }
 
 func (fixture fixture) request() CreateRequest {
-	return CreateRequest{Username: strings.ToLower(ids.New()), DisplayName: "新用户", Role: "user", NodeID: fixture.nodeID, ImageID: fixture.imageID,
+	return CreateRequest{Username: strings.ToLower(ids.New()), DisplayName: "新用户", NodeID: fixture.nodeID, ImageID: fixture.imageID,
 		Resources: computer.Resources{CPUMillis: 1000, MemoryBytes: 1 << 30, DiskBytes: 2 << 30, ProcessLimit: 128}, IdempotencyKey: ids.New(), RequestID: ids.New()}
 }
 
 func (fixture fixture) reserve(t *testing.T) Operation {
 	t.Helper()
-	operation, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, fixture.request(), false)
+	operation, err := fixture.service.reserve(context.Background(), fixture.actor.UserID, fixture.request())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -313,7 +313,7 @@ func TestAccountProvisioningIntegration(t *testing.T) {
 		results := make(chan result, 8)
 		for range 8 {
 			go func() {
-				operation, err := fixture.service.reserve(ctx, fixture.actor.UserID, request, false)
+				operation, err := fixture.service.reserve(ctx, fixture.actor.UserID, request)
 				results <- result{operation, err}
 			}()
 		}
@@ -330,12 +330,12 @@ func TestAccountProvisioningIntegration(t *testing.T) {
 		}
 		changed := request
 		changed.DisplayName = "另一请求"
-		if _, err := fixture.service.reserve(ctx, fixture.actor.UserID, changed, false); !errors.Is(err, ErrConflict) {
+		if _, err := fixture.service.reserve(ctx, fixture.actor.UserID, changed); !errors.Is(err, ErrConflict) {
 			t.Fatal("相同幂等键接受不同内容", err)
 		}
 		changed = request
 		changed.IdempotencyKey = ids.New()
-		if _, err := fixture.service.reserve(ctx, fixture.actor.UserID, changed, false); !errors.Is(err, ErrConflict) {
+		if _, err := fixture.service.reserve(ctx, fixture.actor.UserID, changed); !errors.Is(err, ErrConflict) {
 			t.Fatal("重复用户名未拒绝", err)
 		}
 		var reserved, operations int
@@ -486,26 +486,6 @@ func TestAccountProvisioningIntegration(t *testing.T) {
 		}
 		fixture.assertState(t, operation, "running", "provisioning", "provisioning", 1)
 		if err := fixture.service.succeed(ctx, next, observation(next.specification, "ready")); err != nil {
-			t.Fatal(err)
-		}
-		fixture.assertState(t, operation, "succeeded", "pending_activation", "ready", 1)
-	})
-	t.Run("首位管理员同步开户且仅能创建一次", func(t *testing.T) {
-		fixture := newFixture(t, cluster, false)
-		request := fixture.request()
-		operation, err := fixture.service.Bootstrap(ctx, request)
-		if !errors.Is(err, ErrPending) {
-			t.Fatal(err)
-		}
-		fixture.process(t)
-		repeated, err := fixture.service.Bootstrap(ctx, request)
-		if err != nil || repeated.ID != operation.ID {
-			t.Fatal("首位管理员重复请求未幂等", err)
-		}
-		if _, err := fixture.service.Bootstrap(ctx, fixture.request()); !errors.Is(err, ErrAlreadyInitialized) {
-			t.Fatal("重复初始化首位管理员", err)
-		}
-		if _, err := fixture.service.BootstrapActivation(ctx, operation.ID, ids.New()); err != nil {
 			t.Fatal(err)
 		}
 		fixture.assertState(t, operation, "succeeded", "pending_activation", "ready", 1)

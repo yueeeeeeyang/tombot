@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 
 	safelog "io.yueyang/tom/internal/infra/log"
@@ -19,16 +18,17 @@ func main() {
 	logger := slog.New(safelog.NewHandler(slog.NewJSONHandler(os.Stderr, nil)))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, os.Args[1:], runtime.GOOS, os.Geteuid(), os.Getenv("TOM_SERVER_CONFIG"), os.Getenv("TOM_NODE_REGISTRATION_REQUEST"), os.Stdout, logger); err != nil {
+	if err := run(ctx, os.Args[1:], os.Geteuid(), os.Getenv("TOM_SERVER_CONFIG"), os.Getenv("TOM_NODE_REGISTRATION_REQUEST"), os.Stdout, logger); err != nil {
 		logger.Error("节点目录部署操作未完成", "原因", err.Error())
 		os.Exit(1)
 	}
 }
 
 // run 使用 API 的非 root 身份和受保护文件，不接受命令参数、外部节点地址或就绪覆盖。
-func run(ctx context.Context, arguments []string, platform string, uid int, configurationPath, requestPath string, output io.Writer, logger *slog.Logger) error {
-	if len(arguments) != 0 || platform != "linux" || uid <= 0 || output == nil || logger == nil {
-		return errors.New("节点登记须在 Linux 使用 API 非 root 身份运行，不接受参数；通过 TOM_SERVER_CONFIG 和 TOM_NODE_REGISTRATION_REQUEST 指定部署文件")
+// 不限制操作系统：登记只写数据库目录，节点本机的 Docker 与内核检查由节点程序自行执行。
+func run(ctx context.Context, arguments []string, uid int, configurationPath, requestPath string, output io.Writer, logger *slog.Logger) error {
+	if len(arguments) != 0 || uid <= 0 || output == nil || logger == nil {
+		return errors.New("节点登记须使用 API 非 root 身份运行，不接受参数；通过 TOM_SERVER_CONFIG 和 TOM_NODE_REGISTRATION_REQUEST 指定部署文件")
 	}
 	request, err := serverapp.LoadCatalogRequest(requestPath)
 	if err != nil {

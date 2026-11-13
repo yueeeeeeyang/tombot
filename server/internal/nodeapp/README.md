@@ -4,9 +4,11 @@
 
 ## 配置与启动
 
-[部署示例](../../deploy/node.example.json)展示完整版本 2 配置。示例身份和资源预算只供说明；部署生成文件时，`node_id` 必须与节点登记一致，`client_uid`/`client_gid` 必须是实际 `tombot-api` 身份，`socket` 必须与 API 配置及登记端点一致。全部容量、并发和时限根据节点资源明确提供，不从客户端或任务参数读取。API 身份不是容器内 Bot 的 UID。
+[部署示例](../../deploy/node.example.json)展示完整版本 2 配置。示例身份和资源预算只供说明；部署生成文件时，`node_id` 必须与节点登记一致，`listen` 必须与 API 配置中的节点 URL 同端口，`control_tls.client_fingerprints` 必须是 API 客户端证书的指纹。全部容量、并发和时限根据节点资源明确提供，不从客户端或任务参数读取。
 
-配置最多 16 KiB，要求 root 所有、普通文件、0600，父目录均受 root 保护；拒绝符号链接、硬链接、重复键、大小写别名、未知字段、null、整数溢出和尾随内容。复用各组件的权威校验，并检查跨组件调用/退出预算、目录不重叠、控制 socket 不在用户存储或私有记录目录中。毫秒值先检查范围再转换，不能通过溢出绕过时限。未提供的必需参数不会补默认值。
+节点不再要求 API 与本机共享内核身份：控制入口是 TLS 1.3 端口，双方各自固定对方证书的 SHA-256，不需要 CA。`allow_public_listen` 默认关闭；API 与节点跨主机部署时必须显式打开，并同时用安全组限制来源。
+
+配置最多 16 KiB，要求 root 所有、普通文件、0600，父目录均受 root 保护；拒绝符号链接、硬链接、重复键、大小写别名、未知字段、null、整数溢出和尾随内容。复用各组件的权威校验，并检查跨组件调用/退出预算、目录不重叠、控制证书不在用户存储或私有记录目录中。毫秒值先检查范围再转换，不能通过溢出绕过时限。未提供的必需参数不会补默认值。
 
 版本 2 配置还必填 `agent_startup`：总预算 `timeout_ms`、单次预算 `call_timeout_ms`、初始退避 `retry_delay_ms` 和 `maximum_attempts`。部署示例分别为 5000、1000、100、8；API 调用预算必须覆盖代理等待、浏览器调用与探针调用之和。该等待只检查代理控制入口，不重试任何有副作用操作，不把控制可用当作电脑就绪。生成器使用同一示例与校验规则；旧配置缺少该部分时明确拒绝。
 
@@ -24,7 +26,7 @@
 
 节点以 `Type=notify` 运行，只有完成恢复和监听创建才发送 `READY=1`，`STATUS` 明确说明用户电脑仍需完整检查。此通知表示控制服务启动，不写入目录健康状态、不激活账户。前台运行未配置 `NOTIFY_SOCKET` 时不发送通知；配置了端点而通知失败则停止并返回非零。通知使用有时限的 Unix datagram，遵循 [systemd 通知协议](https://raw.githubusercontent.com/systemd/systemd/main/man/sd_notify.xml)。
 
-单元通过 `RuntimeDirectory` 创建 root 所有的 `/run/tombot`（0711，允许 API 穿越目录但不能列出），实际 socket 为 root:控制组、0660；每次调用仍核对内核对端身份。三种状态目录为 0700。节点不启用 `PrivateTmp`、`ProtectSystem`、`ProtectHome` 等会建立私有挂载命名空间的选项，因为 loop 文件系统挂载必须能被宿主 Docker 看到；不能仅检查程序启动成功就忽略挂载传播。有关命名空间行为见 [systemd 执行环境](https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.exec.xml)。
+单元不再需要控制组成员或 socket 目录：监听端口由 `listen` 指定，访问控制完全依赖 TLS 证书指纹与网络边界。控制证书与私钥只能由节点身份读取。三种状态目录为 0700。节点不启用 `PrivateTmp`、`ProtectSystem`、`ProtectHome` 等会建立私有挂载命名空间的选项，因为 loop 文件系统挂载必须能被宿主 Docker 看到；不能仅检查程序启动成功就忽略挂载传播。有关命名空间行为见 [systemd 执行环境](https://raw.githubusercontent.com/systemd/systemd/main/man/systemd.exec.xml)。
 
 配置启动预算不超过 5 分钟，统一退出预算不超过 10 分钟；单元启动 16 分钟上限覆盖“构造失败后再清理”，停止上限 11 分钟覆盖正常退出。预算包括等待锁；网络、命令、会话和代理各自仍有更短的有限时限。不提供重试业务动作的自动成功分支。`Restart=on-failure` 重建服务后重新对账持久状态，不重放未知命令。
 

@@ -338,39 +338,37 @@ describe('客户端交互', () => {
     expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('')
   })
 
-  it('未初始化时先核对初始化码和密码，通过后才进入工作空间', async () => {
-    memoryBackend.phase = 'setup'
+  it('未登录时只显示浏览器登录入口，工具栏不出现密码输入', async () => {
+    memoryBackend.phase = 'login'
     const user = userEvent.setup()
     render(<App />)
-    expect(screen.getByRole('heading', { name: '初始化 TomBot' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(screen.queryByRole('textbox', { name: '给小黑发消息' })).not.toBeInTheDocument()
-    await user.type(screen.getByLabelText('初始化码'), memoryBackend.setupCode)
-    await user.type(screen.getByLabelText('密码'), '短')
-    await user.type(screen.getByLabelText('确认密码'), '短')
-    await user.click(screen.getByRole('button', { name: '完成初始化' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('至少 12')
-    await user.clear(screen.getByLabelText('密码'))
-    await user.clear(screen.getByLabelText('确认密码'))
-    const password = '口'.repeat(12)
-    await user.type(screen.getByLabelText('密码'), password)
-    await user.type(screen.getByLabelText('确认密码'), password)
-    await user.click(screen.getByRole('button', { name: '完成初始化' }))
+    expect(screen.queryByLabelText('密码')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '在浏览器中登录' }))
     expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
   })
 
-  it('已初始化时要验证密码，错误密码不会打开工作空间', async () => {
+  it('浏览器登录失败时留在登录页并显示原因', async () => {
     memoryBackend.phase = 'login'
-    memoryBackend.password = '口'.repeat(12)
+    const browserLogin = vi
+      .spyOn(memoryBackend, 'browserLogin')
+      .mockRejectedValueOnce(new Error('登录授权已失效，请重新登录'))
     const user = userEvent.setup()
     render(<App />)
-    expect(screen.getByRole('heading', { name: '验证密码' })).toBeInTheDocument()
-    await user.type(screen.getByLabelText('密码'), '错'.repeat(12))
-    await user.click(screen.getByRole('button', { name: '进入工作空间' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('密码不正确')
-    await user.clear(screen.getByLabelText('密码'))
-    await user.type(screen.getByLabelText('密码'), '口'.repeat(12))
-    await user.click(screen.getByRole('button', { name: '进入工作空间' }))
-    expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '在浏览器中登录' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('请重新登录')
+    expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
+    expect(screen.queryByRole('textbox', { name: '给小黑发消息' })).not.toBeInTheDocument()
+    browserLogin.mockRestore()
+  })
+
+  it('登录页不提供口令输入，只有浏览器登录', () => {
+    memoryBackend.phase = 'login'
+    render(<App />)
+    expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '在浏览器中登录' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('密码')).not.toBeInTheDocument()
   })
 
   it('损坏的本机旧档不会挡住服务端工作空间', () => {

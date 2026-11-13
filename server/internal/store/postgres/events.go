@@ -56,3 +56,83 @@ func ReadEvents(ctx context.Context, transaction *sql.Tx, userID string, after i
 	}
 	return events, safeDatabaseError("遍历用户事件失败", rows.Err())
 }
+
+// PruneUserEvents 删除保留序号之外的历史事件，并把清理边界推进到实际删除的最大序号。
+// 事件只提示客户端重新读取资源，删除历史事件不会丢失状态；保留条数按序号计，
+// 与事件追加时的顺序一致，游标是否仍然有效可以直接比较边界，不依赖时钟。
+// 单次删除受 batch 限制：积压很多时分多次推进，避免一个事务长时间持有事件头锁；
+// 未删完时边界仍停在已删位置，下一轮会再次选中该用户。
+func PruneUserEvents(ctx context.Context, transaction *sql.Tx, userID string, retention, batch int) (int64, error) {
+	if transaction == nil || userID == "" || retention < 1 || retention > 1_000_000 || batch < 1 || batch > 10_000 {
+		return 0, errors.New("事件清理参数无效")
+	}
+	// 事件头行在追加时被锁定；先加锁读取再推进，避免并发追加产生空洞边界。
+	var sequence, prunedThrough int64
+	err := transaction.QueryRowContext(ctx, `SELECT sequence,pruned_through FROM tombot.user_event_heads WHERE user_id=$1 FOR UPDATE`, userID).Scan(&sequence, &prunedThrough)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, safeDatabaseError("读取用户事件序号失败", err)
+	}
+	boundary := sequence - int64(retention)
+	if boundary <= prunedThrough {
+		return prunedThrough, nil
+	}
+	// 只删除最早的一批并返回其中最大序号；DELETE 需要读取要删除的行，控制连接已有只读授权。
+	var deleted int64
+	err = transaction.QueryRowContext(ctx, `WITH pruned AS (
+	    DELETE FROM tombot.user_events WHERE user_id=$1 AND sequence IN (
+	        SELECT sequence FROM tombot.user_events WHERE user_id=$1 AND sequence<=$2 ORDER BY sequence LIMIT $3)
+	    RETURNING sequence)
+	    SELECT COALESCE(max(sequence),0) FROM pruned`, userID, boundary, batch).Scan(&deleted)
+	if err != nil {
+		return 0, safeDatabaseError("清理用户历史事件失败", err)
+	}
+	if deleted <= prunedThrough {
+		return prunedThrough, nil
+	}
+	if _, err = transaction.ExecContext(ctx, `UPDATE tombot.user_event_heads SET pruned_through=$2 WHERE user_id=$1`, userID, deleted); err != nil {
+		return 0, safeDatabaseError("推进用户事件清理边界失败", err)
+	}
+	return deleted, nil
+}
+
+// PrunedThrough 返回该用户已清理到的事件序号；客户端游标低于它必须重新读取快照。
+func PrunedThrough(ctx context.Context, transaction *sql.Tx, userID string) (int64, error) {
+	if transaction == nil || userID == "" {
+		return 0, errors.New("事件清理边界参数无效")
+	}
+	var boundary int64
+	err := transaction.QueryRowContext(ctx, `SELECT pruned_through FROM tombot.user_event_heads WHERE user_id=$1`, userID).Scan(&boundary)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, safeDatabaseError("读取用户事件清理边界失败", err)
+	}
+	return boundary, nil
+}
+
+// PrunableUsers 列出事件条数超过保留值、需要清理的用户，按清理边界与序号排序。
+// 分批返回而不是一次扫描全表，避免清理任务随时间线性变长。
+func PrunableUsers(ctx context.Context, transaction *sql.Tx, retention int, limit int) ([]string, error) {
+	if transaction == nil || retention < 1 || limit < 1 || limit > 10_000 {
+		return nil, errors.New("待清理用户查询参数无效")
+	}
+	rows, err := transaction.QueryContext(ctx, `SELECT user_id FROM tombot.user_event_heads
+	    WHERE sequence > $1 AND pruned_through < sequence - $1 ORDER BY user_id LIMIT $2`, retention, limit)
+	if err != nil {
+		return nil, safeDatabaseError("查询待清理用户事件失败", err)
+	}
+	defer rows.Close()
+	var userIDs []string
+	for rows.Next() {
+		var userID string
+		if err = rows.Scan(&userID); err != nil {
+			return nil, safeDatabaseError("解析待清理用户失败", err)
+		}
+		userIDs = append(userIDs, userID)
+	}
+	return userIDs, safeDatabaseError("遍历待清理用户失败", rows.Err())
+}

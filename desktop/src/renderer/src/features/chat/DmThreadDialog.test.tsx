@@ -15,26 +15,31 @@ describe('私信只读气泡', () => {
     const peer = workspace.agents.find((agent) => agent.id === 'developer')
     if (!self || !peer) throw new Error('缺少测试猫咪')
     const backend: Partial<DesktopBackend> = {
-      listConversationMessages: vi.fn(async () => [
-        {
-          id: 'older',
-          role: 'assistant' as const,
-          speaker: self.id,
-          content: '晨会我先看了',
-          createdAt: '2026-11-10T08:00:00.000Z',
-          reactions: [],
-          attachments: [],
-        },
-        {
-          id: 'newer',
-          role: 'assistant' as const,
-          speaker: peer.id,
-          content: '好的',
-          createdAt: '2026-11-10T08:01:00.000Z',
-          reactions: [],
-          attachments: [],
-        },
-      ]),
+      listConversationMessages: vi.fn(async () => ({
+        hasMore: false,
+        messages: [
+          {
+            id: 'older',
+            sequence: 1,
+            role: 'assistant' as const,
+            speaker: self.id,
+            content: '晨会我先看了',
+            createdAt: '2026-11-10T08:00:00.000Z',
+            reactions: [],
+            attachments: [],
+          },
+          {
+            id: 'newer',
+            sequence: 2,
+            role: 'assistant' as const,
+            speaker: peer.id,
+            content: '好的',
+            createdAt: '2026-11-10T08:01:00.000Z',
+            reactions: [],
+            attachments: [],
+          },
+        ],
+      })),
     }
     window.desktop = { platform: 'linux', backend: backend as DesktopBackend }
     const onClose = vi.fn()

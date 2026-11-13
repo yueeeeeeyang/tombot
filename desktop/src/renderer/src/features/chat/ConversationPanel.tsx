@@ -67,6 +67,8 @@ export function ConversationPanel({
   const [live, setLive] = useState<ServerBubble[]>([])
   const [menu, setMenu] = useState<MessageMenuAnchor>()
   const [isDetailsOpen, setDetailsOpen] = useState(false)
+  const [hasEarlier, setHasEarlier] = useState(false)
+  const [isLoadingEarlier, setLoadingEarlier] = useState(false)
   const log = useRef<HTMLElement>(null)
   const [busy, setBusy] = useState(false)
   const workingAgents = agents.filter(
@@ -83,7 +85,9 @@ export function ConversationPanel({
     setGroup(detail)
     setTitle(detail.name)
     setConversationId(detail.conversation_id)
-    setMessages((await backend.listConversationMessages?.(detail.conversation_id)) ?? [])
+    const page = await backend.listConversationMessages?.(detail.conversation_id)
+    setMessages(page?.messages ?? [])
+    setHasEarlier(page?.hasMore ?? false)
   }, [id])
 
   useEffect(() => {
@@ -95,20 +99,39 @@ export function ConversationPanel({
     void backend
       ?.groupDetail?.(id)
       .then((detail) => {
-        if (cancelled || !detail) return []
+        if (cancelled || !detail) return
         setGroup(detail)
         setTitle(detail.name)
         setConversationId(detail.conversation_id)
-        return backend.listConversationMessages?.(detail.conversation_id) ?? []
+        return backend.listConversationMessages?.(detail.conversation_id)
       })
-      .then((rows) => {
-        if (!cancelled && rows) setMessages(rows)
+      .then((page) => {
+        if (cancelled || !page) return
+        setMessages(page.messages)
+        setHasEarlier(page.hasMore)
       })
       .catch(failed)
     return () => {
       cancelled = true
     }
   }, [id, onError])
+
+  // 向前翻页以当前最早一条消息为游标；加载期间禁止重复请求，避免同一页插入多次。
+  const loadEarlier = useCallback(async () => {
+    const oldest = messages[0]
+    if (!conversationId || !oldest || isLoadingEarlier) return
+    setLoadingEarlier(true)
+    try {
+      const page = await getBackend().listConversationMessages?.(conversationId, oldest.sequence)
+      if (!page) return
+      setMessages((current) => [...page.messages, ...current])
+      setHasEarlier(page.hasMore)
+    } catch (failure) {
+      onError((failure as Error).message)
+    } finally {
+      setLoadingEarlier(false)
+    }
+  }, [conversationId, messages, isLoadingEarlier, onError])
 
   useEffect(() => {
     const element = log.current
@@ -167,6 +190,8 @@ export function ConversationPanel({
                 ...current,
                 {
                   id: event.messageId!,
+                  // 流式气泡尚未落库；只有落库后的消息才带序号，翻页时会用重新读取的结果替换它们。
+                  sequence: 0,
                   role: 'assistant',
                   speaker: event.botId!,
                   content: event.text,
@@ -220,6 +245,16 @@ export function ConversationPanel({
         <section ref={log} className="messages-scroll" aria-label={`与${title}的会话`}>
           <div className="conversation">
             <div className="saved-messages" role="log" aria-label={title} aria-live="polite">
+              {hasEarlier ? (
+                <button
+                  className="load-earlier"
+                  type="button"
+                  onClick={() => void loadEarlier()}
+                  disabled={isLoadingEarlier}
+                >
+                  {isLoadingEarlier ? '正在加载更早的消息…' : '加载更早的消息'}
+                </button>
+              ) : null}
               {shown.length === 0 ? (
                 <p className="local-note">在下面说一句，群里的猫咪会一起回应。</p>
               ) : null}
@@ -403,9 +438,9 @@ export function DmThreadDialog({
     let timer: ReturnType<typeof setTimeout> | undefined
     async function refresh(): Promise<void> {
       try {
-        const rows = await getBackend().listConversationMessages?.(notice.conversationId)
+        const page = await getBackend().listConversationMessages?.(notice.conversationId)
         if (cancelled) return
-        setLines(rows ?? [])
+        setLines(page?.messages ?? [])
         timer = setTimeout(() => void refresh(), 1500)
       } catch (failure) {
         if (!cancelled) onError((failure as Error).message)

@@ -15,29 +15,24 @@ export interface StreamEvent {
 
 export type IncomingMessages = Array<Pick<Agent, 'id' | 'messages'>>
 
-export type SessionPhase =
-  'loading' | 'address' | 'offline' | 'setup' | 'login' | 'bootstrap' | 'ready'
-
-export interface BootstrapStep {
-  id: string
-  title: string
-  status: string
-  detail?: string
-  duration_ms: number
-}
-
-export interface BootstrapStatus {
-  phase: string
-  steps: BootstrapStep[]
-  error?: string
-  cursor: number
-}
+/**
+ * 会话阶段：没有地址、连不上、需要登录、可以进入工作空间。
+ * 单个 Bot 的电脑未就绪只影响它的电脑能力，不再作为整页门禁。
+ */
+export type SessionPhase = 'loading' | 'address' | 'offline' | 'login' | 'ready'
 
 export interface SessionSnapshot {
   phase: SessionPhase
   message?: string
   serverUrl?: string
-  bootstrap?: BootstrapStatus
+  username?: string
+}
+
+/** 桌面登录凭据只在本进程提交；动态验证码只在管理员账户要求时填写。 */
+export interface LoginCredentials {
+  username: string
+  password: string
+  code?: string
 }
 
 export interface WorkspaceSnapshot {
@@ -51,6 +46,8 @@ export interface SettingsView extends SettingsDraft {
 
 export type ServerBubble = {
   id: string
+  /** 会话内单调递增序号；向前翻页时作为 before 游标。 */
+  sequence: number
   role: 'user' | 'assistant'
   speaker: string
   content: string
@@ -66,9 +63,16 @@ export type ServerBubble = {
   }>
 }
 
-/** 投递结果。模型未配置时不改消息，只带回说明。 */
+/** 会话消息的一页；hasMore 为真时还能继续向前加载。 */
+export interface MessagePage {
+  messages: ServerBubble[]
+  hasMore: boolean
+}
+
+/** 投递结果。服务端整段返回助手消息，客户端按身份替换本地未发送状态。 */
 export interface DeliveryResult {
-  workspace?: AppWorkspace
+  /** 服务端已持久化的会话消息；缺省时不改动本地记录。 */
+  messages?: ServerBubble[]
   code?: string
   message?: string
 }
@@ -82,21 +86,20 @@ export interface DesktopBackend {
   savesSynchronously?: boolean
   trySessionSync?: () => SessionSnapshot
   session: () => Promise<SessionSnapshot>
-  /** 保存用户确认的服务地址并检查是否已初始化。地址不合法时抛出。 */
+  /** 保存用户确认的服务地址并检查登录状态。地址不合法时抛出。 */
   connect: (serverUrl: string) => Promise<SessionSnapshot>
-  watchBootstrap?: (
-    onStatus: (status: BootstrapStatus) => void,
-    onError: (error: Error) => void,
-  ) => () => void
-  setup: (input: { setupCode: string; password: string }) => Promise<void>
-  login: (password: string) => Promise<void>
+  /** 用系统浏览器完成登录：桌面端只接收一次性授权码，口令不经过本进程。 */
+  browserLogin: () => Promise<SessionSnapshot>
+  logout?: () => Promise<void>
+  /** 订阅当前用户事件；服务端在有界窗口后收尾，调用方负责续订。 */
+  watchEvents?: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => () => void
   tryWorkspaceSync?: () => WorkspaceSnapshot
   loadWorkspace: () => Promise<WorkspaceSnapshot>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
-  welcomeAgent: (agentId: string, onEvent?: (event: StreamEvent) => void) => Promise<DeliveryResult>
+  /** 把一条用户消息交给服务端执行；返回该会话的最新消息列表。 */
   deliverMessage: (
     agentId: string,
-    messageId: string,
+    content: string,
     onEvent?: (event: StreamEvent) => void,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
@@ -123,7 +126,11 @@ export interface DesktopBackend {
   renameGroup?: (id: string, revision: number, name: string) => Promise<GroupDetail>
   addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>
   removeGroupMember?: (id: string, revision: number, botId: string) => Promise<void>
-  listConversationMessages?: (conversationId: string) => Promise<ServerBubble[]>
+  /**
+   * 读取会话消息的一页，按时间正序返回。
+   * before 为上一页最早消息的序号；hasMore 表示还有更早的记录可继续加载。
+   */
+  listConversationMessages?: (conversationId: string, before?: number) => Promise<MessagePage>
   sendConversation?: (
     conversationId: string,
     content: string,
@@ -172,4 +179,16 @@ export type GroupDetail = {
   revision: number
   conversation_id: string
   members: Array<{ bot_id: string; name: string }>
+}
+
+/**
+ * 服务端已提交事件。界面只把它当作"该重新读取了"的提示，
+ * 不用它承载正文，避免本地状态与权威记录分叉。
+ */
+export type UserEvent = {
+  sequence: number
+  kind: string
+  resource_id: string
+  payload: Record<string, unknown>
+  created_at: string
 }

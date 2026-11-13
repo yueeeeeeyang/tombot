@@ -81,13 +81,17 @@ func New(parent context.Context, configuration Config, logger *slog.Logger) (app
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	listener, err := nodeapi.Listen(configuration.Socket, configuration.ClientGID)
+	controlTLS, err := loadControlTLS(configuration.Control)
 	if err != nil {
 		return nil, err
 	}
-	// 控制端点锁最后释放，避免旧资源仍在收尾时另一节点入口重新接单。
+	listener, err := nodeapi.Listen(configuration.Listen, controlTLS, configuration.AllowPublic)
+	if err != nil {
+		return nil, err
+	}
+	// 控制端点最后释放，避免旧资源仍在收尾时另一节点入口重新接单。
 	steps = append(steps, cleanupStep{"控制端点", func(context.Context) error { return listener.Close() }})
-	application = &Application{nodeID: configuration.NodeID, logger: logger, shutdown: configuration.ShutdownTimeout.duration(), cleanup: steps, services: []service{{"节点 API", func(ctx context.Context) error { return server.Serve(ctx, listener.UnixListener) }}, {"执行监督", sessions.Serve}, {"出网监督", node.Serve}}}
+	application = &Application{nodeID: configuration.NodeID, logger: logger, shutdown: configuration.ShutdownTimeout.duration(), cleanup: steps, services: []service{{"节点 API", func(ctx context.Context) error { return server.Serve(ctx, listener) }}, {"执行监督", sessions.Serve}, {"出网监督", node.Serve}}}
 	return application, nil
 }
 

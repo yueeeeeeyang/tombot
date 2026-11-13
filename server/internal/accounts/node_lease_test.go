@@ -75,7 +75,7 @@ func TestNodeControlLeaseGatesAccountAdmission(t *testing.T) {
 		request := fixture.request()
 		done := make(chan error, 1)
 		go func() {
-			_, err := fixture.service.reserve(t.Context(), fixture.actor.UserID, request, false)
+			_, err := fixture.service.reserve(t.Context(), fixture.actor.UserID, request)
 			done <- err
 		}()
 		timer := time.NewTimer(180 * time.Millisecond)

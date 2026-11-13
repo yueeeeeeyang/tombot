@@ -3,6 +3,7 @@ package modelgateway
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 
 	"io.yueyang/tom/internal/domain"
@@ -77,7 +78,7 @@ func (gateway *Gateway) Call(parent context.Context, configuration modelregistry
 	if configuration.Protocol == "anthropic" {
 		path = "/messages"
 	}
-	client, guard, err := gateway.client(strings.TrimRight(configuration.BaseURL, "/") + path)
+	client, guard, err := gateway.client(strings.TrimRight(configuration.BaseURL, "/")+path, http.MethodPost, "text/event-stream")
 	if err != nil {
 		return Result{}, err
 	}

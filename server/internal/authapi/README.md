@@ -17,7 +17,9 @@
 | `GET /devices`               | 当前用户有效设备；`before` 游标及 `limit` 有界分页            |
 | `DELETE /devices/{deviceID}` | 撤销当前用户指定设备；不能通过用户标识切换操作对象            |
 
-激活入口仅为 `POST /api/v2/auth/activate`，输入 `activation_token`、`password`、`code`。管理员验证器登记入口为 `POST /api/v2/auth/admin-enrollment`，输入未消费的激活值，返回需要短暂展示的登记材料。两者均不接受 URL 中的凭据。
+普通用户激活入口为 `POST /api/v2/auth/activate`，输入 `activation_token`、`password`，仅作用于用户表；管理员在创建时直接设定口令并登记验证器，没有激活流程。
+
+首位管理员入口为 `GET` 与 `POST /api/v2/auth/admin-setup`。`GET` 只返回 `required`，供登录页判断是否展示创建按钮；`POST` 接受 `username`、`display_name`、`password`，仅在平台没有任何管理员时成功，并一次性返回动态验证器密钥。两者均不接受 URL 中的凭据，也不需要会话。
 
 客户端提交 JSON 对象，最大 16 KiB；未知字段、多个对象、无效 UTF-8 及其他内容类型会被拒绝。会话范围由路由决定，不能提交 `scope`、`role` 或 `user_id` 覆盖身份。身份由访问凭据解析，其他业务路由也必须沿用相同 Principal 契约。
 

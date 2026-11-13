@@ -30,7 +30,8 @@ const maxBodyBytes = 16 << 10
 // Identity 限定传输层所需的身份能力；实现不能通过 HTTP 参数选择数据库身份。
 type Identity interface {
 	Activate(context.Context, string, string, string, identity.Attempt) error
-	BeginAdminEnrollment(context.Context, string, identity.Attempt) (identity.Credential, error)
+	AdministratorsExist(context.Context) (bool, error)
+	CreateFirstAdministrator(context.Context, string, string, string, identity.Attempt) (identity.AdministratorSetup, error)
 	Login(context.Context, identity.LoginRequest, identity.Attempt) (identity.Session, error)
 	Refresh(context.Context, string, string, identity.Attempt) (identity.Session, error)
 	Authenticate(context.Context, string, string) (identity.Principal, error)
@@ -39,6 +40,11 @@ type Identity interface {
 	Reauthenticate(context.Context, identity.Principal, string, string, identity.Attempt) error
 	ListDevices(context.Context, identity.Principal, string, int) ([]identity.Device, error)
 	RevokeDevice(context.Context, identity.Principal, string, string) error
+	// 浏览器登录：桌面端登记回调、网页完成验证、再用一次性授权码换取会话。
+	BeginBrowserAuthorization(context.Context, identity.BrowserAuthorizationRequest) (identity.Authorization, error)
+	PendingAuthorization(context.Context, string, string) (identity.Authorization, error)
+	ApproveBrowserAuthorization(context.Context, string, string, string, string, identity.Attempt) (string, error)
+	ExchangeBrowserAuthorization(context.Context, string, string, string, identity.Attempt) (identity.Session, error)
 }
 
 // Options 外部指定管理站点来源、受信反向代理、CSRF 专用密钥及单请求时限。
@@ -85,7 +91,13 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 		handler.failure(w, r, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请求方式不支持")
 	})
 	router.Post("/api/v2/auth/activate", handler.activate)
-	router.Post("/api/v2/auth/admin-enrollment", handler.enrollment)
+	router.Get("/api/v2/auth/admin-setup", handler.adminSetupStatus)
+	router.Post("/api/v2/auth/admin-setup", handler.createFirstAdministrator)
+	router.Post("/api/v2/auth/browser/start", handler.browserStart)
+	router.Post("/api/v2/auth/browser/exchange", handler.browserExchange)
+	// 授权页由系统浏览器直接访问，来源是服务自身而非管理站点；表单提交走同一路径。
+	router.Get("/login", handler.loginPage)
+	router.Post("/api/v2/auth/browser/approve", handler.browserApprove)
 	for _, scope := range []string{"desktop", "admin"} {
 		prefix := "/api/v2/auth"
 		if scope == "admin" {
@@ -133,7 +145,10 @@ func (handler *Handler) transport(next http.Handler) http.Handler {
 			return
 		}
 		origin := r.Header.Get("Origin")
-		if origin != "" && origin != handler.options.AdminOrigin {
+		// 授权页由系统浏览器打开，来源是服务自身；表单提交必须来自同一站点。
+		browserLogin := r.URL.Path == "/login" || r.URL.Path == "/api/v2/auth/browser/approve"
+		sameOrigin := browserLogin && origin != "" && origin == "https://"+r.Host
+		if origin != "" && origin != handler.options.AdminOrigin && !sameOrigin {
 			handler.failure(w, r, 403, "ORIGIN_INVALID", "请求来源不允许")
 			return
 		}
@@ -290,6 +305,8 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		handler.failure(w, r, 401, "AUTH_INVALID", identity.ErrInvalidCredentials.Error())
 	case errors.Is(err, identity.ErrInvalidSession):
 		handler.failure(w, r, 401, "SESSION_INVALID", identity.ErrInvalidSession.Error())
+	case errors.Is(err, identity.ErrVerificationRequired):
+		handler.failure(w, r, 403, "VERIFICATION_REQUIRED", identity.ErrVerificationRequired.Error())
 	case errors.Is(err, identity.ErrForbidden):
 		handler.failure(w, r, 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error())
 	case errors.Is(err, identity.ErrRateLimited):

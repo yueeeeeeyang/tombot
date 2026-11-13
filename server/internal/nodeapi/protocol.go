@@ -22,18 +22,22 @@ type Operations struct {
 	Agents    computer.AgentRuntime
 }
 
+// request 携带剩余时长而不是绝对时刻：API 与节点不再共享内核时钟，
+// 节点按本次收包时刻重建期限，传输与排队只会让到期更早，不会延长授权。
 type request struct {
-	NodeID        string                 `json:"node_id"`
-	Action        string                 `json:"action"`
-	Deadline      agentchannel.Deadline  `json:"deadline"`
-	LeaseDeadline *agentchannel.Deadline `json:"lease_deadline,omitempty"`
-	Input         json.RawMessage        `json:"input"`
+	RequestID         string          `json:"request_id"`
+	NodeID            string          `json:"node_id"`
+	Action            string          `json:"action"`
+	RemainingMillis   int64           `json:"remaining_ms"`
+	LeaseRemainMillis *int64          `json:"lease_remaining_ms,omitempty"`
+	Input             json.RawMessage `json:"input"`
 }
 type response struct {
-	NodeID  string            `json:"node_id"`
-	Action  string            `json:"action"`
-	Result  json.RawMessage   `json:"result,omitempty"`
-	Failure *computer.Failure `json:"failure,omitempty"`
+	RequestID string            `json:"request_id"`
+	NodeID    string            `json:"node_id"`
+	Action    string            `json:"action"`
+	Result    json.RawMessage   `json:"result,omitempty"`
+	Failure   *computer.Failure `json:"failure,omitempty"`
 }
 type confirmation struct {
 	Done bool `json:"done"`

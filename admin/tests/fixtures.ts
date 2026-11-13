@@ -24,16 +24,17 @@ export function json(value: unknown, status = 200) {
   })
 }
 export const empty = () => new Response(null, { status: 204 })
-export function enrollment() {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
+// administratorSetup 模拟首建管理员一次性返回的验证器密钥，长度须与协议一致。
+export function administratorSetup() {
   return {
-    secret: Array.from(
-      crypto.getRandomValues(new Uint8Array(32)),
-      (value) => alphabet[value % 32],
-    ).join(''),
+    administrator_id: id(4),
+    username: 'first-admin',
+    display_name: '首位管理员',
+    secret: 'JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP',
     period: 30,
     digits: 6,
     algorithm: 'SHA1',
+    created_at: new Date().toISOString(),
   }
 }
 export function activationInputs() {

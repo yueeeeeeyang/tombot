@@ -22,7 +22,7 @@ func normalizeRequest(request CreateRequest) (CreateRequest, error) {
 	}
 	request.Username = username
 	request.DisplayName = strings.TrimSpace(request.DisplayName)
-	if request.DisplayName == "" || !utf8.ValidString(request.DisplayName) || utf8.RuneCountInString(request.DisplayName) > 120 || strings.ContainsAny(request.DisplayName, "\r\n\x00") || request.Role != "admin" && request.Role != "user" || len(request.IdempotencyKey) < 1 || len(request.IdempotencyKey) > 120 {
+	if request.DisplayName == "" || !utf8.ValidString(request.DisplayName) || utf8.RuneCountInString(request.DisplayName) > 120 || strings.ContainsAny(request.DisplayName, "\r\n\x00") || len(request.IdempotencyKey) < 1 || len(request.IdempotencyKey) > 120 {
 		return request, ErrInvalidInput
 	}
 	for _, character := range request.IdempotencyKey {
@@ -41,15 +41,14 @@ func normalizeRequest(request CreateRequest) (CreateRequest, error) {
 	return request, nil
 }
 
-func (service *Service) reserve(ctx context.Context, actorID string, request CreateRequest, isBootstrap bool) (Operation, error) {
+// reserve 在单个事务内预留节点容量并写入待供给用户；普通用户开户必须由管理员发起。
+func (service *Service) reserve(ctx context.Context, actorID string, request CreateRequest) (Operation, error) {
 	request, err := normalizeRequest(request)
 	if err != nil {
 		return Operation{}, err
 	}
-	if !isBootstrap {
-		if _, err := ulid.ParseStrict(actorID); err != nil {
-			return Operation{}, ErrInvalidInput
-		}
+	if _, err := ulid.ParseStrict(actorID); err != nil {
+		return Operation{}, ErrInvalidInput
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -75,18 +74,6 @@ func (service *Service) reserve(ctx context.Context, actorID string, request Cre
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if isBootstrap {
-			if _, err = transaction.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('tombot.bootstrap.users',0))`); err != nil {
-				return err
-			}
-			var exists bool
-			if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.users)`).Scan(&exists); err != nil {
-				return err
-			}
-			if exists {
-				return ErrAlreadyInitialized
-			}
-		}
 		var imageEnabled bool
 		if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.computer_images WHERE id=$1 AND is_enabled)`, request.ImageID).Scan(&imageEnabled); err != nil {
 			return err
@@ -103,7 +90,7 @@ func (service *Service) reserve(ctx context.Context, actorID string, request Cre
 			return err
 		}
 		operation = Operation{ID: ids.New(), UserID: ids.New(), ComputerID: ids.New(), Status: "pending", Stage: "reserved", Attempt: 1}
-		if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,$3,$4,'provisioning')`, operation.UserID, request.Username, request.DisplayName, request.Role); err != nil {
+		if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,$3,'provisioning')`, operation.UserID, request.Username, request.DisplayName); err != nil {
 			return err
 		}
 		if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit)
@@ -118,7 +105,7 @@ func (service *Service) reserve(ctx context.Context, actorID string, request Cre
 		if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.user_limits(user_id,concurrent_model_calls,concurrent_desktops,queued_runs) VALUES($1,$2,$3,$4)`, operation.UserID, service.options.ModelConcurrency, service.options.DesktopConcurrency, service.options.QueuedRuns); err != nil {
 			return err
 		}
-		return audit(ctx, transaction, actorID, operation.UserID, "受理用户创建", request.RequestID, "succeeded", map[string]any{"operation_id": operation.ID, "role": request.Role, "node_id": request.NodeID})
+		return audit(ctx, transaction, actorID, operation.UserID, "受理用户创建", request.RequestID, "succeeded", map[string]any{"operation_id": operation.ID, "node_id": request.NodeID})
 	})
 	if err != nil {
 		return Operation{}, err

@@ -50,16 +50,19 @@ type Service struct {
 	authorizer Authorizer
 	keys       *Keyring
 	verifier   Verifier
+	discoverer Discoverer
 	options    Options
 }
 
 // New 拒绝缺失的密钥、验证器或错误权限连接；不会生成临时主密钥或跳过能力验证。
-func New(control, tenant *postgres.Database, authorizer Authorizer, keys *Keyring, verifier Verifier, options Options) (*Service, error) {
+// 发现器与验证器共用同一受控出口网关，二者都可为空以外的同一实现。
+func New(control, tenant *postgres.Database, authorizer Authorizer, keys *Keyring, verifier Verifier, discoverer Discoverer, options Options) (*Service, error) {
 	if control == nil || control.Role() != postgres.ControlRole || tenant == nil || tenant.Role() != postgres.TenantRole ||
-		authorizer == nil || keys == nil || len(keys.keys) == 0 || verifier == nil || options.VerificationTimeout < time.Second || options.VerificationTimeout > time.Minute {
+		authorizer == nil || keys == nil || len(keys.keys) == 0 || verifier == nil || discoverer == nil ||
+		options.VerificationTimeout < time.Second || options.VerificationTimeout > time.Minute {
 		return nil, errors.New("模型目录依赖或验证时限无效")
 	}
-	return &Service{control, tenant, authorizer, keys, verifier, options}, nil
+	return &Service{control: control, tenant: tenant, authorizer: authorizer, keys: keys, verifier: verifier, discoverer: discoverer, options: options}, nil
 }
 
 func validID(value string) bool { _, err := ulid.ParseStrict(value); return err == nil }

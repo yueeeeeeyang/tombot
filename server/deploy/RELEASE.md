@@ -31,7 +31,7 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 | `manifest.json` | 格式版本 3，平台、源码摘要及全部文件的 SHA-256、大小和权限 |
 | `linux-<架构>/bin/tomd` | 非 root API/Worker，安装到 `/usr/local/bin/tomd` |
 | `linux-<架构>/bin/tomnode`、`tomdeploy-config`、`tomdeploy-check`、`tomdocker-bootstrap`、`tomimage-prepare` | root 节点、配置生成、安装前检查及引导，安装到 `/usr/lib/tombot/` |
-| `linux-<架构>/bin/tomdb`、`tomnode-register`、`tomadmin-bootstrap` | 独立数据库迁移、节点登记和首位管理员部署命令，安装到 `/usr/local/bin/` |
+| `linux-<架构>/bin/tomdb`、`tomnode-register` | 独立数据库迁移与节点登记命令，安装到 `/usr/local/bin/` |
 | `linux-<架构>/computer-image/` | 自包含的对应架构 Docker 构建上下文，含四个容器内程序；不安装到宿主命令路径 |
 | `admin/` | 已构建的同源管理平台，复制到 `/opt/tombot/admin` 并在 `server.json` 指定该目录 |
 | `deploy/tomd.service`、`deploy/systemd/*.service` | 安装到 `/etc/systemd/system/` 的系统服务定义 |
@@ -46,10 +46,10 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 ## 首次部署顺序
 
 1. 准备新 PostgreSQL 数据库和四个最小运行角色、独立迁移身份、固定非 root 的 `tombot-api` 用户及 UID/GID、TLS 和加密文件、用户磁盘存储及备份目标。API 不加入 Docker 组。
-2. 安装同一发布包的程序、管理端和服务单元。按包内 `deploy/CONFIGURE.md` 准备一份非秘密部署参数，使用 `tomdeploy-config` 生成服务、节点、Docker、镜像与节点登记配置到全新目录；审阅后成套安装到 `/etc/tombot/`。节点和镜像身份统一绑定实际 API UID/GID，覆盖参数仍须满足目录与时限约束。配置引用独立受保护文件；不要把凭据放入命令行、版本库或日志。
+2. 安装同一发布包的程序、管理端和服务单元。按包内 `deploy/CONFIGURE.md` 准备一份非秘密部署参数，使用 `tomdeploy-config` 生成服务、节点、Docker、镜像与节点登记配置到全新目录；审阅后成套安装到 `/etc/tombot/`。节点与 API 的控制通道身份由双方证书指纹固定（部署参数 `control`），不再绑定 API UID/GID；覆盖参数仍须满足目录与时限约束。配置引用独立受保护文件；不要把凭据放入命令行、版本库或日志。
 3. 通过独立迁移身份执行 `tomdb`；日常 API 只验证迁移账本。通过 API 身份执行不带参数的 `tomnode-register`，用 `TOM_SERVER_CONFIG` 和 `TOM_NODE_REGISTRATION_REQUEST` 指定受保护配置及操作文件；操作文件中的 `action: register` 登记节点和固定摘要镜像，`action: status` 查询原登记。不得手改 `ready`。
 4. 启动 `tomd.service`，由 systemd 依次执行成套配置检查、Docker 和宿主工具引导、固定镜像准备、受信节点。检查程序复用四份实际配置，核对身份、时限、目录及引用文件的权限，失败时不会开始本次自动安装。API 的 `Wants` 依赖允许节点故障时继续提供登录和历史查询；配置检查与节点控制就绪均不代表电脑验收通过。
-5. 等待独立节点验收清理完成并发布有效镜像能力证据，再通过本机 `tomadmin-bootstrap` 使用同一同步开户流程创建首位管理员。共享浏览器等任何必要能力未确认时停在此门槛，不能绕过。
+5. 打开管理站点 `/admin/`。平台还没有管理员时，登录页提供“创建首位管理员”入口，由部署者当场设定用户名、显示名称与初始密码，并一次性显示动态验证器密钥。之后的管理员由已登录管理员在“管理员”页创建。登记节点与镜像可在“电脑节点”页完成，或继续使用 `tomnode-register`。共享浏览器等任何必要能力未确认时，普通用户开户仍停在此门槛，不能绕过。
 6. 完成多用户/多 Bot、实际挂载配额与进程回收、共享浏览器、故障恢复及一致性备份恢复验收后，再对外切换流量。
 
 本包不自动创建宿主用户或数据库角色，不生成生产凭据，不安装系统服务，也不宣告首次部署验收通过。已提供配置生成入口；受测宿主清单及真实 Ubuntu 首次安装联调仍属于生产部署剩余工作。

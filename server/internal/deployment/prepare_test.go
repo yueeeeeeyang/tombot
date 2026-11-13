@@ -21,7 +21,7 @@ func preparationFixture(t *testing.T) (map[string]any, account) {
 	value, _, api := fixtureConfiguration(t)
 	// 此清单只用于解析测试，不作为宿主安装版本推荐或下载来源。
 	docker := dockerbootstrap.Manifest{EnginePackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", CLIPackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", ContainerdPackageVersion: "2.3.6-1~ubuntu.24.04~noble", E2fsprogsPackageVersion: "1.47.0-test1", UtilLinuxPackageVersion: "2.39.3-test1", MountPackageVersion: "2.39.3-test1", AllowedEngineVersions: []string{"29.7.2"}, RepositoryFingerprint: strings.Repeat("A", 40), TimeoutSeconds: 300, MinimumFreeBytes: 1 << 30}
-	return map[string]any{"version": 1, "node_id": value.node.NodeID, "node_name": "测试电脑节点", "computer_capacity": 4, "image_id": value.image.ImageID, "image": map[string]any{"reference": value.image.Reference}, "docker": docker, "server": map[string]any{"address": "127.0.0.1:8443", "admin_origin": "https://127.0.0.1:8443", "models": map[string]any{"origins": []map[string]any{{"url": "https://model.example.test"}}}}}, api
+	return map[string]any{"version": 1, "node_id": value.node.NodeID, "node_name": "测试电脑节点", "computer_capacity": 4, "image_id": value.image.ImageID, "image": map[string]any{"reference": value.image.Reference}, "docker": docker, "control": map[string]any{"listen": "10.0.0.5:9443", "allow_public_listen": false, "node_certificate_fingerprint": strings.Repeat("a", 64), "api_certificate_fingerprint": strings.Repeat("b", 64)}, "server": map[string]any{"address": "127.0.0.1:8443", "admin_origin": "https://127.0.0.1:8443", "models": map[string]any{"origins": []map[string]any{{"url": "https://model.example.test"}}}}}, api
 }
 
 func generatedFile(t *testing.T, files []configurationFile, name string) []byte {
@@ -58,14 +58,14 @@ func TestRenderConfigurationBindsAllIdentitiesAndDefaults(t *testing.T) {
 		if err := json.Unmarshal(generatedFile(t, files, "node-registration.json"), &registration); err != nil {
 			t.Fatal(err)
 		}
-		if node.NodeID != report.NodeID || server.Node.ID != node.NodeID || image.NodeID != node.NodeID || image.ImageID != registration.ImageID || server.Node.Verification.ImageID != image.ImageID || image.Platform != platform || node.ClientUID != api.uid || node.ClientGID != api.gid || node.Runtime.MaximumLease != 300000 || registration.Action != "register" {
+		if node.NodeID != report.NodeID || server.Node.ID != node.NodeID || image.NodeID != node.NodeID || image.ImageID != registration.ImageID || server.Node.Verification.ImageID != image.ImageID || image.Platform != platform || node.Runtime.MaximumLease != 300000 || registration.Action != "register" {
 			t.Fatal("生成配置未保持统一身份和基线")
 		}
 	}
 }
 
 func TestRenderConfigurationRejectsConflicts(t *testing.T) {
-	for _, kind := range []string{"version", "node-id", "uid", "server-node", "image", "lease", "path", "docker", "capacity", "empty-keys", "empty-dsn", "registration-path", "alias", "model-origin", "missing-origins"} {
+	for _, kind := range []string{"version", "node-id", "server-node", "image", "lease", "path", "docker", "capacity", "empty-keys", "empty-dsn", "registration-path", "alias", "model-origin", "missing-origins"} {
 		t.Run(kind, func(t *testing.T) {
 			request, api := preparationFixture(t)
 			server := request["server"].(map[string]any)

@@ -33,6 +33,9 @@ func (testAuthorizer) RequireAdmin(_ context.Context, principal identity.Princip
 type testVerifier struct{}
 
 func (testVerifier) Verify(context.Context, modelregistry.Configuration, []byte) error { return nil }
+func (testVerifier) Discover(context.Context, string, string, []byte) ([]modelregistry.DiscoveredModel, error) {
+	return []modelregistry.DiscoveredModel{}, nil
+}
 
 type fixture struct {
 	pool                   *sql.DB
@@ -75,7 +78,7 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 	}
 	tenant, dispatch, control := open(postgres.TenantRole), open(postgres.DispatchRole), open(postgres.ControlRole)
 	actor := identity.Principal{UserID: ids.New(), Role: "admin", Scope: "admin"}
-	execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'运行测试管理员','admin','provisioning')`, actor.UserID, strings.ToLower(actor.UserID))
+	execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'运行测试管理员','provisioning')`, actor.UserID, strings.ToLower(actor.UserID))
 	key, err := secure.Random(32)
 	if err != nil {
 		t.Fatal(err)
@@ -85,11 +88,11 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	registry, err := modelregistry.New(control, tenant, testAuthorizer{}, keys, testVerifier{}, modelregistry.Options{VerificationTimeout: time.Second})
+	registry, err := modelregistry.New(control, tenant, testAuthorizer{}, keys, testVerifier{}, testVerifier{}, modelregistry.Options{VerificationTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := registry.CreateProvider(ctx, actor, ids.New(), "运行模型供应商", "openai_compat", "https://model.example.test/v1")
+	provider, err := registry.CreateProvider(ctx, actor, ids.New(), "运行模型供应商", "openai_compat", "https://model.example.test/v1", []byte("execution-credential"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,7 +115,7 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 	seed := func() identity.Principal {
 		principal := identity.Principal{UserID: ids.New(), SessionID: ids.New(), DeviceID: ids.New(), Role: "user", Scope: "desktop", AuthVersion: 1}
 		node, image, computer := ids.New(), ids.New(), ids.New()
-		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'运行用户','user','provisioning')`, principal.UserID, strings.ToLower(principal.UserID))
+		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'运行用户','provisioning')`, principal.UserID, strings.ToLower(principal.UserID))
 		execute(t, pool, `INSERT INTO tombot.computer_images(id,reference) VALUES($1,$2)`, image, "example.test/computer@sha256:"+secure.Hash(image))
 		execute(t, pool, `INSERT INTO tombot.computer_nodes(id,name,status,capacity,runtime_id,control_sequence,last_seen_at,control_expires_at,verified_image_id,capability_expires_at) VALUES($1,$1,'ready',1,$1,1,clock_timestamp(),clock_timestamp()+interval '5 minutes',$2,clock_timestamp()+interval '15 minutes')`, node, image)
 		execute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, principal.UserID, computer, node, image)

@@ -7,12 +7,14 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/accounts"
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/httpjson"
 	"io.yueyang/tom/internal/identity"
+	"io.yueyang/tom/internal/nodecatalog"
 )
 
 // Accounts 仅包含平台管理动作；本地首位管理员引导方法不会注册到 HTTP。
@@ -27,12 +29,27 @@ type Accounts interface {
 	IssueActivation(context.Context, identity.Principal, string, string) (accounts.Activation, error)
 }
 
+// Administrators 是管理员账号管理接口；管理员账号不进入用户开户流程，也不持有电脑。
+// 创建时由调用方设定初始口令并一次性返回动态验证器密钥，不再需要激活材料。
+type Administrators interface {
+	ListAdministrators(context.Context, identity.Principal, string, int) ([]identity.Administrator, error)
+	CreateAdministrator(context.Context, identity.Principal, string, string, string, identity.Attempt) (identity.AdministratorSetup, error)
+}
+
+// Nodes 是节点目录配置接口；节点连接入口仍只来自部署配置，不接受页面输入的地址。
+type Nodes interface {
+	Register(context.Context, identity.Principal, nodecatalog.Registration, string) (nodecatalog.Catalog, error)
+	Get(context.Context, identity.Principal, string) (nodecatalog.Catalog, error)
+}
+
 // Handler 必须由认证门保护全部路径，包括未匹配和方法错误响应。
 type Handler struct {
-	accounts Accounts
-	models   Models
-	logger   *slog.Logger
-	router   http.Handler
+	accounts       Accounts
+	administrators Administrators
+	nodes          Nodes
+	models         Models
+	logger         *slog.Logger
+	router         http.Handler
 }
 
 type requestKey struct{}
@@ -42,11 +59,11 @@ type requestIdentity struct {
 }
 
 // New 复用认证模块的管理 Cookie、来源和 CSRF 校验，避免建立第二套身份规则。
-func New(service Accounts, models Models, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
-	if service == nil || models == nil || gate == nil || logger == nil {
+func New(service Accounts, administratorsService Administrators, nodes Nodes, models Models, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
+	if service == nil || administratorsService == nil || nodes == nil || models == nil || gate == nil || logger == nil {
 		return nil, errors.New("管理 HTTP 依赖配置无效")
 	}
-	handler := &Handler{accounts: service, models: models, logger: logger}
+	handler := &Handler{accounts: service, administrators: administratorsService, nodes: nodes, models: models, logger: logger}
 	router := chi.NewRouter()
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		handler.failure(w, r, 404, "NOT_FOUND", "接口不存在", nil)
@@ -59,6 +76,10 @@ func New(service Accounts, models Models, gate *authapi.Handler, logger *slog.Lo
 	router.Get("/api/v2/admin/computer-nodes", catalogHandler(handler, "nodes", service.ListNodes))
 	router.Get("/api/v2/admin/computer-images", catalogHandler(handler, "images", service.ListImages))
 	router.Post("/api/v2/admin/users/{userID}/activation", handler.activation)
+	router.Get("/api/v2/admin/administrators", catalogHandler(handler, "administrators", administratorsService.ListAdministrators))
+	router.Post("/api/v2/admin/administrators", handler.createAdministrator)
+	router.Post("/api/v2/admin/computer-nodes", handler.registerNode)
+	router.Get("/api/v2/admin/computer-nodes/{imageID}", handler.nodeCatalog)
 	router.Get("/api/v2/admin/user-creation-operations/{operationID}", handler.operation)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/retry", handler.retry)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/reconcile", handler.reconcile)
@@ -79,7 +100,7 @@ func New(service Accounts, models Models, gate *authapi.Handler, logger *slog.Lo
 }
 
 func isAccountListRequest(r *http.Request) bool {
-	return r.Method == "GET" && (r.URL.Path == "/api/v2/admin/users" || r.URL.Path == "/api/v2/admin/computer-nodes" || r.URL.Path == "/api/v2/admin/computer-images")
+	return r.Method == "GET" && (r.URL.Path == "/api/v2/admin/users" || r.URL.Path == "/api/v2/admin/computer-nodes" || r.URL.Path == "/api/v2/admin/computer-images" || r.URL.Path == "/api/v2/admin/administrators" || strings.HasPrefix(r.URL.Path, "/api/v2/admin/computer-nodes/"))
 }
 
 func catalogHandler[T any](handler *Handler, key string, list func(context.Context, identity.Principal, string, int) ([]T, error)) http.HandlerFunc {
@@ -189,6 +210,88 @@ func (handler *Handler) activation(w http.ResponseWriter, r *http.Request) {
 	handler.respond(w, r, 201, activation)
 }
 
+// createAdministrator 一次返回动态验证器密钥；该值只出现这一次，服务端不保存明文。
+func (handler *Handler) createAdministrator(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if !handler.decode(w, r, &request) {
+		return
+	}
+	actor := current(r)
+	setup, err := handler.administrators.CreateAdministrator(r.Context(), actor.principal, request.Username, request.DisplayName, request.Password, actor.attempt)
+	if err != nil {
+		handler.administratorError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/v2/admin/administrators/"+setup.AdministratorID)
+	handler.respond(w, r, http.StatusCreated, setup)
+}
+
+// registerNode 只登记目录元数据；节点是否可用仍由心跳、部署检查与真实能力验收决定。
+func (handler *Handler) registerNode(w http.ResponseWriter, r *http.Request) {
+	var registration nodecatalog.Registration
+	if !handler.decode(w, r, &registration) {
+		return
+	}
+	identity := current(r)
+	catalog, err := handler.nodes.Register(r.Context(), identity.principal, registration, identity.attempt.RequestID)
+	if err != nil {
+		handler.nodeError(w, r, err)
+		return
+	}
+	handler.respond(w, r, http.StatusCreated, catalog)
+}
+
+func (handler *Handler) nodeCatalog(w http.ResponseWriter, r *http.Request) {
+	catalog, err := handler.nodes.Get(r.Context(), current(r).principal, chi.URLParam(r, "imageID"))
+	if err != nil {
+		handler.nodeError(w, r, err)
+		return
+	}
+	handler.respond(w, r, http.StatusOK, catalog)
+}
+
+func (handler *Handler) nodeError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, identity.ErrInvalidSession):
+		handler.failure(w, r, 401, "SESSION_INVALID", identity.ErrInvalidSession.Error(), nil)
+	case errors.Is(err, identity.ErrVerificationRequired):
+		handler.failure(w, r, 403, "VERIFICATION_REQUIRED", identity.ErrVerificationRequired.Error(), nil)
+	case errors.Is(err, identity.ErrForbidden):
+		handler.failure(w, r, 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error(), nil)
+	case errors.Is(err, nodecatalog.ErrInvalidInput):
+		handler.failure(w, r, 400, "INPUT_INVALID", nodecatalog.ErrInvalidInput.Error(), nil)
+	case errors.Is(err, nodecatalog.ErrConflict):
+		handler.failure(w, r, 409, "NODE_CONFLICT", nodecatalog.ErrConflict.Error(), nil)
+	case errors.Is(err, nodecatalog.ErrNotFound):
+		handler.failure(w, r, 404, "NODE_NOT_FOUND", nodecatalog.ErrNotFound.Error(), nil)
+	default:
+		handler.logger.ErrorContext(r.Context(), "节点目录服务调用失败", "request_id", current(r).attempt.RequestID, "actor_id", current(r).principal.UserID)
+		handler.failure(w, r, 503, "NODE_CATALOG_UNAVAILABLE", "节点目录服务暂不可用，请稍后重试", nil)
+	}
+}
+
+func (handler *Handler) administratorError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, identity.ErrInvalidSession):
+		handler.failure(w, r, 401, "SESSION_INVALID", identity.ErrInvalidSession.Error(), nil)
+	case errors.Is(err, identity.ErrVerificationRequired):
+		handler.failure(w, r, 403, "VERIFICATION_REQUIRED", identity.ErrVerificationRequired.Error(), nil)
+	case errors.Is(err, identity.ErrForbidden):
+		handler.failure(w, r, 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error(), nil)
+	case errors.Is(err, identity.ErrInvalidInput):
+		handler.failure(w, r, 400, "INPUT_INVALID", identity.ErrInvalidInput.Error(), nil)
+	case errors.Is(err, identity.ErrAdministratorExists):
+		handler.failure(w, r, 409, "ADMINISTRATOR_CONFLICT", identity.ErrAdministratorExists.Error(), nil)
+	default:
+		handler.logger.ErrorContext(r.Context(), "管理员账号服务调用失败", "request_id", current(r).attempt.RequestID, "actor_id", current(r).principal.UserID)
+		handler.failure(w, r, 503, "ADMINISTRATORS_UNAVAILABLE", "管理员账号服务暂不可用，请稍后重试", nil)
+	}
+}
+
 func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err error, operation accounts.Operation) {
 	var details *accounts.Operation
 	if operation.ID != "" {
@@ -197,6 +300,8 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 	switch {
 	case errors.Is(err, identity.ErrInvalidSession):
 		handler.failure(w, r, 401, "SESSION_INVALID", identity.ErrInvalidSession.Error(), nil)
+	case errors.Is(err, identity.ErrVerificationRequired):
+		handler.failure(w, r, 403, "VERIFICATION_REQUIRED", identity.ErrVerificationRequired.Error(), nil)
 	case errors.Is(err, identity.ErrForbidden):
 		handler.failure(w, r, 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error(), nil)
 	case errors.Is(err, accounts.ErrInvalidInput):

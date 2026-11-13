@@ -9,29 +9,27 @@ import type { DeliveryResult, StreamEvent } from './features/desktop/backend'
 afterEach(() => vi.restoreAllMocks())
 
 describe('聊天体验', () => {
-  it('招聘后自动打开聊天，仅展示模型欢迎内容且重开不会重复生成', async () => {
+  it('招聘后直接打开空会话，不再请求欢迎语', async () => {
     memoryBackend.loadFixture({
       workspace: emptyWorkspace(),
       settings: { baseUrl: 'https://model.example.test', modelName: '测试模型' },
     })
-    const welcome = vi.spyOn(memoryBackend, 'welcomeAgent')
+    const deliverMessage = vi.spyOn(memoryBackend, 'deliverMessage')
     const user = userEvent.setup()
     const { unmount } = render(<App />)
     expect(screen.queryByRole('textbox', { name: /一句话介绍/ })).toBeNull()
     await user.type(screen.getByRole('textbox', { name: '助手名称' }), '灵感搭档')
     await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
     expect(await screen.findByRole('textbox', { name: '给灵感搭档发消息' })).toBeInTheDocument()
-    expect(await screen.findByText('内存测试欢迎内容')).toBeInTheDocument()
-    expect(welcome).toHaveBeenCalledTimes(1)
-    expect(screen.queryByText('你的想法，有了一个新家。')).toBeNull()
-    expect(screen.queryByText(/嗨，我是/)).toBeNull()
+    expect(screen.queryByText('内存测试欢迎内容')).toBeNull()
+    expect(deliverMessage).not.toHaveBeenCalled()
     expect(
       memoryBackend.tryWorkspaceSync().workspace.agents[0]?.messages.map((message) => message.role),
-    ).toEqual(['assistant'])
+    ).toEqual([])
     unmount()
     render(<App />)
-    expect(screen.getByText('内存测试欢迎内容')).toBeInTheDocument()
-    expect(welcome).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('textbox', { name: '给灵感搭档发消息' })).toBeInTheDocument()
+    expect(deliverMessage).not.toHaveBeenCalled()
   })
   it('摘要显示在输入框上方，切换猫咪不串线，失败后清除动画并提示', async () => {
     memoryBackend.loadFixture({
@@ -39,14 +37,12 @@ describe('聊天体验', () => {
     })
     let finish!: (value: DeliveryResult) => void
     let publish!: (event: StreamEvent) => void
-    vi.spyOn(memoryBackend, 'deliverMessage').mockImplementation(
-      (_agentId, _messageId, onEvent) => {
-        publish = onEvent!
-        return new Promise((resolve) => {
-          finish = resolve
-        })
-      },
-    )
+    vi.spyOn(memoryBackend, 'deliverMessage').mockImplementation((_agentId, _content, onEvent) => {
+      publish = onEvent!
+      return new Promise((resolve) => {
+        finish = resolve
+      })
+    })
     const user = userEvent.setup()
     render(<App />)
     await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '整理材料')
@@ -98,16 +94,15 @@ describe('聊天体验', () => {
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '内置提供商' })).toBeInTheDocument()
   })
-  it('欢迎请求失败仍保留新猫咪并显示真实错误', async () => {
-    vi.spyOn(memoryBackend, 'welcomeAgent').mockRejectedValue(new Error('欢迎请求连接失败'))
+  it('招聘不依赖服务端回合：投递接口不可用时仍保留新猫咪', async () => {
+    vi.spyOn(memoryBackend, 'deliverMessage').mockRejectedValue(new Error('投递接口不可用'))
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: '新建' }))
     await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
     await user.type(screen.getByRole('textbox', { name: '助手名称' }), '新搭档')
     await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('欢迎请求连接失败')
-    expect(screen.getByRole('textbox', { name: '给新搭档发消息' })).toBeInTheDocument()
+    expect(await screen.findByRole('textbox', { name: '给新搭档发消息' })).toBeInTheDocument()
     expect(screen.queryByText('正在思考…')).toBeNull()
   })
 })

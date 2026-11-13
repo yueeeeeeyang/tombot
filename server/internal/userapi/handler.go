@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/authapi"
@@ -17,6 +18,8 @@ import (
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/httpjson"
 	"io.yueyang/tom/internal/identity"
+	"io.yueyang/tom/internal/store/postgres"
+	"io.yueyang/tom/internal/userevents"
 )
 
 // Catalog 仅含所属用户的目录动作，不提供模型管理、主机路径或管理员越权读取入口。
@@ -53,11 +56,28 @@ type Execution interface {
 
 var _ Execution = (*execution.Service)(nil)
 
+// Events 只提供当前用户的已提交事件，不暴露写入、广播或跨用户订阅入口。
+type Events interface {
+	Read(context.Context, identity.Principal, int64, int) ([]postgres.Event, error)
+}
+
+var _ Events = (*userevents.Service)(nil)
+
+// eventTiming 决定一次连接推送多久以及多久发一次心跳，测试可缩短而不改常量。
+type eventTiming struct {
+	pollInterval  time.Duration
+	heartbeat     time.Duration
+	drainMargin   time.Duration
+	minimumWindow time.Duration
+}
+
 type Handler struct {
-	catalog  Catalog
-	executor Execution
-	logger   *slog.Logger
-	router   http.Handler
+	catalog     Catalog
+	executor    Execution
+	events      Events
+	eventTiming eventTiming
+	logger      *slog.Logger
+	router      http.Handler
 }
 type requestKey struct{}
 type requestIdentity struct {
@@ -66,11 +86,11 @@ type requestIdentity struct {
 }
 
 // New 将所有路由置于桌面认证范围，管理 Cookie 不能直接读取用户内容。
-func New(catalog Catalog, executor Execution, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
-	if catalog == nil || executor == nil || gate == nil || logger == nil {
+func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
+	if catalog == nil || executor == nil || events == nil || gate == nil || logger == nil {
 		return nil, errors.New("用户 HTTP 依赖无效")
 	}
-	handler := &Handler{catalog: catalog, executor: executor, logger: logger}
+	handler := &Handler{catalog: catalog, executor: executor, events: events, logger: logger, eventTiming: eventTiming{pollInterval: eventPollInterval, heartbeat: eventHeartbeat, drainMargin: eventDrainMargin, minimumWindow: eventMinimumWindow}}
 	router := chi.NewRouter()
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		handler.failure(w, r, 404, "NOT_FOUND", "接口不存在")
@@ -100,10 +120,11 @@ func New(catalog Catalog, executor Execution, gate *authapi.Handler, logger *slo
 	router.Post("/api/v2/conversations/{conversationID}/read", handler.markRead)
 	router.Get("/api/v2/runs/{runID}", handler.getRun)
 	router.Post("/api/v2/runs/{runID}/cancel", handler.cancelRun)
+	router.Get("/api/v2/events", handler.streamEvents)
 	protected, err := gate.Protect("desktop", func(w http.ResponseWriter, r *http.Request, principal identity.Principal, attempt identity.Attempt) {
 		r = r.WithContext(context.WithValue(r.Context(), requestKey{}, requestIdentity{principal, attempt}))
 		messagesPath := strings.HasPrefix(r.URL.Path, "/api/v2/conversations/") && strings.HasSuffix(r.URL.Path, "/messages")
-		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || messagesPath)
+		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || r.URL.Path == "/api/v2/events" || messagesPath)
 		if r.URL.RawQuery != "" && !allowsQuery {
 			handler.failure(w, r, 400, "INPUT_INVALID", "此接口不接受查询参数")
 			return
@@ -168,7 +189,7 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		status, code, message = 409, "RESOURCE_ARCHIVED", bots.ErrArchived.Error()
 	case errors.Is(err, bots.ErrInviteDenied):
 		status, code, message = 403, "GROUP_INVITE_DENIED", bots.ErrInviteDenied.Error()
-	case errors.Is(err, execution.ErrInvalidInput):
+	case errors.Is(err, execution.ErrInvalidInput), errors.Is(err, userevents.ErrInvalidInput):
 		status, code, message = 400, "INPUT_INVALID", execution.ErrInvalidInput.Error()
 	case errors.Is(err, execution.ErrNotFound):
 		status, code, message = 404, "RESOURCE_NOT_FOUND", execution.ErrNotFound.Error()

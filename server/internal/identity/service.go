@@ -18,13 +18,14 @@ import (
 )
 
 var (
-	ErrInvalidInput       = errors.New("认证参数无效")
-	ErrInvalidCredentials = errors.New("用户名或认证信息无效")
-	ErrInvalidSession     = errors.New("会话无效或已失效")
-	ErrInvalidActivation  = errors.New("激活信息无效或已过期")
-	ErrRateLimited        = errors.New("认证尝试过于频繁，请稍后再试")
-	ErrForbidden          = errors.New("当前账户无权执行此操作")
-	ErrDeviceLimit        = errors.New("有效设备数量已达到上限")
+	ErrInvalidInput         = errors.New("认证参数无效")
+	ErrInvalidCredentials   = errors.New("用户名或认证信息无效")
+	ErrInvalidSession       = errors.New("会话无效或已失效")
+	ErrInvalidActivation    = errors.New("激活信息无效或已过期")
+	ErrRateLimited          = errors.New("认证尝试过于频繁，请稍后再试")
+	ErrForbidden            = errors.New("当前账户无权执行此操作")
+	ErrVerificationRequired = errors.New("该操作需要重新验证管理身份")
+	ErrDeviceLimit          = errors.New("有效设备数量已达到上限")
 )
 
 // Options 的时间和数量均来自服务端配置，构造时拒绝无界或矛盾的限额。
@@ -168,7 +169,7 @@ func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) err
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrInvalidCredentials, ErrInvalidSession, ErrInvalidActivation, ErrRateLimited, ErrForbidden, ErrDeviceLimit, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrInvalidCredentials, ErrInvalidSession, ErrInvalidActivation, ErrRateLimited, ErrForbidden, ErrVerificationRequired, ErrAdministratorExists, ErrDeviceLimit, context.Canceled, context.DeadlineExceeded} {
 		// 组合错误可能还包含回滚失败，不能只提取其中的业务拒绝而丢弃基础设施故障。
 		if err == known {
 			return known

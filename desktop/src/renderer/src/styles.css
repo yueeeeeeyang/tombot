@@ -486,6 +486,21 @@ button:disabled {
 .saved-messages {
   margin-top: 8px;
 }
+.load-earlier {
+  display: block;
+  margin: 0 auto 12px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.load-earlier:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
 .saved-messages .message-row {
   margin-bottom: 0;
 }

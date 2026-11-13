@@ -100,9 +100,10 @@ func check(ctx context.Context, paths Paths, api account, platform string, fs fi
 	if err := fs.directory(value.server.AdminDirectory, api, false, true, false); err != nil {
 		return Report{}, err
 	}
-	socketDirectory := filepath.Dir(value.node.Socket)
-	if err := fs.directory(socketDirectory, api, false, true, socketDirectory == "/run/tombot"); err != nil {
-		return Report{}, err
+	for _, directory := range []string{filepath.Dir(value.node.Control.CertificateFile), filepath.Dir(value.node.Control.PrivateKeyFile), filepath.Dir(value.server.Node.CertificateFile), filepath.Dir(value.server.Node.PrivateKeyFile)} {
+		if err := fs.directory(directory, api, false, true, false); err != nil {
+			return Report{}, err
+		}
 	}
 	for _, directory := range value.directories() {
 		if err := fs.directory(directory, api, false, false, true); err != nil {

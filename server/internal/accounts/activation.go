@@ -25,29 +25,10 @@ func (service *Service) IssueActivation(ctx context.Context, actor identity.Prin
 	if err := service.authorizer.RequireAdmin(ctx, actor, true); err != nil {
 		return Activation{}, err
 	}
-	return service.issueActivation(ctx, actor.UserID, userID, requestID, false)
+	return service.issueActivation(ctx, actor.UserID, userID, requestID)
 }
 
-// BootstrapActivation 只供受保护的部署命令使用，限定为首次开户成功且尚未激活的管理员。
-func (service *Service) BootstrapActivation(ctx context.Context, operationID, requestID string) (Activation, error) {
-	if _, err := ulid.ParseStrict(operationID); err != nil {
-		return Activation{}, ErrInvalidInput
-	}
-	var userID string
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		err := transaction.QueryRowContext(ctx, `SELECT user_id FROM tombot.user_creation_operations WHERE id=$1 AND actor_id IS NULL AND status='succeeded'`, operationID).Scan(&userID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrActivationUnavailable
-		}
-		return err
-	})
-	if err != nil {
-		return Activation{}, err
-	}
-	return service.issueActivation(ctx, "", userID, requestID, true)
-}
-
-func (service *Service) issueActivation(ctx context.Context, actorID, userID, requestID string, initial bool) (Activation, error) {
+func (service *Service) issueActivation(ctx context.Context, actorID, userID, requestID string) (Activation, error) {
 	for _, id := range []string{userID, requestID} {
 		if _, err := ulid.ParseStrict(id); err != nil {
 			return Activation{}, ErrInvalidInput
@@ -60,10 +41,9 @@ func (service *Service) issueActivation(ctx context.Context, actorID, userID, re
 	digest := sha256.Sum256([]byte(value))
 	activation := Activation{UserID: userID, Value: identity.Credential(value)}
 	err = service.transaction(ctx, func(transaction *sql.Tx) error {
-		var role string
-		err := transaction.QueryRowContext(ctx, `SELECT u.role FROM tombot.users u JOIN tombot.computers c ON c.user_id=u.id
+		err := transaction.QueryRowContext(ctx, `SELECT u.id FROM tombot.users u JOIN tombot.computers c ON c.user_id=u.id
 			JOIN tombot.user_creation_operations o ON o.user_id=u.id WHERE u.id=$1 AND u.status='pending_activation' AND c.status='ready' AND o.status='succeeded'
-			AND (NOT $2 OR o.actor_id IS NULL AND u.role='admin') FOR UPDATE OF u`, userID, initial).Scan(&role)
+			FOR UPDATE OF u`, userID).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrActivationUnavailable
 		}
@@ -78,7 +58,7 @@ func (service *Service) issueActivation(ctx context.Context, actorID, userID, re
 		if err != nil {
 			return err
 		}
-		return audit(ctx, transaction, actorID, userID, "签发用户激活材料", requestID, "succeeded", map[string]any{"expires_at": activation.ExpiresAt, "role": role})
+		return audit(ctx, transaction, actorID, userID, "签发用户激活材料", requestID, "succeeded", map[string]any{"expires_at": activation.ExpiresAt})
 	})
 	if err != nil {
 		return Activation{}, err

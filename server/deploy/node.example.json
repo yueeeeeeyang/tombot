@@ -1,9 +1,15 @@
 {
   "version": 2,
   "node_id": "01K9AX6VSMKDBZ049G41FT4WHW",
-  "socket": "/run/tombot/control.sock",
-  "client_uid": 20001,
-  "client_gid": 20001,
+  "listen": "10.0.0.5:9443",
+  "allow_public_listen": true,
+  "control_tls": {
+    "certificate_file": "/etc/tombot/tls/node-certificate.pem",
+    "private_key_file": "/etc/tombot/private/node.key",
+    "client_fingerprints": [
+      "0000000000000000000000000000000000000000000000000000000000000000"
+    ]
+  },
   "startup_timeout_ms": 120000,
   "shutdown_timeout_ms": 180000,
   "api": {

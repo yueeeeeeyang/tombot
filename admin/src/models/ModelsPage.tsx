@@ -1,10 +1,11 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
 import { Plus, RefreshCw, ArrowLeft } from 'lucide-react'
 import { AdminClient } from '../api/client'
 import {
   credentialsSchema,
   modelsSchema,
+  remoteModelsSchema,
   policiesSchema,
   providersSchema,
   versionsSchema,
@@ -186,6 +187,12 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                     type: 'url',
                     hint: '填写 HTTPS 地址；服务端会验证部署允许的访问范围。',
                   },
+                  {
+                    name: 'credential',
+                    label: '供应商凭据',
+                    type: 'password',
+                    hint: '服务端加密保存，不会回显。供应商与凭据在同一事务内登记。',
+                  },
                 ],
               })
             }
@@ -223,7 +230,7 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                     <td>
                       <div className="actions">
                         <button className="text-button" onClick={() => setSelected(provider)}>
-                          模型与凭据
+                          模型管理
                         </button>
                         <button
                           className="text-button"
@@ -242,6 +249,22 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                         >
                           {provider.is_enabled ? '停用' : '启用'}
                         </button>
+                        {!provider.is_enabled && (
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              setAction({
+                                title: '删除供应商',
+                                description:
+                                  '删除会一并移除该供应商的模型与凭据，且无法恢复。被策略版本引用时服务端会拒绝删除。',
+                                path: `/model-providers/${provider.id}/delete`,
+                                body: { expected_revision: provider.revision },
+                              })
+                            }
+                          >
+                            删除
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -288,22 +311,16 @@ function ProviderDetail({
   onBack: () => void
 }) {
   const [modelBefore, setModelBefore] = useState('')
-  const [credentialBefore, setCredentialBefore] = useState('')
   const models = useQuery(
     client,
     pagePath(`/model-providers/${provider.id}/models`, modelBefore),
     modelsSchema,
   )
-  const credentials = useQuery(
-    client,
-    pagePath(`/model-providers/${provider.id}/credentials`, credentialBefore),
-    credentialsSchema,
-  )
   const [action, setAction] = useState<Action>()
+  const [pulling, setPulling] = useState(false)
   function close() {
     setAction(undefined)
     models.reload()
-    credentials.reload()
   }
   return (
     <>
@@ -320,59 +337,64 @@ function ProviderDetail({
       <section>
         <div className="section-heading">
           <h2>模型目录</h2>
-          <button
-            className="secondary-button"
-            onClick={() =>
-              setAction({
-                title: '登记模型',
-                path: `/model-providers/${provider.id}/models`,
-                fields: [
-                  { name: 'model_key', label: '模型标识' },
-                  { name: 'display_name', label: '显示名称' },
-                  {
-                    name: 'context_limit',
-                    label: '上下文上限',
-                    type: 'number',
-                    min: 1,
-                    max: 100_000_000,
-                  },
-                  {
-                    name: 'output_limit',
-                    label: '输出上限',
-                    type: 'number',
-                    min: 1,
-                    max: 100_000_000,
-                  },
-                  {
-                    name: 'supports_tools',
-                    label: '工具调用',
-                    options: [
-                      { value: 'true', label: '支持' },
-                      { value: 'false', label: '不支持' },
-                    ],
-                  },
-                  {
-                    name: 'supports_vision',
-                    label: '图像输入',
-                    options: [
-                      { value: 'true', label: '支持' },
-                      { value: 'false', label: '不支持' },
-                    ],
-                  },
-                ],
-                transform: (fields) => ({
-                  model_key: fields.get('model_key'),
-                  display_name: fields.get('display_name'),
-                  context_limit: Number(fields.get('context_limit')),
-                  output_limit: Number(fields.get('output_limit')),
-                  supports_tools: fields.get('supports_tools') === 'true',
-                  supports_vision: fields.get('supports_vision') === 'true',
-                }),
-              })
-            }
-          >
-            登记模型
-          </button>
+          <div className="actions">
+            <button className="secondary-button" onClick={() => setPulling(true)}>
+              从供应商拉取
+            </button>
+            <button
+              className="secondary-button"
+              onClick={() =>
+                setAction({
+                  title: '登记模型',
+                  path: `/model-providers/${provider.id}/models`,
+                  fields: [
+                    { name: 'model_key', label: '模型标识' },
+                    { name: 'display_name', label: '显示名称' },
+                    {
+                      name: 'context_limit',
+                      label: '上下文上限',
+                      type: 'number',
+                      min: 1,
+                      max: 100_000_000,
+                    },
+                    {
+                      name: 'output_limit',
+                      label: '输出上限',
+                      type: 'number',
+                      min: 1,
+                      max: 100_000_000,
+                    },
+                    {
+                      name: 'supports_tools',
+                      label: '工具调用',
+                      options: [
+                        { value: 'true', label: '支持' },
+                        { value: 'false', label: '不支持' },
+                      ],
+                    },
+                    {
+                      name: 'supports_vision',
+                      label: '图像输入',
+                      options: [
+                        { value: 'true', label: '支持' },
+                        { value: 'false', label: '不支持' },
+                      ],
+                    },
+                  ],
+                  transform: (fields) => ({
+                    model_key: fields.get('model_key'),
+                    display_name: fields.get('display_name'),
+                    context_limit: Number(fields.get('context_limit')),
+                    output_limit: Number(fields.get('output_limit')),
+                    supports_tools: fields.get('supports_tools') === 'true',
+                    supports_vision: fields.get('supports_vision') === 'true',
+                  }),
+                })
+              }
+            >
+              登记模型
+            </button>
+          </div>
         </div>
         {!models.value ? (
           <LoadState error={models.error} onRetry={models.reload} />
@@ -437,86 +459,203 @@ function ProviderDetail({
           </div>
         )}
       </section>
-      <section>
-        <div className="section-heading">
-          <h2>凭据版本</h2>
-          <button
-            className="secondary-button"
-            onClick={() =>
-              setAction({
-                title: '新增凭据版本',
-                path: `/model-providers/${provider.id}/credentials`,
-                description:
-                  '凭据加密保存于服务端，列表只展示版本状态。新增版本不会自动替换已发布策略。',
-                fields: [{ name: 'value', label: '供应商凭据', type: 'password' }],
-              })
-            }
-          >
-            新增凭据
+      {action && <ActionDialog client={client} action={action} onClose={close} onSaved={close} />}
+      {pulling && (
+        <PullModels
+          client={client}
+          providerID={provider.id}
+          registered={models.value?.models.map((model) => model.model_key) ?? []}
+          onClose={() => setPulling(false)}
+          onImported={() => {
+            setPulling(false)
+            models.reload()
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+// PullModels 读取供应商模型列表，勾选后按统一规格登记到目录。
+// 上游列表没有上下文与输出上限，因此这些规格必须由管理员显式填写。
+function PullModels({
+  client,
+  providerID,
+  registered,
+  onClose,
+  onImported,
+}: {
+  client: AdminClient
+  providerID: string
+  registered: string[]
+  onClose: () => void
+  onImported: () => void
+}) {
+  const [models, setModels] = useState<{ model_key: string; display_name: string }[] | null>(null)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<unknown>()
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState('')
+  const form = useRef<HTMLFormElement>(null)
+  const known = new Set(registered)
+
+  async function load() {
+    setError(undefined)
+    setBusy(true)
+    try {
+      const result = await client.request(
+        `/model-providers/${providerID}/remote-models`,
+        remoteModelsSchema,
+        { timeout: 30_000 },
+      )
+      setModels(result.models)
+      setSelected(
+        new Set(
+          result.models.filter((item) => !known.has(item.model_key)).map((item) => item.model_key),
+        ),
+      )
+    } catch (cause) {
+      setError(cause)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submit() {
+    if (busy || !form.current?.reportValidity() || selected.size === 0) return
+    const fields = new FormData(form.current)
+    const base = {
+      context_limit: Number(fields.get('context_limit')),
+      output_limit: Number(fields.get('output_limit')),
+      supports_tools: fields.get('supports_tools') === 'true',
+      supports_vision: fields.get('supports_vision') === 'true',
+    }
+    setBusy(true)
+    setError(undefined)
+    let imported = 0
+    try {
+      for (const item of models ?? []) {
+        if (!selected.has(item.model_key)) continue
+        setProgress(`正在登记 ${item.model_key}（${imported + 1}/${selected.size}）`)
+        await client.request(`/model-providers/${providerID}/models`, modelsSchema, {
+          method: 'POST',
+          body: {
+            ...base,
+            provider_id: providerID,
+            model_key: item.model_key,
+            display_name: item.display_name,
+          },
+          timeout: 20_000,
+        })
+        imported++
+      }
+      onImported()
+    } catch (cause) {
+      // 已登记的模型保留；失败的模型标识不自动重试，由管理员确认后重新提交。
+      setError(cause)
+      setProgress(`已登记 ${imported} 个，其余未完成`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog title="从供应商拉取模型" onClose={onClose} busy={busy}>
+      <p className="description">
+        读取供应商当前提供的模型标识。上游不提供上下文与输出上限，请填写适用于所选模型的规格。
+      </p>
+      <Alert error={error} />
+      {!models ? (
+        <p role="status">
+          {busy ? '正在读取供应商模型…' : '点击下方按钮读取供应商当前提供的模型列表。'}
+        </p>
+      ) : (
+        <form
+          ref={form}
+          onSubmit={(event) => {
+            event.preventDefault()
+            void submit()
+          }}
+        >
+          <section className="remote-models" aria-label="可选模型">
+            {models.length === 0 && <p className="empty-state">供应商没有返回任何模型。</p>}
+            {models.map((item) => (
+              <label key={item.model_key} className="remote-model">
+                <input
+                  type="checkbox"
+                  checked={selected.has(item.model_key)}
+                  disabled={busy || known.has(item.model_key)}
+                  onChange={(event) => {
+                    const next = new Set(selected)
+                    if (event.target.checked) next.add(item.model_key)
+                    else next.delete(item.model_key)
+                    setSelected(next)
+                  }}
+                />
+                <span>
+                  <strong>{item.display_name}</strong>
+                  <small>{item.model_key}</small>
+                </span>
+                {known.has(item.model_key) && <span className="status">已登记</span>}
+              </label>
+            ))}
+          </section>
+          <fieldset disabled={busy} className="form-grid">
+            <Field label="上下文上限">
+              <input
+                name="context_limit"
+                type="number"
+                required
+                min={1}
+                max={100000000}
+                defaultValue={128000}
+              />
+            </Field>
+            <Field label="输出上限">
+              <input
+                name="output_limit"
+                type="number"
+                required
+                min={1}
+                max={100000000}
+                defaultValue={8192}
+              />
+            </Field>
+            <Field label="工具调用">
+              <select name="supports_tools" defaultValue="true">
+                <option value="true">支持</option>
+                <option value="false">不支持</option>
+              </select>
+            </Field>
+            <Field label="图像输入">
+              <select name="supports_vision" defaultValue="false">
+                <option value="true">支持</option>
+                <option value="false">不支持</option>
+              </select>
+            </Field>
+          </fieldset>
+          {progress && <p role="status">{progress}</p>}
+          <div className="dialog-actions">
+            <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" className="primary-button" disabled={busy || selected.size === 0}>
+              {busy ? '正在登记…' : `登记所选（${selected.size}）`}
+            </button>
+          </div>
+        </form>
+      )}
+      {!models && !busy && (
+        <div className="dialog-actions">
+          <button type="button" className="secondary-button" onClick={onClose}>
+            取消
+          </button>
+          <button type="button" className="primary-button" onClick={() => void load()}>
+            重新读取
           </button>
         </div>
-        {!credentials.value ? (
-          <LoadState error={credentials.error} onRetry={credentials.reload} />
-        ) : (
-          <div className="table-card">
-            <div className="table-scroll">
-              <table>
-                <thead>
-                  <tr>
-                    <th>版本</th>
-                    <th>状态</th>
-                    <th>创建时间</th>
-                    <th>操作</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {credentials.value.credentials.map((credential) => (
-                    <tr key={credential.id}>
-                      <td>v{credential.version}</td>
-                      <td>
-                        {credential.is_destroyed
-                          ? '已销毁'
-                          : credential.is_revoked
-                            ? '已撤销'
-                            : '可用'}
-                      </td>
-                      <td>{new Date(credential.created_at).toLocaleString('zh-CN')}</td>
-                      <td>
-                        {!credential.is_destroyed && (
-                          <button
-                            className="text-button"
-                            onClick={() =>
-                              setAction({
-                                title: credential.is_revoked ? '销毁凭据' : '撤销凭据',
-                                description: credential.is_revoked
-                                  ? '销毁后不可恢复。服务端会检查策略引用和退役条件，条件不满足时拒绝。'
-                                  : '撤销立即阻止依赖该凭据的新调用。请先发布替代版本。',
-                                path: `/model-credentials/${credential.id}/${credential.is_revoked ? 'destroy' : 'revoke'}`,
-                                body: {},
-                              })
-                            }
-                          >
-                            {credential.is_revoked ? '销毁' : '撤销'}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            {!credentials.value.credentials.length && <p className="empty-state">尚未保存凭据。</p>}
-            <Pagination
-              before={credentialBefore}
-              onBefore={setCredentialBefore}
-              count={credentials.value.credentials.length}
-              last={credentials.value.credentials.at(-1)?.version.toString()}
-            />
-          </div>
-        )}
-      </section>
-      {action && <ActionDialog client={client} action={action} onClose={close} onSaved={close} />}
-    </>
+      )}
+    </Dialog>
   )
 }
 

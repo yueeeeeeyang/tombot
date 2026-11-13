@@ -11,8 +11,14 @@ export class ServerAddressError extends Error {
 }
 
 export interface StoredDesktopSession {
-  deviceToken: string
+  /** 访问凭据只在主进程使用，过期后由刷新凭据换新。 */
+  accessToken: string
+  refreshToken: string
+  /** 访问凭据的到期时刻；缺省视为已过期，必须刷新后才能发业务请求。 */
+  accessExpiresAt: string
   serverUrl: string
+  /** 登录用户名，只用于界面显示和切换账户提示，不作为身份凭据。 */
+  username: string
 }
 
 /**
@@ -85,19 +91,36 @@ export function selectServerAddress(
 
 /** 读取本机会话文件。缺字段或损坏时视为还没有地址，不猜测主机。 */
 export function parseStoredSession(raw: string): StoredDesktopSession {
+  const empty: StoredDesktopSession = {
+    accessToken: '',
+    refreshToken: '',
+    accessExpiresAt: '',
+    serverUrl: '',
+    username: '',
+  }
   try {
-    const parsed = JSON.parse(raw) as { deviceToken?: unknown; serverUrl?: unknown } | null
-    if (!parsed || typeof parsed !== 'object') return { deviceToken: '', serverUrl: '' }
+    const parsed = JSON.parse(raw) as Record<string, unknown> | null
+    if (!parsed || typeof parsed !== 'object') return empty
+    // 旧会话文件只有设备令牌，不能当作 v2 访问凭据使用，直接视为未登录。
     return {
-      deviceToken: typeof parsed.deviceToken === 'string' ? parsed.deviceToken : '',
+      accessToken: typeof parsed.accessToken === 'string' ? parsed.accessToken : '',
+      refreshToken: typeof parsed.refreshToken === 'string' ? parsed.refreshToken : '',
+      accessExpiresAt: typeof parsed.accessExpiresAt === 'string' ? parsed.accessExpiresAt : '',
       serverUrl: storedServerAddress(parsed.serverUrl),
+      username: typeof parsed.username === 'string' ? parsed.username : '',
     }
   } catch {
-    return { deviceToken: '', serverUrl: '' }
+    return empty
   }
 }
 
 /** 凭据和地址一起写出，避免只更新其中一个时把另一个抹掉。 */
 export function serializeStoredSession(session: StoredDesktopSession): string {
-  return JSON.stringify({ deviceToken: session.deviceToken, serverUrl: session.serverUrl })
+  return JSON.stringify({
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken,
+    accessExpiresAt: session.accessExpiresAt,
+    serverUrl: session.serverUrl,
+    username: session.username,
+  })
 }

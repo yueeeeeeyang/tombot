@@ -47,7 +47,10 @@ func testConfig(t *testing.T) Config {
 	}
 	configuration.Node.ID = ids.New()
 	configuration.Node.Verification.ImageID = ids.New()
-	configuration.Node.Socket = "/run/tombot/control.sock"
+	configuration.Node.URL = "https://node.example.test:9443"
+	configuration.Node.CertificateFile = filepath.Join(directory, "api-certificate.pem")
+	configuration.Node.PrivateKeyFile = filepath.Join(directory, "api.key")
+	configuration.Node.ServerFingerprints = []string{strings.Repeat("b", 64)}
 	configuration.Models.Origins = []Origin{{URL: "https://model.example.test"}}
 	return configuration
 }

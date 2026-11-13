@@ -58,11 +58,21 @@ TOM_DEPLOYMENT_OUTPUT=/etc/tombot-generated \
     "models": {
       "origins": [{"url": "https://model.example.test"}]
     }
+  },
+  "control": {
+    "listen": "节点公网地址:9443",
+    "allow_public_listen": true,
+    "node_certificate_fingerprint": "节点证书叶证书的 SHA-256",
+    "api_certificate_fingerprint": "API 客户端证书叶证书的 SHA-256"
   }
 }
 ```
 
-节点和镜像 ID 只在顶层提供一次；程序绑定 API、节点、镜像与登记文件。ID 应保存在部署参数中，重试、登记和恢复都沿用原值。镜像平台使用当前宿主 `linux/amd64` 或 `linux/arm64`，API UID/GID 读取本机真实账户，不接受通过覆盖参数改绑身份。
+`control` 描述 API 与节点之间的控制通道。两个指纹由部署在签发证书后计算并填入，生成器不读取凭据文件，因此写错只会在首次握手被发现；`listen` 必须与 API 配置中的节点 URL 同端口。
+
+`allow_public_listen` 省略时为 `true`：云主机常以公网或运营商私有地址承载控制端口，私网限制容易被误判为不可用。需要只监听私网时显式写 `false`，节点会拒绝公开地址。无论取值如何，跨主机部署都应用安全组只放行 API 的出口地址，控制通道本身始终是双向证书指纹固定的 mTLS。
+
+节点和镜像 ID 只在顶层提供一次；程序绑定 API、节点、镜像与登记文件。ID 应保存在部署参数中，重试、登记和恢复都沿用原值。镜像平台使用当前宿主 `linux/amd64` 或 `linux/arm64`，API UID/GID 从部署参数读取的认证账户确定，不接受通过覆盖参数改绑身份。控制通道身份不再依赖 UID/GID，而是双方固定证书指纹。
 
 `docker` 是完整的受测安装清单，格式沿用 `docker-install.schema.json`。生成器不选择最新版本、不联网查找软件包，不把测试夹具当作生产清单。`image` 可选 `authentication_file`、`call_timeout_seconds`（默认 30）与 `timeout_seconds`（默认 600）；认证字段只能引用私有文件，不能写入认证内容。
 

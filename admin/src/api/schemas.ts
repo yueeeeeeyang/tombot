@@ -45,7 +45,6 @@ export const usersSchema = z.object({
       id,
       username: z.string(),
       display_name: z.string(),
-      role: z.enum(['admin', 'user']),
       status: z.string(),
       computer_status: z.string().nullable(),
       creation_operation_id: id.nullable(),
@@ -72,6 +71,33 @@ export const activationSchema = z.object({
   user_id: id,
   activation_token: z.string().min(1).max(256),
   expires_at: z.string(),
+})
+export const administratorSchema = z.object({
+  id,
+  username: z.string(),
+  display_name: z.string(),
+  status: z.string(),
+  created_at: z.string(),
+})
+export type Administrator = z.infer<typeof administratorSchema>
+export const administratorsSchema = z.object({
+  administrators: z.array(administratorSchema),
+})
+// 创建管理员时一次性返回动态验证器密钥；服务端不保存明文，也不提供再次读取。
+export const administratorSetupSchema = z.object({
+  administrator_id: id,
+  username: z.string(),
+  display_name: z.string(),
+  secret: z.string().regex(/^[A-Z2-7]{32}$/),
+  period: z.literal(30),
+  digits: z.literal(6),
+  algorithm: z.literal('SHA1'),
+  created_at: z.string(),
+})
+export type AdministratorSetup = z.infer<typeof administratorSetupSchema>
+export const adminSetupStatusSchema = z.object({ required: z.boolean() })
+export const remoteModelsSchema = z.object({
+  models: z.array(z.object({ model_key: z.string(), display_name: z.string() })),
 })
 export const enrollmentSchema = z.object({
   secret: z.string().regex(/^[A-Z2-7]{32}$/),

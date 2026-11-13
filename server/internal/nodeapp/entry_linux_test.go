@@ -4,13 +4,23 @@ package nodeapp
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -27,9 +37,61 @@ type entryFixture struct {
 	configuration Config
 	path          string
 	reads         atomic.Int32
+	// 测试客户端证书由父测试保管，子进程通过临时文件接收。
+	clientCertificate []byte
+	clientPrivateKey  []byte
+	serverFingerprint string
+	address           string
 }
 
-// newEntryFixture 使用真实组件构造器和 Unix HTTP，Docker 仅有“资源不存在”的明确替身；不写宿主 cgroup 或挂载磁盘。
+// nodeTestCertificate 生成一次性自签证书并返回 PEM 与指纹；信任来自指纹而不是证书链。
+func nodeTestCertificate(t *testing.T, usage x509.ExtKeyUsage, serial int64) (certificate, key []byte, fingerprint string) {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(serial),
+		Subject:      pkix.Name{CommonName: "tombot-entry-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{usage},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(leaf.Raw)
+	certificate = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	key = pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})
+	return certificate, key, hex.EncodeToString(digest[:])
+}
+
+// freePort 先占用再释放端口，让节点配置使用固定端口；测试之间由内核保证不冲突。
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+// newEntryFixture 使用真实组件构造器和一次性 Docker HTTP 替身；不写宿主 cgroup 或挂载磁盘。
 func newEntryFixture(t *testing.T) *entryFixture {
 	t.Helper()
 	if os.Geteuid() != 0 || os.Getenv("TOM_NODE_ENTRY_TEST") != "1" {
@@ -48,7 +110,7 @@ func newEntryFixture(t *testing.T) *entryFixture {
 		}
 	})
 	c := testConfig()
-	c.Socket = filepath.Join(directory, "control.sock")
+	c.Listen = "127.0.0.1:" + strconv.Itoa(freePort(t))
 	c.Runtime.Socket = filepath.Join(directory, "docker.sock")
 	c.Runtime.StateDirectory = filepath.Join(directory, "runtime")
 	c.Runtime.StorageDirectory = filepath.Join(directory, "workspaces")
@@ -58,7 +120,23 @@ func newEntryFixture(t *testing.T) *entryFixture {
 			t.Fatal(err)
 		}
 	}
-	f := &entryFixture{configuration: c, path: filepath.Join(directory, "node.json")}
+	// 控制证书放在独立私有目录，节点只接受配置中的客户端指纹。
+	private := filepath.Join(directory, "private")
+	if err := os.Mkdir(private, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c.Control.CertificateFile = filepath.Join(private, "node-certificate.pem")
+	c.Control.PrivateKeyFile = filepath.Join(private, "node.key")
+	serverCertificate, serverKey, serverFingerprint := nodeTestCertificate(t, x509.ExtKeyUsageServerAuth, 1)
+	clientCertificate, clientKey, clientFingerprint := nodeTestCertificate(t, x509.ExtKeyUsageClientAuth, 2)
+	c.Control.ClientFingerprints = []string{clientFingerprint}
+	if err := os.WriteFile(c.Control.CertificateFile, serverCertificate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.Control.PrivateKeyFile, serverKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	f := &entryFixture{configuration: c, path: filepath.Join(directory, "node.json"), clientCertificate: clientCertificate, clientPrivateKey: clientKey, serverFingerprint: serverFingerprint, address: "https://" + c.Listen}
 	encoded, err := json.Marshal(c)
 	if err != nil {
 		t.Fatal(err)
@@ -95,6 +173,18 @@ func newEntryFixture(t *testing.T) *entryFixture {
 	return f
 }
 
+// assertReleased 重新绑定同一端口，确认节点退出后控制入口已经释放。
+func (f *entryFixture) assertReleased(t *testing.T) {
+	t.Helper()
+	listener, err := net.Listen("tcp", f.configuration.Listen)
+	if err != nil {
+		t.Fatal("控制端口未释放", err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Error(err)
+	}
+}
+
 func (f *entryFixture) client(t *testing.T) {
 	t.Helper()
 	user := ids.New()
@@ -107,32 +197,67 @@ func (f *entryFixture) client(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 客户端证书写入子进程可读的临时文件；它只是一次性测试凭据，随临时目录清理。
+	certificatePath := filepath.Join(filepath.Dir(f.path), "client-certificate.pem")
+	keyPath := filepath.Join(filepath.Dir(f.path), "client.key")
+	if err := os.WriteFile(certificatePath, f.clientCertificate, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, f.clientPrivateKey, 0600); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "-test.run=^TestLinuxEntryClientHelper$")
-	command.Env = []string{"PATH=/usr/bin:/bin", "TOM_ENTRY_CLIENT=" + string(encoded), "TOM_ENTRY_SOCKET=" + f.configuration.Socket}
-	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: f.configuration.ClientUID, Gid: f.configuration.ClientGID}}
+	command.Env = []string{"PATH=/usr/bin:/bin", "TOM_ENTRY_CLIENT=" + string(encoded), "TOM_ENTRY_ADDRESS=" + f.address, "TOM_ENTRY_CERTIFICATE=" + certificatePath, "TOM_ENTRY_KEY=" + keyPath, "TOM_ENTRY_SERVER_FINGERPRINT=" + f.serverFingerprint}
 	if output, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("真实非 root 客户端失败：%v %s", err, output)
+		t.Fatalf("独立客户端失败：%v %s", err, output)
 	}
+}
+
+// entryTestClient 用 PEM 文件构造生产客户端，验证的是真实 TLS 握手路径。
+func entryTestClient(nodeID, address, certificatePath, keyPath, fingerprint string) (*nodeapi.Client, error) {
+	certificatePEM, err := os.ReadFile(certificatePath)
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(keyPath)
+	if err != nil {
+		return nil, err
+	}
+	pair, err := tls.X509KeyPair(certificatePEM, keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	fingerprints, err := nodeapi.ParseFingerprints([]string{fingerprint})
+	if err != nil {
+		return nil, err
+	}
+	configuration, err := nodeapi.ClientTLS(pair, fingerprints)
+	if err != nil {
+		return nil, err
+	}
+	return nodeapi.NewClient(nodeapi.ClientOptions{NodeID: nodeID, URL: address, CallTimeout: time.Second, TLS: configuration})
 }
 
 func TestLinuxEntryClientHelper(t *testing.T) {
 	encoded := os.Getenv("TOM_ENTRY_CLIENT")
 	if encoded == "" {
-		t.Skip("只由父测试以专用身份启动")
-	}
-	if os.Geteuid() == 0 {
-		t.Fatal("客户端仍为 root")
+		t.Skip("只由父测试以独立进程启动")
 	}
 	var specification computer.Specification
 	if err := json.Unmarshal([]byte(encoded), &specification); err != nil {
 		t.Fatal(err)
 	}
-	client, err := nodeapi.NewClient(nodeapi.ClientOptions{NodeID: specification.NodeID, Socket: os.Getenv("TOM_ENTRY_SOCKET"), CallTimeout: time.Second})
+	client, err := entryTestClient(specification.NodeID, os.Getenv("TOM_ENTRY_ADDRESS"), os.Getenv("TOM_ENTRY_CERTIFICATE"), os.Getenv("TOM_ENTRY_KEY"), os.Getenv("TOM_ENTRY_SERVER_FINGERPRINT"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() {
+		if err := client.CloseIdle(); err != nil {
+			t.Error(err)
+		}
+	}()
 	heartbeat, err := client.Heartbeat(t.Context(), computer.NodeQuery{NodeID: specification.NodeID})
 	if err != nil || heartbeat.Validate(computer.NodeQuery{NodeID: specification.NodeID}) != nil {
 		t.Fatal("真实控制心跳无效", err)
@@ -177,9 +302,7 @@ func TestLinuxEntryStartupAndRestart(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("节点未有界退出")
 		}
-		if _, err := os.Lstat(configuration.Socket); !errors.Is(err, os.ErrNotExist) {
-			t.Fatal("控制端点未释放", err)
-		}
+		f.assertReleased(t)
 	}
 	if f.reads.Load() < 4 {
 		t.Fatal("没有真正向 Docker 协议对账")
@@ -204,9 +327,7 @@ func TestLinuxEntryRejectsUnsafeConfigurationAndRecovery(t *testing.T) {
 	if _, err := New(t.Context(), f.configuration, testLogger()); err == nil {
 		t.Fatal("损坏恢复记录未阻止启动")
 	}
-	if _, err := os.Lstat(f.configuration.Socket); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("恢复前开放了控制入口", err)
-	}
+	f.assertReleased(t)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatal("失败删除了恢复证据", err)
 	}
@@ -301,9 +422,7 @@ func TestLinuxNodeBinaryNotifyAndSignal(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("正式进程 SIGTERM 未完成退出")
 	}
-	if _, err := os.Lstat(f.configuration.Socket); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("正式进程遗留控制端点", err)
-	}
+	f.assertReleased(t)
 }
 
 func TestLinuxNodeBinaryRejectsBrowserRecoveryBeforeListening(t *testing.T) {
@@ -324,9 +443,7 @@ func TestLinuxNodeBinaryRejectsBrowserRecoveryBeforeListening(t *testing.T) {
 	if err := command.Run(); err == nil || ctx.Err() != nil {
 		t.Fatal("浏览器恢复失败未及时退出", err)
 	}
-	if _, err := os.Lstat(f.configuration.Socket); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("浏览器恢复前开放监听", err)
-	}
+	f.assertReleased(t)
 	retained, err := os.ReadFile(path)
 	if err != nil || string(retained) != string(encoded) {
 		t.Fatal("错误记录未保留", err)

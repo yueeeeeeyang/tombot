@@ -103,27 +103,22 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
 
   function startDelivery(
     agentId: string,
+    content: string,
     messageId: string,
     quietWhenUnconfigured: boolean,
-    isWelcome = false,
   ): void {
     if (pendingAgents.current.has(agentId)) return
     pendingAgents.current.add(agentId)
     const source = crypto.randomUUID()
     setPendingMessages((current) => ({ ...current, [agentId]: messageId }))
     let reply = ''
-    void deliver(
-      agentId,
-      messageId,
-      (streamEvent) => {
-        receiveActivity(source, streamEvent)
-        if (streamEvent.type === 'delta') {
-          reply += streamEvent.text
-          setLiveReplies((current) => ({ ...current, [agentId]: reply }))
-        }
-      },
-      isWelcome,
-    )
+    void deliver(agentId, content, (streamEvent) => {
+      receiveActivity(source, streamEvent)
+      if (streamEvent.type === 'delta') {
+        reply += streamEvent.text
+        setLiveReplies((current) => ({ ...current, [agentId]: reply }))
+      }
+    })
       .then((result) => {
         if (!(result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) && result.message)
           setNotice(result.message)
@@ -235,7 +230,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     if (!saved) throw new Error('猫咪资料尚未保存，请重试保存。')
     setSurface({ kind: 'agent', id })
     setCatPanelOpen(false)
-    startDelivery(id, '', false, true)
+    // v2 没有独立的欢迎语回合：新建机器人后直接进入空会话，由用户发起第一句。
     setRecruitProfile(undefined)
     setOpenDialog(null)
   }
@@ -517,6 +512,9 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               if (pendingAgents.current.has(agent.id)) return false
               try {
                 const messageId = crypto.randomUUID()
+                // 保存会清空草稿，投递内容必须在提交前取出。
+                const content =
+                  agent.draft.trim() || attachments?.map((item) => item.name).join('、') || ''
                 const saved = commit((previous) =>
                   saveMessage(
                     previous,
@@ -528,7 +526,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
                   ),
                 )
                 if (!saved) return false
-                startDelivery(agent.id, messageId, true)
+                startDelivery(agent.id, content, messageId, true)
                 return true
               } catch (failure) {
                 setNotice((failure as Error).message)
@@ -556,7 +554,12 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               })
             }
             onRetry={(messageId) => {
-              startDelivery(agent.id, messageId, false)
+              const failed = agent.messages.find((message) => message.id === messageId)
+              if (!failed) {
+                setNotice('找不到这条消息，请重新输入。')
+                return
+              }
+              startDelivery(agent.id, failed.content, messageId, false)
             }}
             onDetails={() => setCatPanelOpen((open) => !open)}
             onNotice={setNotice}

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"io.yueyang/tom/internal/accounts"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/testkit/pgtest"
@@ -82,16 +81,6 @@ func TestCatalogDeploymentIntegration(t *testing.T) {
 	status := CatalogRequest{Action: "status", ImageID: request.ImageID}
 	if result, err := RunCatalog(t.Context(), configuration, status); err != nil || result.Catalog.Node.Status != "bootstrapping" || result.Catalog.Image.ID != request.ImageID {
 		t.Fatal("未查询同一登记", err)
-	}
-	create := bootstrapRequest(t)
-	create.Create.NodeID = configuration.Node.ID
-	create.Create.ImageID = request.ImageID
-	if result, err := RunBootstrap(t.Context(), configuration, create); !errors.Is(err, accounts.ErrNoCapacity) || result.Operation != nil {
-		t.Fatal("登记节点被误当成已就绪节点开户", err)
-	}
-	var users, operations int
-	if err := pool.QueryRow(`SELECT (SELECT count(*) FROM tombot.users),(SELECT count(*) FROM tombot.user_creation_operations)`).Scan(&users, &operations); err != nil || users != 0 || operations != 0 {
-		t.Fatal("未就绪节点留下账户或开户操作", err)
 	}
 	request.Capacity++
 	if _, err := RunCatalog(t.Context(), configuration, request); !errors.Is(err, nodecatalog.ErrConflict) {

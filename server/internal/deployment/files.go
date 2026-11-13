@@ -39,6 +39,13 @@ func (value configuration) references() []fileRule {
 	if server.Models.RootCAFile != "" {
 		files = append(files, fileRule{path: server.Models.RootCAFile, maximum: 1 << 20, api: true})
 	}
+	// 节点控制证书由 API 持有、节点证书与私钥由节点持有；跨主机握手依赖它们，必须先核对身份与权限。
+	files = append(files,
+		fileRule{path: server.Node.CertificateFile, maximum: 1 << 20, api: true},
+		fileRule{path: server.Node.PrivateKeyFile, maximum: 64 << 10, private: true, api: true},
+		fileRule{path: value.node.Control.CertificateFile, maximum: 1 << 20},
+		fileRule{path: value.node.Control.PrivateKeyFile, maximum: 64 << 10, private: true},
+	)
 	if value.image.AuthenticationFile != "" {
 		files = append(files, fileRule{path: value.image.AuthenticationFile, maximum: 16 << 10, private: true})
 	}

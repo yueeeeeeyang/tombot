@@ -24,7 +24,6 @@ var (
 	ErrProvisionFailed       = errors.New("电脑创建失败，用户尚不可登录")
 	ErrQuarantined           = errors.New("电脑资源状态无法确认，已隔离且未开放账户")
 	ErrLeaseLost             = errors.New("用户创建操作租约已失效")
-	ErrAlreadyInitialized    = errors.New("平台已存在用户，不能重复初始化首位管理员")
 	ErrActivationUnavailable = errors.New("用户尚未完成电脑创建或已经激活")
 )
 
@@ -59,10 +58,10 @@ type Service struct {
 }
 
 // CreateRequest 固定本次开户的资源和身份；重试同一幂等键时所有业务字段必须一致。
+// 角色不再参与开户：本服务只创建普通用户，管理员账号由 administrators 包独立管理。
 type CreateRequest struct {
 	Username       string             `json:"username"`
 	DisplayName    string             `json:"display_name"`
-	Role           string             `json:"role"`
 	NodeID         string             `json:"node_id"`
 	ImageID        string             `json:"image_id"`
 	Resources      computer.Resources `json:"resources"`
@@ -105,7 +104,7 @@ func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) err
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrConflict, ErrNoCapacity, ErrImageUnavailable, ErrNotFound, ErrLeaseLost, ErrAlreadyInitialized, ErrActivationUnavailable, ErrQuarantined, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrConflict, ErrNoCapacity, ErrImageUnavailable, ErrNotFound, ErrLeaseLost, ErrActivationUnavailable, ErrQuarantined, context.Canceled, context.DeadlineExceeded} {
 		if err == known {
 			return known
 		}
@@ -125,18 +124,7 @@ func (service *Service) Create(ctx context.Context, actor identity.Principal, re
 	if err := service.authorizer.RequireAdmin(ctx, actor, true); err != nil {
 		return Operation{}, err
 	}
-	operation, err := service.reserve(ctx, actor.UserID, request, false)
-	if err != nil {
-		return operation, err
-	}
-	return service.wait(ctx, operation)
-}
-
-// Bootstrap 仅供受保护的本地部署命令使用；全库互斥检查确保只能建立首位管理员。
-// 首位管理员也走相同电脑供给与等待过程，不存在免电脑的初始化账户。
-func (service *Service) Bootstrap(ctx context.Context, request CreateRequest) (Operation, error) {
-	request.Role = "admin"
-	operation, err := service.reserve(ctx, "", request, true)
+	operation, err := service.reserve(ctx, actor.UserID, request)
 	if err != nil {
 		return operation, err
 	}
@@ -179,25 +167,6 @@ func (service *Service) Get(ctx context.Context, actor identity.Principal, opera
 		return Operation{}, err
 	}
 	return service.readOperation(ctx, operationID)
-}
-
-// GetBootstrap 仅供本机部署查询首位管理员的持久操作；不暴露普通开户或激活材料。
-func (service *Service) GetBootstrap(ctx context.Context, operationID string) (Operation, error) {
-	if _, err := ulid.ParseStrict(operationID); err != nil {
-		return Operation{}, ErrInvalidInput
-	}
-	var operation Operation
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		err := transaction.QueryRowContext(ctx, `SELECT o.id,o.user_id,o.computer_id,o.status,o.stage,o.attempt,o.error_code,o.created_at,o.updated_at
-			FROM tombot.user_creation_operations o JOIN tombot.users u ON u.id=o.user_id
-			WHERE o.id=$1 AND o.actor_id IS NULL AND u.role='admin'`, operationID).
-			Scan(&operation.ID, &operation.UserID, &operation.ComputerID, &operation.Status, &operation.Stage, &operation.Attempt, &operation.ErrorCode, &operation.CreatedAt, &operation.UpdatedAt)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return err
-	})
-	return operation, err
 }
 
 func (service *Service) readOperation(ctx context.Context, id string) (Operation, error) {

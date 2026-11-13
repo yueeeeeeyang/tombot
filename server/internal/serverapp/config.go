@@ -13,12 +13,16 @@ import (
 	"strconv"
 	"time"
 
+	"io.yueyang/tom/internal/accounts"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/execution"
+	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelgateway"
+	"io.yueyang/tom/internal/nodeapi"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/store/postgres"
+	"io.yueyang/tom/internal/userevents"
 )
 
 // Duration 在部署 JSON 中使用带单位的字符串，避免秒与纳秒混用。
@@ -58,6 +62,7 @@ type Config struct {
 	Provision          ProvisionConfig   `json:"provision"`
 	Runs               RunConfig         `json:"runs"`
 	Computer           ComputerConfig    `json:"computer"`
+	Events             EventsConfig      `json:"events"`
 	MaxBots            int               `json:"max_bots"`
 	MaxGroups          int               `json:"max_groups"`
 }
@@ -71,12 +76,15 @@ type DatabaseConfig struct {
 	ConnectionLifetime Duration                 `json:"connection_lifetime"`
 }
 type NodeConfig struct {
-	ID                string             `json:"id"`
-	Socket            string             `json:"socket"`
-	CallTimeout       Duration           `json:"call_timeout"`
-	HeartbeatInterval Duration           `json:"heartbeat_interval"`
-	ControlLifetime   Duration           `json:"control_lifetime"`
-	Verification      VerificationConfig `json:"verification"`
+	ID                 string             `json:"id"`
+	URL                string             `json:"url"`
+	CertificateFile    string             `json:"certificate_file"`
+	PrivateKeyFile     string             `json:"private_key_file"`
+	ServerFingerprints []string           `json:"server_fingerprints"`
+	CallTimeout        Duration           `json:"call_timeout"`
+	HeartbeatInterval  Duration           `json:"heartbeat_interval"`
+	ControlLifetime    Duration           `json:"control_lifetime"`
+	Verification       VerificationConfig `json:"verification"`
 }
 
 type VerificationConfig struct {
@@ -149,6 +157,12 @@ type ProvisionConfig struct {
 	DesktopConcurrency int      `json:"desktop_concurrency"`
 	QueuedRuns         int      `json:"queued_runs"`
 }
+
+// options 把部署配置转换为开户领域参数；用户额度与时限均由配置显式提供。
+func (provision ProvisionConfig) options() accounts.Options {
+	return accounts.Options{WorkerID: ids.New(), Workers: provision.Workers, CallTimeout: provision.CallTimeout.Value(), LeaseDuration: provision.LeaseDuration.Value(), OperationTimeout: provision.OperationTimeout.Value(), RequestWait: provision.RequestWait.Value(), PollInterval: provision.PollInterval.Value(), RetryDelay: provision.RetryDelay.Value(), MaxReconciliations: provision.MaxReconciliations, ActivationLifetime: provision.ActivationLifetime.Value(), ModelConcurrency: provision.ModelConcurrency, DesktopConcurrency: provision.DesktopConcurrency, QueuedRuns: provision.QueuedRuns}
+}
+
 type RunConfig struct {
 	Concurrency     int         `json:"concurrency"`
 	PollInterval    Duration    `json:"poll_interval"`
@@ -186,6 +200,18 @@ type ComputerConfig struct {
 	DesktopStartTimeout Duration `json:"desktop_start_timeout"`
 }
 
+// EventsConfig 控制用户事件保留；事件只是同步提示，快照才是权威状态，因此可以按条数清理。
+type EventsConfig struct {
+	Retention int      `json:"retention"`
+	BatchSize int      `json:"batch_size"`
+	Interval  Duration `json:"interval"`
+	Timeout   Duration `json:"timeout"`
+}
+
+func (configuration EventsConfig) retentionOptions() userevents.RetentionOptions {
+	return userevents.RetentionOptions{Retention: configuration.Retention, BatchSize: configuration.BatchSize, Interval: configuration.Interval.Value(), Timeout: configuration.Timeout.Value(), WorkerID: ids.New()}
+}
+
 // DefaultConfig 仅提供可覆盖的有界运行参数；地址、数据库、密钥、模型来源和节点身份必须由部署提供。
 func DefaultConfig() Config {
 	second, minute, hour := Duration(time.Second), Duration(time.Minute), Duration(time.Hour)
@@ -198,6 +224,7 @@ func DefaultConfig() Config {
 		Models:    ModelConfig{ConnectTimeout: 5 * second, TLSHandshakeTimeout: 5 * second, ResponseHeaderTimeout: 30 * second, IdleReadTimeout: 30 * second, WriteTimeout: 10 * second, RequestTimeout: 2 * minute, VerificationTimeout: 45 * second, MaxRequestBytes: 16 << 20, MaxResponseBytes: 8 << 20, Concurrency: 16},
 		Provision: ProvisionConfig{Workers: 2, CallTimeout: 30 * second, LeaseDuration: 2 * minute, OperationTimeout: 10 * minute, RequestWait: 30 * second, PollInterval: Duration(200 * time.Millisecond), RetryDelay: second, MaxReconciliations: 5, ActivationLifetime: hour, ModelConcurrency: 2, DesktopConcurrency: 2, QueuedRuns: 100},
 		Runs:      RunConfig{Concurrency: 4, PollInterval: Duration(200 * time.Millisecond), RunTimeout: 20 * minute, ModelTimeout: 2 * minute, ToolTimeout: 10 * minute, RecordTimeout: 10 * second, AgentTimeout: 5 * second, MaxModelSteps: 32, MaxToolCalls: 8, MaxOutputBytes: 16 << 10, LeaseLifetime: 30 * second, RecoveryDelay: second, MaxAttempts: 3, MaxOperations: 256, ContextMessages: 100, ContextBytes: 512 << 10, Images: ImageConfig{MaxUserBytes: 256 << 20, MaxUserImages: 256, ContextImages: 2, Retention: 7 * 24 * hour}},
+		Events:    EventsConfig{Retention: 5000, BatchSize: 200, Interval: 10 * minute, Timeout: 30 * second},
 		Computer:  ComputerConfig{LeaseLifetime: 30 * second, WaitTimeout: 5 * minute, HoldTimeout: 25 * minute, NodeTimeout: 5 * second, RetryDelay: second, MaxWaiting: 100, MaxCleanupAttempts: 5, ShellPollInterval: Duration(50 * time.Millisecond), DesktopStartTimeout: 45 * second},
 	}
 }
@@ -238,6 +265,9 @@ func (configuration Config) validate() error {
 	if err := configuration.Node.observerOptions().Validate(); err != nil {
 		return err
 	}
+	if err := configuration.Events.retentionOptions().Validate(); err != nil {
+		return err
+	}
 	images := configuration.Runs.Images
 	if (execution.ImageOptions{MaxUserBytes: images.MaxUserBytes, MaxUserImages: images.MaxUserImages, ContextImages: images.ContextImages, Retention: images.Retention.Value()}).Validate() != nil || configuration.Computer.DesktopStartTimeout.Value() < time.Second || configuration.Computer.DesktopStartTimeout.Value() > time.Minute {
 		return errors.New("桌面截图存储或启动配置无效")
@@ -255,7 +285,14 @@ func (configuration Config) validate() error {
 	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return errors.New("管理平台来源必须是明确的 HTTPS 来源")
 	}
-	paths := []string{configuration.AdminDirectory, configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.Socket}
+	nodeURL, err := url.Parse(configuration.Node.URL)
+	if err != nil || nodeURL.Scheme != "https" || nodeURL.Host == "" || nodeURL.User != nil || nodeURL.Path != "" || nodeURL.RawQuery != "" || nodeURL.Fragment != "" {
+		return errors.New("节点来源必须是明确的 HTTPS 来源")
+	}
+	if _, err := nodeapi.ParseFingerprints(configuration.Node.ServerFingerprints); err != nil {
+		return err
+	}
+	paths := []string{configuration.AdminDirectory, configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.CertificateFile, configuration.Node.PrivateKeyFile}
 	if configuration.Models.RootCAFile != "" {
 		paths = append(paths, configuration.Models.RootCAFile)
 	}

@@ -23,24 +23,40 @@ func (handler *Handler) activate(w http.ResponseWriter, r *http.Request) {
 	handler.respond(w, r, http.StatusNoContent, nil)
 }
 
-func (handler *Handler) enrollment(w http.ResponseWriter, r *http.Request) {
-	var request struct {
-		ActivationToken string `json:"activation_token"`
-	}
-	if !handler.decode(w, r, &request) {
+// adminSetupStatus 只回答平台是否已有管理员，供登录页决定是否展示首建入口。
+// 不透露管理员数量、用户名或状态；该接口不需要会话，也不改变任何状态。
+func (handler *Handler) adminSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		handler.failure(w, r, 400, "INPUT_INVALID", "此接口不接受查询参数")
 		return
 	}
-	secret, err := handler.identity.BeginAdminEnrollment(r.Context(), request.ActivationToken, currentAttempt(r))
+	exists, err := handler.identity.AdministratorsExist(r.Context())
 	if err != nil {
 		handler.serviceError(w, r, err)
 		return
 	}
 	handler.respond(w, r, 200, struct {
-		Secret    identity.Credential `json:"secret"`
-		Period    int                 `json:"period"`
-		Digits    int                 `json:"digits"`
-		Algorithm string              `json:"algorithm"`
-	}{secret, 30, 6, "SHA1"})
+		Required bool `json:"required"`
+	}{!exists})
+}
+
+// createFirstAdministrator 只在平台没有管理员时可用，由创建者当场设定口令。
+// 动态验证器密钥只在本次响应中返回一次，服务端不保存明文。
+func (handler *Handler) createFirstAdministrator(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Password    string `json:"password"`
+	}
+	if !handler.decode(w, r, &request) {
+		return
+	}
+	setup, err := handler.identity.CreateFirstAdministrator(r.Context(), request.Username, request.DisplayName, request.Password, currentAttempt(r))
+	if err != nil {
+		handler.serviceError(w, r, err)
+		return
+	}
+	handler.respond(w, r, 201, setup)
 }
 
 func (handler *Handler) login(scope string) http.HandlerFunc {

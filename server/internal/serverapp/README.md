@@ -1,6 +1,6 @@
 # 多用户应用组合与运行入口
 
-`cmd/tomd` 使用本模块组合 PostgreSQL、身份认证、机器人目录、管理平台、模型网关、开户工作池和执行 Worker。API 使用 Linux 非 root 身份，通过受保护的本机节点通道调度电脑；Bot Agent 的模型与工具循环仍在所属用户容器内执行。本模块没有宿主 Shell 或旧运行时回退。
+`cmd/tomd` 使用本模块组合 PostgreSQL、身份认证、机器人目录、管理平台、模型网关、开户工作池和执行 Worker。API 使用专用非 root 身份，通过 HTTPS 与证书指纹固定的节点控制端口调度电脑，因此服务端不再要求 Linux；Bot Agent 的模型与工具循环仍在所属用户容器内执行。本模块没有宿主 Shell 或旧运行时回退。
 
 本阶段完成入口组合，不表示部署引导与全部产品能力已完成。[首位管理员本机部署入口](../../docs/admin-bootstrap.md)与[节点及镜像目录登记](../../docs/node-registration.md)已接通，同一服务配置的控制连接由 API 与命令共用；命令没有独立 Worker。目录登记只创建 `bootstrapping` 节点，不发布就绪。独立节点程序、镜像准备和[控制心跳租约](../../docs/node-health.md)已接通，[独立验收与镜像准入](../../docs/node-verification.md)已接通；共享浏览器、真实生产部署验收、客户端切换及备份恢复仍待完成。远程电脑用户交互按最新范围暂缓。不得手工把未验收的电脑标为就绪来绕过前提。
 
@@ -31,7 +31,16 @@
       "tombot_dispatch": "/etc/tombot/private/dispatch.connection"
     }
   },
-  "node": {"id": "部署登记的节点 ULID", "socket": "/run/tombot/control.sock", "heartbeat_interval": "10s", "control_lifetime": "2m", "verification": {"image_id": "部署登记的镜像 ULID"}},
+  "node": {
+    "id": "部署登记的节点 ULID",
+    "url": "https://节点地址:9443",
+    "certificate_file": "/etc/tombot/tls/api-certificate.pem",
+    "private_key_file": "/etc/tombot/private/api.key",
+    "server_fingerprints": ["节点证书的 SHA-256"],
+    "heartbeat_interval": "10s",
+    "control_lifetime": "2m",
+    "verification": {"image_id": "部署登记的镜像 ULID"}
+  },
   "models": {"origins": [{"url": "https://model.example.test"}]}
 }
 ```
@@ -47,7 +56,9 @@
 ## 启动及进程生命周期
 
 1. 用受信部署准备空 PostgreSQL、四种登录角色、凭据文件和管理前端构建产物；API 不执行迁移或创建演示账号。
-2. Docker 安装与节点运行分别由受限部署组件负责。节点 socket 的 root 所有者、控制组、固定调用 UID/GID 和保护目录遵守[节点 API](../nodeapi/README.md)。API 不能加入 Docker 组。
+2. Docker 安装与节点运行分别由受限部署组件负责。节点监听地址、证书与客户端指纹遵守[节点 API](../nodeapi/README.md)。API 不能加入 Docker 组。
+
+   API 与节点跨主机时，节点必须只放行 API 的出口地址；仅靠证书认证不足以防住对 root 端口的资源耗尽。
 3. `tomd` 校验 Linux 非 root 身份、配置、TLS、私有文件、各用途连接及完整迁移账本，再构造全部服务和前端资源。任何失败释放已经打开的数据库连接且不监听业务端口。
 4. HTTPS、节点控制观察、独立电脑验收、开户工作池和执行 Worker 使用同一进程监督。任一组件提前退出即停止接单并取消其他组件；正常退出信号不作为故障。Worker 在自己的有界收尾上下文中保存恢复证据和清理所属会话。
 5. 所有后台退出后才允许关闭连接池。退出超过 `http.shutdown_timeout` 时明确返回错误，保留“仍在停止”的状态并结束进程，不能假装资源已经释放。进程重启仍须按持久租约和关闭屏障恢复，未知外部动作不重发。

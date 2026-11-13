@@ -42,37 +42,58 @@ func credentialBinding(providerID, credentialID, keyReference string, version in
 	return fmt.Sprintf("tombot.model.credential/v1/%s/%s/%d/%s", providerID, credentialID, version, keyReference)
 }
 
+// validCredential 只接受可打印 ASCII：供应商令牌都是这种形态，控制字符不应进入密文。
+func validCredential(plaintext []byte) bool {
+	if len(plaintext) < 1 || len(plaintext) > 8192 {
+		return false
+	}
+	for _, value := range plaintext {
+		if value < 33 || value > 126 {
+			return false
+		}
+	}
+	return true
+}
+
+// insertCredential 在调用方事务中写入一个凭据版本；调用方负责清理明文。
+// 供应商登记与后续新增凭据共用这一实现，避免两处加密或版本计算出现差异。
+func insertCredential(ctx context.Context, transaction *sql.Tx, keys *Keyring, actor identity.Principal, requestID, providerID string, plaintext []byte) (Credential, error) {
+	credential := Credential{ID: ids.New(), ProviderID: providerID}
+	if err := transaction.QueryRowContext(ctx, `SELECT coalesce(max(version),0)+1 FROM tombot.model_credentials WHERE provider_id=$1`, providerID).Scan(&credential.Version); err != nil {
+		return Credential{}, err
+	}
+	keyReference := keys.active
+	ciphertext, nonce, err := secure.Seal(keys.keys[keyReference], plaintext, credentialBinding(providerID, credential.ID, keyReference, credential.Version))
+	if err != nil {
+		return Credential{}, ErrCredential
+	}
+	if err = transaction.QueryRowContext(ctx, `INSERT INTO tombot.model_credentials(id,provider_id,version,key_reference,nonce,ciphertext)
+		VALUES($1,$2,$3,$4,$5,$6) RETURNING created_at`, credential.ID, providerID, credential.Version, keyReference, nonce, ciphertext).Scan(&credential.CreatedAt); err != nil {
+		return Credential{}, err
+	}
+	if err = audit(ctx, transaction, actor, requestID, "新增模型凭据版本", credential.ID, map[string]any{"provider_id": providerID, "version": credential.Version}); err != nil {
+		return Credential{}, err
+	}
+	return credential, nil
+}
+
 // AddCredential 创建独立凭据版本；调用方负责清理输入，返回值不包含凭据或可还原材料。
+// 凭据版本管理已从管理平台移除，改由登记供应商时一并设置；该入口保留给部署脚本与测试。
 func (service *Service) AddCredential(ctx context.Context, actor identity.Principal, requestID, providerID string, plaintext []byte) (Credential, error) {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return Credential{}, err
 	}
-	if !validID(providerID) || len(plaintext) < 1 || len(plaintext) > 8192 {
+	if !validID(providerID) || !validCredential(plaintext) {
 		return Credential{}, ErrInvalidInput
 	}
-	for _, value := range plaintext {
-		if value < 33 || value > 126 {
-			return Credential{}, ErrInvalidInput
-		}
-	}
-	credential := Credential{ID: ids.New(), ProviderID: providerID}
+	var credential Credential
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
 		if err := requireRow(transaction.QueryRowContext(ctx, `SELECT id FROM tombot.model_providers WHERE id=$1 FOR UPDATE`, providerID)); err != nil {
 			return err
 		}
-		if err := transaction.QueryRowContext(ctx, `SELECT coalesce(max(version),0)+1 FROM tombot.model_credentials WHERE provider_id=$1`, providerID).Scan(&credential.Version); err != nil {
-			return err
-		}
-		keyReference := service.keys.active
-		ciphertext, nonce, err := secure.Seal(service.keys.keys[keyReference], plaintext, credentialBinding(providerID, credential.ID, keyReference, credential.Version))
-		if err != nil {
-			return ErrCredential
-		}
-		if err = transaction.QueryRowContext(ctx, `INSERT INTO tombot.model_credentials(id,provider_id,version,key_reference,nonce,ciphertext)
-			VALUES($1,$2,$3,$4,$5,$6) RETURNING created_at`, credential.ID, providerID, credential.Version, keyReference, nonce, ciphertext).Scan(&credential.CreatedAt); err != nil {
-			return err
-		}
-		return audit(ctx, transaction, actor, requestID, "新增模型凭据版本", credential.ID, map[string]any{"provider_id": providerID, "version": credential.Version})
+		var err error
+		credential, err = insertCredential(ctx, transaction, service.keys, actor, requestID, providerID, plaintext)
+		return err
 	})
 	if err != nil {
 		return Credential{}, err

@@ -14,10 +14,11 @@ import (
 
 // Models 只暴露管理员目录动作；运行选择、明文使用和任意模型代理不注册到 HTTP。
 type Models interface {
-	CreateProvider(context.Context, identity.Principal, string, string, string, string) (modelregistry.Provider, error)
+	CreateProvider(context.Context, identity.Principal, string, string, string, string, []byte) (modelregistry.Provider, error)
 	ListProviders(context.Context, identity.Principal, string, int) ([]modelregistry.Provider, error)
 	CreateModel(context.Context, identity.Principal, string, modelregistry.ModelRequest) (modelregistry.Model, error)
 	ListModels(context.Context, identity.Principal, string, string, int) ([]modelregistry.Model, error)
+	ListRemoteModels(context.Context, identity.Principal, string) ([]modelregistry.DiscoveredModel, error)
 	AddCredential(context.Context, identity.Principal, string, string, []byte) (modelregistry.Credential, error)
 	ListCredentials(context.Context, identity.Principal, string, int64, int) ([]modelregistry.Credential, error)
 	RevokeCredential(context.Context, identity.Principal, string, string) error
@@ -30,6 +31,7 @@ type Models interface {
 	Publish(context.Context, identity.Principal, string, string, int64, int64) (modelregistry.Version, error)
 	RevokeVersion(context.Context, identity.Principal, string, string, int64) error
 	SetEnabled(context.Context, identity.Principal, string, string, string, int64, bool) error
+	DeleteProvider(context.Context, identity.Principal, string, string, int64) error
 	SetDefault(context.Context, identity.Principal, string, string, int64) error
 	Assign(context.Context, identity.Principal, string, string, string, string, string) error
 }
@@ -41,6 +43,7 @@ func (handler *Handler) registerModels(router chi.Router) {
 	router.Post("/api/v2/admin/model-providers", handler.createProvider)
 	router.Get("/api/v2/admin/model-providers/{providerID}/models", handler.listModels)
 	router.Post("/api/v2/admin/model-providers/{providerID}/models", handler.createModel)
+	router.Get("/api/v2/admin/model-providers/{providerID}/remote-models", handler.listRemoteModels)
 	router.Get("/api/v2/admin/model-providers/{providerID}/credentials", handler.listCredentials)
 	router.Post("/api/v2/admin/model-providers/{providerID}/credentials", handler.addCredential)
 	router.Post("/api/v2/admin/model-credentials/{credentialID}/revoke", handler.revokeCredential)
@@ -56,6 +59,7 @@ func (handler *Handler) registerModels(router chi.Router) {
 	for path, kind := range map[string]string{"model-providers": "provider", "models": "model", "model-policies": "policy"} {
 		router.Post("/api/v2/admin/"+path+"/{configurationID}/state", handler.setModelEnabled(kind))
 	}
+	router.Post("/api/v2/admin/model-providers/{providerID}/delete", handler.deleteProvider)
 	router.Put("/api/v2/admin/users/{userID}/model-policy", handler.assignPolicy)
 	router.Put("/api/v2/admin/users/{userID}/bots/{botID}/model-policy", handler.assignPolicy)
 }
@@ -100,6 +104,8 @@ func (handler *Handler) modelError(w http.ResponseWriter, r *http.Request, err e
 	switch {
 	case errors.Is(err, identity.ErrInvalidSession):
 		status, code, message = 401, "SESSION_INVALID", identity.ErrInvalidSession.Error()
+	case errors.Is(err, identity.ErrVerificationRequired):
+		status, code, message = 403, "VERIFICATION_REQUIRED", identity.ErrVerificationRequired.Error()
 	case errors.Is(err, identity.ErrForbidden):
 		status, code, message = 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error()
 	case errors.Is(err, modelregistry.ErrInvalidInput):
@@ -122,17 +128,22 @@ func (handler *Handler) modelError(w http.ResponseWriter, r *http.Request, err e
 	handler.failure(w, r, status, code, message, nil)
 }
 
+// createProvider 同时登记供应商与首个凭据：只有地址没有凭据的供应商无法调用，也无从拉取模型。
 func (handler *Handler) createProvider(w http.ResponseWriter, r *http.Request) {
 	var request struct {
-		Name     string `json:"name"`
-		Protocol string `json:"protocol"`
-		BaseURL  string `json:"base_url"`
+		Name       string              `json:"name"`
+		Protocol   string              `json:"protocol"`
+		BaseURL    string              `json:"base_url"`
+		Credential identity.Credential `json:"credential"`
 	}
 	if !handler.decode(w, r, &request) {
 		return
 	}
 	identity := current(r)
-	value, err := handler.models.CreateProvider(r.Context(), identity.principal, identity.attempt.RequestID, request.Name, request.Protocol, request.BaseURL)
+	plaintext := []byte(request.Credential)
+	request.Credential = ""
+	defer clear(plaintext)
+	value, err := handler.models.CreateProvider(r.Context(), identity.principal, identity.attempt.RequestID, request.Name, request.Protocol, request.BaseURL, plaintext)
 	handler.modelResult(w, r, 201, "provider", value, err)
 }
 func (handler *Handler) listProviders(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +170,22 @@ func (handler *Handler) createModel(w http.ResponseWriter, r *http.Request) {
 	value, err := handler.models.CreateModel(r.Context(), identity.principal, identity.attempt.RequestID, modelregistry.ModelRequest{ProviderID: chi.URLParam(r, "providerID"), ModelKey: request.ModelKey, DisplayName: request.DisplayName, ContextLimit: request.ContextLimit, OutputLimit: request.OutputLimit, SupportsTools: request.SupportsTools, SupportsVision: request.SupportsVision})
 	handler.modelResult(w, r, 201, "model", value, err)
 }
+
+// listRemoteModels 只读取供应商当前提供的模型标识，不写入目录。
+// 规格不在上游列表里，登记时仍需管理员填写上下文与输出上限。
+func (handler *Handler) listRemoteModels(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" {
+		handler.failure(w, r, 400, "INPUT_INVALID", "此接口不接受查询参数", nil)
+		return
+	}
+	models, err := handler.models.ListRemoteModels(r.Context(), current(r).principal, chi.URLParam(r, "providerID"))
+	if err != nil {
+		handler.modelError(w, r, err)
+		return
+	}
+	handler.respond(w, r, 200, map[string]any{"models": models})
+}
+
 func (handler *Handler) listModels(w http.ResponseWriter, r *http.Request) {
 	before, limit, ok := handler.listPage(w, r)
 	if !ok {
@@ -300,6 +327,23 @@ func (handler *Handler) setDefault(w http.ResponseWriter, r *http.Request) {
 	err := handler.models.SetDefault(r.Context(), identity.principal, identity.attempt.RequestID, chi.URLParam(r, "policyID"), request.ExpectedRevision)
 	handler.modelResult(w, r, 204, "", nil, err)
 }
+
+// deleteProvider 只删除已停用的供应商，且要求期望修订号匹配。
+func (handler *Handler) deleteProvider(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ExpectedRevision int64 `json:"expected_revision"`
+	}
+	if !handler.decode(w, r, &request) {
+		return
+	}
+	identity := current(r)
+	if err := handler.models.DeleteProvider(r.Context(), identity.principal, identity.attempt.RequestID, chi.URLParam(r, "providerID"), request.ExpectedRevision); err != nil {
+		handler.modelError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (handler *Handler) setModelEnabled(kind string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var request struct {

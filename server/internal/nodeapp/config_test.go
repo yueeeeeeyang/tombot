@@ -16,7 +16,7 @@ import (
 
 func testConfig() Config {
 	return Config{
-		Version: 2, NodeID: "01K9AX6VSMKDBZ049G41FT4WHW", Socket: "/run/tombot/control.sock", ClientUID: 20001, ClientGID: 20001, StartupTimeout: 120000, ShutdownTimeout: 180000,
+		Version: 2, NodeID: "01K9AX6VSMKDBZ049G41FT4WHW", Listen: "10.0.0.5:9443", AllowPublic: false, Control: ControlTLS{CertificateFile: "/etc/tombot/tls/node-certificate.pem", PrivateKeyFile: "/etc/tombot/private/node.key", ClientFingerprints: []string{strings.Repeat("a", 64)}}, StartupTimeout: 120000, ShutdownTimeout: 180000,
 		API:          APIConfig{CallTimeout: 30000, ShutdownTimeout: 90000, MaximumConnections: 32},
 		Runtime:      RuntimeConfig{Socket: "/run/docker.sock", StateDirectory: "/var/lib/tombot-node/runtime", StorageDirectory: "/var/lib/tombot-node/workspaces", CallTimeout: 10000, MaximumLease: 120000, TemporaryBytes: 64 << 20, RuntimeBytes: 128 << 20, SharedMemoryBytes: 256 << 20, MaximumEgressComputers: 8},
 		Storage:      StorageConfig{StateDirectory: "/var/lib/tombot-node/storage", CommandTimeout: 10000, MinimumFreeBytes: 1 << 30},
@@ -52,11 +52,11 @@ func TestConfigValidation(t *testing.T) {
 			c.Browser.CleanupTimeout = 60000
 			c.Browser.ShutdownTimeout = 60000
 		},
-		"version": func(c *Config) { c.Version = 1 }, "node": func(c *Config) { c.NodeID = "invalid" }, "root_uid": func(c *Config) { c.ClientUID = 0 },
+		"version": func(c *Config) { c.Version = 1 }, "node": func(c *Config) { c.NodeID = "invalid" }, "fingerprint_empty": func(c *Config) { c.Control.ClientFingerprints = nil }, "fingerprint_format": func(c *Config) { c.Control.ClientFingerprints = []string{"ABCDEF"} }, "certificate_path": func(c *Config) { c.Control.CertificateFile = "relative.pem" },
 		"startup_budget": func(c *Config) { c.StartupTimeout = 1000 }, "shutdown_budget": func(c *Config) { c.ShutdownTimeout = 1000 }, "overflow": func(c *Config) { c.StartupTimeout = Milliseconds(math.MaxInt64) },
 		"api_budget": func(c *Config) { c.API.CallTimeout = 1000 }, "agent_budget": func(c *Config) { c.Agent.CallTimeoutMS = 11000; c.Agent.ShutdownTimeoutMS = 15000 }, "cleanup_budget": func(c *Config) { c.Probe.CleanupTimeout = 60000; c.API.ShutdownTimeout = 30000 },
-		"socket": func(c *Config) { c.Socket = "relative" }, "socket_alias": func(c *Config) { c.Socket = "/run/../run/control.sock" }, "socket_newline": func(c *Config) { c.Socket += "\n" }, "socket_same": func(c *Config) { c.Socket = c.Runtime.Socket }, "docker_newline": func(c *Config) { c.Runtime.Socket += "\n" },
-		"private_socket": func(c *Config) { c.Socket = c.Storage.StateDirectory + "/control.sock" }, "root_directory": func(c *Config) { c.Runtime.StorageDirectory = "/" }, "overlapping": func(c *Config) { c.Storage.StateDirectory = c.Runtime.StateDirectory + "/storage" }, "ancestor": func(c *Config) { c.Storage.StateDirectory = "/var/lib" },
+		"listen": func(c *Config) { c.Listen = "relative" }, "listen_port": func(c *Config) { c.Listen = "10.0.0.5:0" }, "listen_newline": func(c *Config) { c.Listen += "\n" }, "docker_newline": func(c *Config) { c.Runtime.Socket += "\n" },
+		"private_certificate": func(c *Config) { c.Control.PrivateKeyFile = c.Storage.StateDirectory + "/node.key" }, "root_directory": func(c *Config) { c.Runtime.StorageDirectory = "/" }, "overlapping": func(c *Config) { c.Storage.StateDirectory = c.Runtime.StateDirectory + "/storage" }, "ancestor": func(c *Config) { c.Storage.StateDirectory = "/var/lib" },
 		"agent": func(c *Config) { c.Agent.MaximumActive = 0 }, "egress": func(c *Config) { c.Egress.MaximumConnections = 0 }, "storage": func(c *Config) { c.Storage.MinimumFreeBytes = 0 }, "groups": func(c *Config) { c.Groups.MaximumProcesses = 0 }, "sessions": func(c *Config) { c.Sessions.MaximumActive = 0 },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -97,7 +97,7 @@ func TestStrictNestedConfig(t *testing.T) {
 			}
 		})
 	}
-	for _, input := range []string{` { "socket":"/run/tombot/control.sock", "version":1 } `, `{"egress":{"ports":[80,443],"denied_networks":[]}}`} {
+	for _, input := range []string{` { "listen":"10.0.0.5:9443", "version":1 } `, `{"egress":{"ports":[80,443],"denied_networks":[]}}`} {
 		var c Config
 		if decodeConfig([]byte(input), &c) != nil {
 			t.Fatal("正常重排或空列表被拒绝")

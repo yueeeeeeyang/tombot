@@ -23,7 +23,7 @@ from build_computer_image import ENVIRONMENT_FILE, IMAGE_FILES
 ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = ("amd64", "arm64")
 HOST_PROGRAMS = ("tomd", "tomdb", "tomdocker-bootstrap", "tomdeploy-check", "tomdeploy-config", "tomimage-prepare", "tomnode",
-                 "tomnode-register", "tomadmin-bootstrap")
+                 "tomnode-register")
 COMPUTER_PROGRAMS = ("computer-agent", "computer-task", "computer-probe", "bot-agent")
 DEPLOY_FILES = ("tomd.service", "systemd/tombot-docker-bootstrap.service",
                 "systemd/tombot-deployment-check.service",

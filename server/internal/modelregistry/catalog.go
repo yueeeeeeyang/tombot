@@ -3,22 +3,29 @@ package modelregistry
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/infra/ids"
 )
 
-// CreateProvider 登记固定协议和 HTTPS 地址；禁止把凭据藏在 URL 中。
-func (service *Service) CreateProvider(ctx context.Context, actor identity.Principal, requestID, name, protocol, baseURL string) (Provider, error) {
+// CreateProvider 登记固定协议和 HTTPS 地址，并在同一事务内写入首个凭据版本。
+// 凭据与供应商必须一起提交：只建出地址而没有可用凭据的供应商无法发起任何调用，
+// 也不能从供应商拉取模型列表，留下这样的记录只会让后续操作失败得莫名其妙。
+// 凭据为空时拒绝；禁止把凭据藏在 URL 中。
+func (service *Service) CreateProvider(ctx context.Context, actor identity.Principal, requestID, name, protocol, baseURL string, credential []byte) (Provider, error) {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return Provider{}, err
 	}
-	if !validText(name, 120) || (protocol != "openai_compat" && protocol != "anthropic") || !validURL(baseURL) {
+	if !validText(name, 120) || (protocol != "openai_compat" && protocol != "anthropic") || !validURL(baseURL) || !validCredential(credential) {
 		return Provider{}, ErrInvalidInput
 	}
 	provider := Provider{ID: ids.New(), Name: name, Protocol: protocol, BaseURL: baseURL, IsEnabled: true, Revision: 1}
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
 		if err := transaction.QueryRowContext(ctx, `INSERT INTO tombot.model_providers(id,name,protocol,base_url) VALUES($1,$2,$3,$4) RETURNING created_at`, provider.ID, name, protocol, baseURL).Scan(&provider.CreatedAt); err != nil {
+			return err
+		}
+		if _, err := insertCredential(ctx, transaction, service.keys, actor, requestID, provider.ID, credential); err != nil {
 			return err
 		}
 		return audit(ctx, transaction, actor, requestID, "登记模型供应商", provider.ID, struct{}{})
@@ -103,6 +110,53 @@ func (service *Service) SetEnabled(ctx context.Context, actor identity.Principal
 			return err
 		}
 		return audit(ctx, transaction, actor, requestID, "修改模型配置启用状态", id, map[string]any{"kind": kind, "is_enabled": isEnabled, "revision": revision})
+	})
+}
+
+// DeleteProvider 删除已停用的供应商及其模型与凭据；仍被策略版本引用时明确拒绝。
+// 删除会连带清理目录行，因此要求管理员先停用，避免正在使用的供应商被一次性移除。
+func (service *Service) DeleteProvider(ctx context.Context, actor identity.Principal, requestID, providerID string, expectedRevision int64) error {
+	if err := service.authorize(ctx, actor, requestID); err != nil {
+		return err
+	}
+	if !validID(providerID) || expectedRevision < 1 {
+		return ErrInvalidInput
+	}
+	return service.transaction(ctx, func(transaction *sql.Tx) error {
+		var revision int64
+		var isEnabled bool
+		err := transaction.QueryRowContext(ctx, `SELECT revision,is_enabled FROM tombot.model_providers WHERE id=$1 FOR UPDATE`, providerID).Scan(&revision, &isEnabled)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if revision != expectedRevision {
+			return ErrConflict
+		}
+		// 只有停用的供应商可以删除；仍在使用的目录不能通过一次点击消失。
+		if isEnabled {
+			return ErrConflict
+		}
+		// 触发器同样会拒绝，这里先给出明确分类，避免把约束错误当成未知故障。
+		var referenced bool
+		if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.model_policy_versions WHERE provider_id=$1)`, providerID).Scan(&referenced); err != nil {
+			return err
+		}
+		if referenced {
+			return ErrConflict
+		}
+		for _, statement := range []string{
+			`DELETE FROM tombot.model_credentials WHERE provider_id=$1`,
+			`DELETE FROM tombot.models WHERE provider_id=$1`,
+			`DELETE FROM tombot.model_providers WHERE id=$1`,
+		} {
+			if _, err = transaction.ExecContext(ctx, statement, providerID); err != nil {
+				return err
+			}
+		}
+		return audit(ctx, transaction, actor, requestID, "删除模型供应商", providerID, map[string]any{"revision": revision})
 	})
 }
 

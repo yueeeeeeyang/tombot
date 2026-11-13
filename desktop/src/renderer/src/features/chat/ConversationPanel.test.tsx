@@ -21,7 +21,12 @@ afterEach(() => {
   window.desktop = { platform: 'linux', backend: memoryBackend }
 })
 
-function openPanel(send: Send, listMessages = vi.fn(async (): Promise<ServerBubble[]> => [])) {
+type ListMessages = NonNullable<DesktopBackend['listConversationMessages']>
+
+function openPanel(
+  send: Send,
+  listMessages: ListMessages = vi.fn(async () => ({ messages: [], hasMore: false })),
+) {
   const onError = vi.fn()
   window.desktop = {
     platform: 'linux',
@@ -50,6 +55,57 @@ function openPanel(send: Send, listMessages = vi.fn(async (): Promise<ServerBubb
   return onError
 }
 
+describe('消息翻页', () => {
+  it('按最早消息序号向前加载，加载完隐藏入口', async () => {
+    const listMessages = vi
+      .fn<
+        (
+          conversationId: string,
+          before?: number,
+        ) => Promise<{ messages: ServerBubble[]; hasMore: boolean }>
+      >()
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'latest',
+            sequence: 40,
+            role: 'assistant',
+            speaker: agents[0]!.id,
+            content: '较新的回复',
+            createdAt: '2026-11-10T08:00:00.000Z',
+            reactions: [],
+            attachments: [],
+          },
+        ],
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'older',
+            sequence: 12,
+            role: 'assistant',
+            speaker: agents[1]!.id,
+            content: '更早的回复',
+            createdAt: '2026-11-09T08:00:00.000Z',
+            reactions: [],
+            attachments: [],
+          },
+        ],
+        hasMore: false,
+      })
+    openPanel(
+      vi.fn(async () => undefined),
+      listMessages,
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '加载更早的消息' }))
+    await screen.findByText('更早的回复')
+    // 第二页以第一页最早消息的序号为游标，服务端才能继续向前返回。
+    expect(listMessages).toHaveBeenLastCalledWith('conversation', 40)
+    expect(screen.queryByRole('button', { name: '加载更早的消息' })).toBeNull()
+  })
+})
+
 describe('群聊流式回复', () => {
   it('交错文字按消息与成员分别累加，完成后替换为持久化内容', async () => {
     let finish!: () => void
@@ -60,7 +116,12 @@ describe('群聊流式回复', () => {
         finish = resolve
       })
     })
-    const listMessages = vi.fn(async (): Promise<ServerBubble[]> => [])
+    const listMessages = vi.fn(
+      async (): Promise<{ messages: ServerBubble[]; hasMore: boolean }> => ({
+        messages: [],
+        hasMore: false,
+      }),
+    )
     const error = openPanel(send, listMessages)
     fireEvent.change(await screen.findByRole('textbox', { name: '给讨论组发消息' }), {
       target: { value: '一起看看' },
@@ -91,26 +152,31 @@ describe('群聊流式回复', () => {
     expect(within(second).getByText(agents[1]!.name)).toBeInTheDocument()
     expect(first).not.toHaveTextContent('第二位回复')
     expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
-    listMessages.mockResolvedValue([
-      {
-        id: 'first',
-        role: 'assistant',
-        speaker: agents[0]!.id,
-        content: '第一位回复',
-        createdAt: new Date().toISOString(),
-        reactions: [],
-        attachments: [],
-      },
-      {
-        id: 'second',
-        role: 'assistant',
-        speaker: agents[1]!.id,
-        content: '第二位回复',
-        createdAt: new Date().toISOString(),
-        reactions: [],
-        attachments: [],
-      },
-    ])
+    listMessages.mockResolvedValue({
+      messages: [
+        {
+          id: 'first',
+          sequence: 1,
+          role: 'assistant',
+          speaker: agents[0]!.id,
+          content: '第一位回复',
+          createdAt: new Date().toISOString(),
+          reactions: [],
+          attachments: [],
+        },
+        {
+          id: 'second',
+          sequence: 2,
+          role: 'assistant',
+          speaker: agents[1]!.id,
+          content: '第二位回复',
+          createdAt: new Date().toISOString(),
+          reactions: [],
+          attachments: [],
+        },
+      ],
+      hasMore: false,
+    })
     await act(async () => finish())
     expect(screen.getAllByText('第一位回复')).toHaveLength(1)
     expect(screen.getAllByText('第二位回复')).toHaveLength(1)

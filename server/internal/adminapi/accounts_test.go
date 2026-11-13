@@ -17,6 +17,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/nodecatalog"
 )
 
 type identityStub struct {
@@ -88,9 +89,50 @@ func (stub *accountsStub) IssueActivation(_ context.Context, principal identity.
 	return stub.activation, stub.err
 }
 
+// administratorsStub 记录管理员接口收到的身份与参数，便于断言越权与参数透传。
+type administratorsStub struct {
+	setup     identity.AdministratorSetup
+	err       error
+	username  string
+	display   string
+	password  string
+	principal identity.Principal
+}
+
+func (stub *administratorsStub) ListAdministrators(_ context.Context, principal identity.Principal, _ string, _ int) ([]identity.Administrator, error) {
+	stub.principal = principal
+	return []identity.Administrator{}, stub.err
+}
+
+func (stub *administratorsStub) CreateAdministrator(_ context.Context, principal identity.Principal, username, displayName, password string, _ identity.Attempt) (identity.AdministratorSetup, error) {
+	stub.principal, stub.username, stub.display, stub.password = principal, username, displayName, password
+	return stub.setup, stub.err
+}
+
+// nodesStub 记录节点目录请求，便于断言只接受登记字段而不接受连接地址。
+type nodesStub struct {
+	catalog      nodecatalog.Catalog
+	err          error
+	registration nodecatalog.Registration
+	principal    identity.Principal
+	target       string
+}
+
+func (stub *nodesStub) Register(_ context.Context, principal identity.Principal, registration nodecatalog.Registration, _ string) (nodecatalog.Catalog, error) {
+	stub.principal, stub.registration = principal, registration
+	return stub.catalog, stub.err
+}
+
+func (stub *nodesStub) Get(_ context.Context, principal identity.Principal, imageID string) (nodecatalog.Catalog, error) {
+	stub.principal, stub.target = principal, imageID
+	return stub.catalog, stub.err
+}
+
 type fixture struct {
 	handler  *Handler
 	accounts *accountsStub
+	admin    *administratorsStub
+	nodes    *nodesStub
 	identity *identityStub
 	cookies  []*http.Cookie
 	csrf     string
@@ -138,11 +180,14 @@ func newFixture(t *testing.T) fixture {
 	service := &accountsStub{operation: accounts.Operation{ID: ids.New(), UserID: ids.New(), ComputerID: ids.New(), Status: "succeeded", Stage: "completed", Attempt: 1},
 		activation: accounts.Activation{UserID: ids.New(), Value: identity.Credential(randomValue(t)), ExpiresAt: time.Now().Add(time.Hour)}}
 	models := &modelsStub{}
-	handler, err := New(service, models, gate, logger)
+	admin := &administratorsStub{setup: identity.AdministratorSetup{AdministratorID: ids.New(), Username: "second-admin", DisplayName: "第二管理员",
+		Secret: identity.Credential("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"), Period: 30, Digits: 6, Algorithm: "SHA1"}}
+	nodes := &nodesStub{catalog: nodecatalog.Catalog{Node: nodecatalog.Node{ID: ids.New(), Name: "正式节点", Status: "bootstrapping", Capacity: 10}, Image: nodecatalog.Image{ID: ids.New(), Reference: "registry.example.test/computer@sha256:" + strings.Repeat("a", 64), IsEnabled: true}}}
+	handler, err := New(service, admin, nodes, models, gate, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture{handler, service, identityService, response.Result().Cookies(), session.CSRF, log, models}
+	return fixture{handler, service, admin, nodes, identityService, response.Result().Cookies(), session.CSRF, log, models}
 }
 
 func (fixture fixture) request(method, path, body string) *http.Request {
@@ -174,7 +219,7 @@ func requireStatus(t *testing.T, response *httptest.ResponseRecorder, status int
 
 func TestCreationOperationProtocol(t *testing.T) {
 	fixture := newFixture(t)
-	response := fixture.run(fixture.request("POST", "/api/v2/admin/users", `{"username":"new-user","display_name":"新用户","role":"user","idempotency_key":"request-key"}`))
+	response := fixture.run(fixture.request("POST", "/api/v2/admin/users", `{"username":"new-user","display_name":"新用户","idempotency_key":"request-key"}`))
 	requireStatus(t, response, 201)
 	if fixture.accounts.request.RequestID == "" || fixture.accounts.principal.UserID != fixture.identity.session.Principal.UserID || fixture.accounts.request.IdempotencyKey != "request-key" {
 		t.Fatal("未固定管理身份或透传幂等键")
@@ -216,6 +261,75 @@ func TestCreationOperationProtocol(t *testing.T) {
 	if strings.Contains(fixture.log.String(), string(fixture.accounts.activation.Value)) {
 		t.Fatal("激活材料进入日志")
 	}
+}
+
+// TestAdministratorProtocol 覆盖管理员账号的开立与越权边界；管理员不参与用户开户。
+func TestAdministratorProtocol(t *testing.T) {
+	fixture := newFixture(t)
+	body := `{"username":"second-admin","display_name":"第二管理员","password":"` + strings.Repeat("a", 16) + `"}`
+	response := fixture.run(fixture.request("POST", "/api/v2/admin/administrators", body))
+	requireStatus(t, response, 201)
+	if fixture.admin.username != "second-admin" || fixture.admin.display != "第二管理员" || fixture.admin.password != strings.Repeat("a", 16) || fixture.admin.principal.UserID != fixture.identity.session.Principal.UserID {
+		t.Fatal("管理员创建未透传账号、口令或身份")
+	}
+	if response.Header().Get("Location") != "/api/v2/admin/administrators/"+fixture.admin.setup.AdministratorID {
+		t.Fatal("未返回管理员查询地址")
+	}
+	// 验证器密钥只返回这一次；日志与后续列表都不能再出现它。
+	if !strings.Contains(response.Body.String(), string(fixture.admin.setup.Secret)) {
+		t.Fatal("创建响应缺失一次性动态验证器密钥")
+	}
+	if strings.Contains(fixture.log.String(), string(fixture.admin.setup.Secret)) {
+		t.Fatal("动态验证器密钥进入日志")
+	}
+	response = fixture.run(fixture.request("GET", "/api/v2/admin/administrators", ""))
+	requireStatus(t, response, 200)
+	if !strings.Contains(response.Body.String(), `"administrators"`) {
+		t.Fatal("管理员列表响应缺少约定字段")
+	}
+	for _, test := range []struct {
+		err    error
+		status int
+	}{
+		{identity.ErrAdministratorExists, 409}, {identity.ErrInvalidInput, 400}, {identity.ErrForbidden, 403}, {identity.ErrVerificationRequired, 403}, {errors.New("内部失败"), 503},
+	} {
+		fixture.admin.err = test.err
+		requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/administrators", body)), test.status)
+	}
+	fixture.admin.err = nil
+	// 角色不是管理员创建字段：提交会被严格解码拒绝，不能借此改变身份类型。
+	requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/administrators", `{"username":"third-admin","display_name":"第三管理员","password":"`+strings.Repeat("a", 16)+`","role":"user"}`)), 400)
+}
+
+// TestNodeCatalogProtocol 覆盖率域登记读取与错误映射；节点地址与就绪状态都不能由页面设置。
+func TestNodeCatalogProtocol(t *testing.T) {
+	fixture := newFixture(t)
+	body := `{"name":"正式节点","capacity":10,"image_id":"` + fixture.nodes.catalog.Image.ID + `","image_reference":"` + fixture.nodes.catalog.Image.Reference + `"}`
+	response := fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", body))
+	requireStatus(t, response, 201)
+	if fixture.nodes.registration.Name != "正式节点" || fixture.nodes.registration.Capacity != 10 || fixture.nodes.principal.UserID != fixture.identity.session.Principal.UserID {
+		t.Fatal("节点登记未透传字段或身份")
+	}
+	if !strings.Contains(response.Body.String(), `"bootstrapping"`) {
+		t.Fatal("登记响应缺少节点状态")
+	}
+	response = fixture.run(fixture.request("GET", "/api/v2/admin/computer-nodes/"+fixture.nodes.catalog.Image.ID, ""))
+	requireStatus(t, response, 200)
+	if fixture.nodes.target != fixture.nodes.catalog.Image.ID {
+		t.Fatal("目录读取未指定镜像")
+	}
+	for _, test := range []struct {
+		err    error
+		status int
+	}{
+		{nodecatalog.ErrConflict, 409}, {nodecatalog.ErrNotFound, 404}, {nodecatalog.ErrInvalidInput, 400}, {identity.ErrForbidden, 403}, {errors.New("内部失败"), 503},
+	} {
+		fixture.nodes.err = test.err
+		requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", body)), test.status)
+	}
+	// 连接地址不属于登记字段：提交即被严格解码拒绝，避免页面把节点指向任意主机。
+	fixture.nodes.err = nil
+	requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", `{"name":"正式节点","capacity":10,"image_id":"`+fixture.nodes.catalog.Image.ID+`","image_reference":"`+fixture.nodes.catalog.Image.Reference+`","url":"https://evil.example.test"}`)), 400)
 }
 
 func TestManagementBoundariesAndFailureRedaction(t *testing.T) {

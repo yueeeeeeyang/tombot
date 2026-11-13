@@ -2,9 +2,17 @@ package nodeapi
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
+	"math/big"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -111,7 +119,7 @@ func testInputs(session computer.ExecutionSession) map[string]any {
 		"desktop_start": session, "desktop_status": session, "agent_start": session, "agent_write": computer.AgentWrite{Session: session, Offset: 3, Bytes: []byte{1, 0, 255}}, "agent_read": computer.AgentRead{Session: session, Offset: 3}}
 }
 func testOptions(nodeID string) ServerOptions {
-	return ServerOptions{NodeID: nodeID, ClientUID: 20001, ClientGID: 20001, CallTimeout: time.Second, ShutdownTimeout: 2 * time.Second, MaximumConnections: 8}
+	return ServerOptions{NodeID: nodeID, CallTimeout: time.Second, ShutdownTimeout: 2 * time.Second, MaximumConnections: 8}
 }
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -197,7 +205,7 @@ func TestNodeConfigurationAndFailures(t *testing.T) {
 	if _, err := NewServer(operations, options, testLogger()); err != nil {
 		t.Fatal(err)
 	}
-	for _, change := range []func(*ServerOptions){func(o *ServerOptions) { o.ClientUID = 0 }, func(o *ServerOptions) { o.ClientGID = 0 }, func(o *ServerOptions) { o.NodeID = "bad" }, func(o *ServerOptions) { o.CallTimeout = 0 }, func(o *ServerOptions) { o.CallTimeout = 2 * time.Minute }, func(o *ServerOptions) { o.ShutdownTimeout = 0 }, func(o *ServerOptions) { o.MaximumConnections = 0 }, func(o *ServerOptions) { o.MaximumConnections = 1025 }} {
+	for _, change := range []func(*ServerOptions){func(o *ServerOptions) { o.NodeID = "bad" }, func(o *ServerOptions) { o.CallTimeout = 0 }, func(o *ServerOptions) { o.CallTimeout = 2 * time.Minute }, func(o *ServerOptions) { o.ShutdownTimeout = 0 }, func(o *ServerOptions) { o.MaximumConnections = 0 }, func(o *ServerOptions) { o.MaximumConnections = 1025 }} {
 		invalid := options
 		change(&invalid)
 		if _, err := NewServer(operations, invalid, testLogger()); err == nil {
@@ -210,9 +218,9 @@ func TestNodeConfigurationAndFailures(t *testing.T) {
 	if _, err := NewServer(operations, options, nil); err == nil {
 		t.Fatal("接受缺失日志")
 	}
-	for _, path := range []string{"relative", "/run/../tmp/control", "/" + strings.Repeat("x", 101)} {
-		if _, err := NewClient(ClientOptions{NodeID: session.NodeID, Socket: path, CallTimeout: time.Second}); err == nil {
-			t.Fatal("接受无效端点")
+	for _, endpoint := range []string{"", "http://node.example.test", "https://node.example.test/path", "https://user:pass@node.example.test", "relative"} {
+		if _, err := NewClient(ClientOptions{NodeID: session.NodeID, URL: endpoint, CallTimeout: time.Second, TLS: testClientTLS(t)}); err == nil {
+			t.Fatal("接受无效端点", endpoint)
 		}
 	}
 	node := &testNode{fail: &computer.Failure{Code: "resource_conflict", IsPermanent: true}}
@@ -223,23 +231,53 @@ func TestNodeConfigurationAndFailures(t *testing.T) {
 	}
 }
 
-func TestNodeReservedIdentitiesAndRootPath(t *testing.T) {
+func TestNodeReservedIdentitiesAndEndpoint(t *testing.T) {
 	session := testSession()
-	if _, err := NewClient(ClientOptions{NodeID: "01k9ax6vsmkdbz049g41ft4whw", Socket: "/run/tombot/control.sock", CallTimeout: time.Second}); err == nil {
+	if _, err := NewClient(ClientOptions{NodeID: "01k9ax6vsmkdbz049g41ft4whw", URL: "https://node.example.test", CallTimeout: time.Second, TLS: testClientTLS(t)}); err == nil {
 		t.Fatal("非规范节点身份形成另一个控制记录")
 	}
-	if _, err := NewClient(ClientOptions{NodeID: session.NodeID, Socket: "/", CallTimeout: time.Second}); err == nil {
-		t.Fatal("根目录被当作节点端点")
+	if _, err := NewClient(ClientOptions{NodeID: session.NodeID, URL: "https://node.example.test", CallTimeout: time.Second}); err == nil {
+		t.Fatal("缺少客户端证书仍被接受")
 	}
-	for _, field := range []string{"uid", "gid"} {
-		options := testOptions(session.NodeID)
-		if field == "uid" {
-			options.ClientUID = ^uint32(0)
-		} else {
-			options.ClientGID = ^uint32(0)
-		}
-		if _, err := NewServer(testOperations(&testNode{}), options, testLogger()); err == nil {
-			t.Fatal("接受系统保留的身份值")
-		}
+	if _, err := ParseFingerprints([]string{strings.Repeat("A", 64)}); err == nil {
+		t.Fatal("接受大写指纹")
 	}
+	if _, err := ParseFingerprints([]string{strings.Repeat("a", 64), strings.Repeat("a", 64)}); err == nil {
+		t.Fatal("接受重复指纹")
+	}
+}
+
+// testClientTLS 生成一次性自签证书，供客户端配置校验使用；不写入磁盘也不复用。
+func testClientTLS(t *testing.T) *tls.Config {
+	t.Helper()
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "tombot-api-test"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+	encoded, err := x509.CreateCertificate(rand.Reader, template, template, public, private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := sha256.Sum256(leaf.Raw)
+	fingerprints, err := ParseFingerprints([]string{hex.EncodeToString(fingerprint[:])})
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration, err := ClientTLS(tls.Certificate{Certificate: [][]byte{encoded}, PrivateKey: private, Leaf: leaf}, fingerprints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return configuration
 }

@@ -2,7 +2,6 @@
 Description=TomBot 受信宿主电脑节点
 Requires=tombot-docker-bootstrap.service tombot-image-prepare.service
 After=tombot-docker-bootstrap.service tombot-image-prepare.service
-Before=tomd.service
 
 [Service]
 Type=notify
@@ -26,3 +25,5 @@ StateDirectoryMode=0700
 
 # 磁盘挂载须能被宿主 Docker 看到，不启用 PrivateTmp、ProtectSystem 等私有挂载命名空间。
 # root 权限只属于本节点；API 和 Worker 使用固定非 root 控制身份。
+# 控制端口由 node.json 的 listen 指定，访问控制依赖 TLS 证书指纹与防火墙白名单；
+# 跨主机部署时必须只放行 API 的出口地址，不能对公网全开。

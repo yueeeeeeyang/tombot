@@ -33,8 +33,23 @@ func (authorizer *testAuthorizer) RequireAdmin(_ context.Context, actor identity
 }
 
 type testVerifier struct {
-	calls  atomic.Int64
-	verify func(context.Context, Configuration, []byte) error
+	calls     atomic.Int64
+	verify    func(context.Context, Configuration, []byte) error
+	discovery []DiscoveredModel
+	discover  func(context.Context, string, string, []byte) error
+}
+
+// Discover 与 Verify 共用同一测试替身：发现调用只读，不改变目录。
+func (verifier *testVerifier) Discover(ctx context.Context, protocol, baseURL string, credential []byte) ([]DiscoveredModel, error) {
+	if verifier.discover != nil {
+		if err := verifier.discover(ctx, protocol, baseURL, credential); err != nil {
+			return nil, err
+		}
+	}
+	if verifier.discovery == nil {
+		return []DiscoveredModel{}, nil
+	}
+	return verifier.discovery, nil
 }
 
 func (verifier *testVerifier) Verify(ctx context.Context, configuration Configuration, credential []byte) error {
@@ -93,14 +108,14 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 		t.Fatal(err)
 	}
 	actor := identity.Principal{UserID: ids.New(), Role: "admin", Scope: "admin"}
-	execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'目录管理员','admin','provisioning')`, actor.UserID, strings.ToLower(actor.UserID))
+	execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'目录管理员','provisioning')`, actor.UserID, strings.ToLower(actor.UserID))
 	authorizer := &testAuthorizer{actorID: actor.UserID}
 	verifier := &testVerifier{}
-	service, err := New(open(postgres.ControlRole), open(postgres.TenantRole), authorizer, keys, verifier, Options{VerificationTimeout: time.Second})
+	service, err := New(open(postgres.ControlRole), open(postgres.TenantRole), authorizer, keys, verifier, verifier, Options{VerificationTimeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := service.CreateProvider(ctx, actor, ids.New(), "测试供应商", "openai_compat", "https://model.example.test/v1")
+	provider, err := service.CreateProvider(ctx, actor, ids.New(), "测试供应商", "openai_compat", "https://model.example.test/v1", []byte("test-credential"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,14 +123,13 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := secure.Token()
-	if err != nil {
-		t.Fatal(err)
-	}
-	plaintext := []byte(value)
+	// 登记供应商已在同一事务内写入首个凭据版本，测试直接复用它。
+	plaintext := []byte("test-credential")
 	t.Cleanup(func() { clear(plaintext) })
-	credential, err := service.AddCredential(ctx, actor, ids.New(), provider.ID, plaintext)
-	if err != nil {
+	var credential Credential
+	credential.ProviderID = provider.ID
+	if err := pool.QueryRowContext(ctx, `SELECT id,version,revoked_at IS NOT NULL,destroyed_at IS NOT NULL,created_at FROM tombot.model_credentials WHERE provider_id=$1`, provider.ID).
+		Scan(&credential.ID, &credential.Version, &credential.IsRevoked, &credential.IsDestroyed, &credential.CreatedAt); err != nil {
 		t.Fatal(err)
 	}
 	return fixture{pool, service, authorizer, verifier, actor, provider, model, credential, plaintext}
@@ -123,7 +137,7 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 func (fixture fixture) user(t *testing.T) (string, string) {
 	t.Helper()
 	userID, nodeID, imageID, computerID, botID := ids.New(), ids.New(), ids.New(), ids.New(), ids.New()
-	execute(t, fixture.pool, `INSERT INTO tombot.users(id,username,display_name,role,status) VALUES($1,$2,'模型用户','user','provisioning')`, userID, strings.ToLower(userID))
+	execute(t, fixture.pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'模型用户','provisioning')`, userID, strings.ToLower(userID))
 	execute(t, fixture.pool, `INSERT INTO tombot.computer_images(id,reference) VALUES($1,$2)`, imageID, "example.test/computer@sha256:"+secure.Hash(imageID))
 	execute(t, fixture.pool, `INSERT INTO tombot.computer_nodes(id,name,status,capacity,runtime_id,control_sequence,last_seen_at,control_expires_at,verified_image_id,capability_expires_at) VALUES($1,$1,'ready',1,$1,1,clock_timestamp(),clock_timestamp()+interval '5 minutes',$2,clock_timestamp()+interval '15 minutes')`, nodeID, imageID)
 	execute(t, fixture.pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, userID, computerID, nodeID, imageID)
@@ -496,7 +510,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		rotated, err := New(fixture.service.control, fixture.service.tenant, fixture.authorizer, keys, fixture.verifier, fixture.service.options)
+		rotated, err := New(fixture.service.control, fixture.service.tenant, fixture.authorizer, keys, fixture.verifier, fixture.verifier, fixture.service.options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -520,7 +534,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		missing, err := New(fixture.service.control, fixture.service.tenant, fixture.authorizer, keys, fixture.verifier, fixture.service.options)
+		missing, err := New(fixture.service.control, fixture.service.tenant, fixture.authorizer, keys, fixture.verifier, fixture.verifier, fixture.service.options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -608,7 +622,7 @@ func TestRegistryIntegration(t *testing.T) {
 		}
 		execute(t, fixture.pool, `CREATE FUNCTION public.reject_model_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION '测试审计失败'; END $$;
 			CREATE TRIGGER reject_model_audit BEFORE INSERT ON tombot.admin_audit_events FOR EACH ROW EXECUTE FUNCTION public.reject_model_audit()`)
-		provider, err := fixture.service.CreateProvider(ctx, fixture.actor, ids.New(), "应回滚供应商", "anthropic", "https://rollback.example.test")
+		provider, err := fixture.service.CreateProvider(ctx, fixture.actor, ids.New(), "应回滚供应商", "anthropic", "https://rollback.example.test", []byte("test-credential"))
 		if err == nil || provider.ID != "" {
 			t.Fatal("审计失败仍返回成功")
 		}

@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/signal"
-	"runtime"
 	"syscall"
 
 	safelog "io.yueyang/tom/internal/infra/log"
@@ -29,7 +28,7 @@ func run(ctx context.Context, logger *slog.Logger, arguments []string, configura
 	if len(arguments) != 0 {
 		return errors.New("服务入口不接受子命令，请使用 TOM_SERVER_CONFIG 指定多用户配置；数据库初始化使用 tomdb")
 	}
-	if err := validateHost(runtime.GOOS, os.Geteuid()); err != nil {
+	if err := validateHost(os.Geteuid()); err != nil {
 		return err
 	}
 	configuration, err := serverapp.LoadConfig(configurationPath)
@@ -53,10 +52,10 @@ func run(ctx context.Context, logger *slog.Logger, arguments []string, configura
 	return application.Serve(ctx, listener)
 }
 
-func validateHost(platform string, uid int) error {
-	if platform != "linux" {
-		return errors.New("多用户服务需要 Linux 电脑节点，请在 Linux 部署服务端")
-	}
+// validateHost 只要求专用非 root 身份。
+// API 与节点可以分处不同主机，因此这里不再限制服务端平台；
+// 节点仍是 Linux root 进程，跨主机访问由 TLS 证书指纹与网络边界共同约束。
+func validateHost(uid int) error {
 	if uid <= 0 {
 		return errors.New("多用户 API 必须使用独立非 root 身份，节点管理由受保护通道调用")
 	}

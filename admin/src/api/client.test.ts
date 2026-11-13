@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { AdminClient, ApiError } from './client'
 import {
   activationInputs,
-  enrollment,
+  administratorSetup,
   empty,
   failure,
   json,
@@ -12,25 +12,32 @@ import {
 } from '../../tests/fixtures'
 
 describe('管理传输边界', () => {
-  it('激活仅走固定公开认证路径，不携带管理会话且不自动登录', async () => {
+  it('首建管理员与激活只走固定公开认证路径，不携带管理 Cookie', async () => {
     const authentication = session()
-    const setup = enrollment()
+    const setup = administratorSetup()
     const input = activationInputs()
     const calls: { path: string; options: RequestInit }[] = []
     const client = new AdminClient(async (url, options = {}) => {
       const path = String(url)
       calls.push({ path, options })
       if (path.endsWith('/session')) return json(authentication)
-      if (path.endsWith('/admin-enrollment')) return json(setup)
+      if (path.endsWith('/admin-setup'))
+        return options.method === 'POST' ? json(setup, 201) : json({ required: true })
       return empty()
     })
     await client.restore()
     const signal = new AbortController().signal
-    const received = await client.beginEnrollment(input.token, signal)
-    expect(received.secret === setup.secret).toBe(true)
+    expect((await client.adminSetupStatus(signal)).required).toBe(true)
+    await client.createFirstAdministrator(
+      'first-admin',
+      '首位管理员',
+      'a-very-long-password',
+      signal,
+    )
     await client.activate(input.token, input.password, input.code, signal)
     expect(calls.slice(1).map((call) => call.path)).toEqual([
-      '/api/v2/auth/admin-enrollment',
+      '/api/v2/auth/admin-setup',
+      '/api/v2/auth/admin-setup',
       '/api/v2/auth/activate',
     ])
     for (const call of calls.slice(1)) {
@@ -44,18 +51,23 @@ describe('管理传输边界', () => {
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
   })
-  it('拒绝错误登记协议，激活失败不清空无关管理会话', async () => {
+  it('拒绝错误首建协议，激活失败不清空无关管理会话', async () => {
     const fixture = makeClient((path) =>
-      path.endsWith('/admin-enrollment')
-        ? json({ ...enrollment(), period: 60 })
+      path.endsWith('/admin-setup')
+        ? json({ ...administratorSetup(), period: 60 })
         : failure('AUTH_INVALID', '验证失败', 401),
     )
     await fixture.client.restore()
     const input = activationInputs()
     const signal = new AbortController().signal
-    await expect(fixture.client.beginEnrollment(input.token, signal)).rejects.toMatchObject({
-      code: 'RESPONSE_INVALID',
-    })
+    await expect(
+      fixture.client.createFirstAdministrator(
+        'first-admin',
+        '首位管理员',
+        'a-very-long-password',
+        signal,
+      ),
+    ).rejects.toMatchObject({ code: 'RESPONSE_INVALID' })
     await expect(
       fixture.client.activate(input.token, input.password, input.code, signal),
     ).rejects.toMatchObject({ code: 'AUTH_INVALID' })
@@ -146,6 +158,42 @@ describe('管理传输边界', () => {
       code: 'RESPONSE_INVALID',
     })
     await expect(malformed.request('//outside.test', z.unknown())).rejects.toBeInstanceOf(ApiError)
+  })
+  it('需要重新验证时弹窗一次并重放同一次写入，不产生第二次业务提交', async () => {
+    const fixture = makeClient((path) =>
+      path === '/auth/verify'
+        ? empty()
+        : failure('VERIFICATION_REQUIRED', '该操作需要重新验证管理身份', 403),
+    )
+    await fixture.client.restore()
+    let verifications = 0
+    fixture.client.setVerifier(async () => {
+      verifications++
+      await fixture.client.verify('long-enough-password', '123456')
+    })
+    await expect(
+      fixture.client.request('/users', z.unknown(), {
+        method: 'POST',
+        body: { username: 'a-user' },
+      }),
+    ).rejects.toMatchObject({ code: 'VERIFICATION_REQUIRED' })
+    expect(verifications).toBe(1)
+    // 原请求被重放一次：总计两次业务请求加一次验证，不会无限循环。
+    expect(fixture.calls.filter((call) => call.path === '/users')).toHaveLength(2)
+    expect(fixture.calls.filter((call) => call.path === '/auth/verify')).toHaveLength(1)
+  })
+  it('取消再验证时不重放，原操作明确失败', async () => {
+    const fixture = makeClient(() =>
+      failure('VERIFICATION_REQUIRED', '该操作需要重新验证管理身份', 403),
+    )
+    await fixture.client.restore()
+    fixture.client.setVerifier(async () => {
+      throw new ApiError('VERIFICATION_CANCELED', '已取消身份验证，操作未执行')
+    })
+    await expect(
+      fixture.client.request('/users', z.unknown(), { method: 'POST', body: {} }),
+    ).rejects.toMatchObject({ code: 'VERIFICATION_CANCELED' })
+    expect(fixture.calls.filter((call) => call.path === '/users')).toHaveLength(1)
   })
   it('并发续期合并为一次，使用最新 CSRF，不重放业务写入', async () => {
     const fixture = makeClient(() => empty())

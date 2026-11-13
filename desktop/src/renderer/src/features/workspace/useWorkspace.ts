@@ -4,9 +4,11 @@ import {
   type DeliveryResult,
   type DesktopBackend,
   type IncomingMessages,
+  type ServerBubble,
   type StreamEvent,
 } from '../desktop/backend'
-import { emptyWorkspace, type AppWorkspace } from './model'
+import { emptyWorkspace, type AppWorkspace, type ChatMessage } from './model'
+import { isReactionEmoji } from './reactions'
 
 interface WorkspaceState {
   workspace: AppWorkspace
@@ -15,20 +17,29 @@ interface WorkspaceState {
   ready: boolean
 }
 
-/** 把服务返回的消息叠回本地草稿，避免投递期间输入被盖掉。 */
-function mergeDelivery(local: AppWorkspace, remote: AppWorkspace): AppWorkspace {
-  const remoteIds = new Set(remote.agents.map((agent) => agent.id))
-  const agents = remote.agents.map((agent) => {
-    const current = local.agents.find((item) => item.id === agent.id)
-    return current ? { ...agent, draft: current.draft } : agent
-  })
-  for (const agent of local.agents) {
-    if (!remoteIds.has(agent.id)) agents.push(agent)
+/** 把服务端消息转换成气泡记录；服务端副本一律视为已发送，未知表情直接忽略。 */
+function toChatMessage(bubble: ServerBubble): ChatMessage {
+  return {
+    id: bubble.id,
+    role: bubble.role,
+    content: bubble.content,
+    createdAt: bubble.createdAt,
+    status: 'sent',
+    reactions: bubble.reactions.flatMap((reaction) =>
+      isReactionEmoji(reaction.emoji) ? [{ emoji: reaction.emoji, count: reaction.count }] : [],
+    ),
+    ...(bubble.attachments.length > 0
+      ? {
+          attachments: bubble.attachments.map((attachment) => ({
+            name: attachment.name,
+            path: attachment.path,
+            sha256: attachment.sha256,
+            mediaType: attachment.mediaType,
+            kind: attachment.kind,
+          })),
+        }
+      : {}),
   }
-  const activeAgentId = local.agents.some((agent) => agent.id === local.activeAgentId)
-    ? local.activeAgentId
-    : remote.activeAgentId
-  return { ...remote, activeAgentId, agents }
 }
 
 /** 只合并已落库的通知和直接回复，不回写服务，也不覆盖正在编辑的草稿与资料。 */
@@ -162,12 +173,15 @@ export function useWorkspace() {
     setWorkspace(current.current)
   }
 
-  /** 把一条用户消息交给服务。模型未配置时服务不会改写未发送状态。 */
+  /**
+   * 把一条用户消息交给服务端执行。
+   * 服务端返回该会话的最新消息列表后整体替换本地记录：服务端才是权威副本，
+   * 本地未发送状态不能覆盖已经持久化的回合。
+   */
   function deliver(
     agentId: string,
-    messageId: string,
+    content: string,
     onEvent?: (event: StreamEvent) => void,
-    isWelcome = false,
   ): Promise<DeliveryResult> {
     return enqueue(async () => {
       try {
@@ -177,11 +191,15 @@ export function useWorkspace() {
           if (event.type === 'incoming' && event.incoming) receive(event.incoming)
           else onEvent?.(event)
         }
-        const result = isWelcome
-          ? await backend.welcomeAgent(agentId, receiveEvent)
-          : await backend.deliverMessage(agentId, messageId, receiveEvent)
-        if (result.workspace) {
-          const merged = mergeDelivery(current.current, result.workspace)
+        const result = await backend.deliverMessage(agentId, content, receiveEvent)
+        if (result.messages) {
+          const messages = result.messages.map(toChatMessage)
+          const merged: AppWorkspace = {
+            ...current.current,
+            agents: current.current.agents.map((agent) =>
+              agent.id === agentId ? { ...agent, messages } : agent,
+            ),
+          }
           current.current = merged
           setWorkspace(merged)
           const again = backend.saveWorkspace(merged)

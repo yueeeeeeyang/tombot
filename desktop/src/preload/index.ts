@@ -1,4 +1,4 @@
-import type { StreamEvent } from '../renderer/src/features/desktop/backend'
+import type { StreamEvent, UserEvent } from '../renderer/src/features/desktop/backend'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 interface BootstrapStatus {
@@ -28,27 +28,27 @@ contextBridge.exposeInMainWorld(
     backend: Object.freeze({
       session: () => invoke('desktop:session'),
       connect: (serverUrl: string) => invoke('desktop:connect', serverUrl),
-      setup: (input: { setupCode: string; password: string }) => invoke('desktop:setup', input),
-      login: (password: string) => invoke('desktop:login', password),
+      browserLogin: () => invoke('desktop:browser-login'),
+      logout: () => invoke('desktop:logout'),
       loadWorkspace: () => invoke('desktop:load-workspace'),
       readClipboardFiles: () => invoke('desktop:clipboard-files'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
-      welcomeAgent: (agentId: string, onEvent?: (event: StreamEvent) => void) => {
-        const requestId = crypto.randomUUID()
-        const listener = (
-          _event: IpcRendererEvent,
-          payload: StreamEvent & { requestId: string },
-        ) => {
-          if (payload.requestId === requestId) onEvent?.(payload)
+      watchEvents: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => {
+        const listener = (_event: IpcRendererEvent, payload: UserEvent) => onEvent(payload)
+        ipcRenderer.on('desktop:user-event', listener)
+        let stopped = false
+        void invoke('desktop:watch-events').catch((error: Error) => {
+          // 订阅被动结束后不再回调；主动停止不算错误。
+          if (!stopped) onError(error)
+        })
+        return () => {
+          stopped = true
+          ipcRenderer.removeListener('desktop:user-event', listener)
         }
-        ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:deliver', { agentId, welcome: true, requestId }).finally(() =>
-          ipcRenderer.removeListener('desktop:stream-event', listener),
-        )
       },
       deliverMessage: (
         agentId: string,
-        messageId: string,
+        content: string,
         onEvent?: (event: StreamEvent) => void,
       ) => {
         const requestId = crypto.randomUUID()
@@ -59,7 +59,7 @@ contextBridge.exposeInMainWorld(
           if (payload.requestId === requestId) onEvent?.(payload)
         }
         ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:deliver', { agentId, messageId, requestId }).finally(() => {
+        return invoke('desktop:deliver', { agentId, content, requestId }).finally(() => {
           ipcRenderer.removeListener('desktop:stream-event', listener)
         })
       },
@@ -96,8 +96,8 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:group-members', { id, revision, botIds }),
       removeGroupMember: (id: string, revision: number, botId: string) =>
         invoke('desktop:group-member-remove', { id, revision, botId }),
-      listConversationMessages: (conversationId: string) =>
-        invoke('desktop:conversation-messages', conversationId),
+      listConversationMessages: (conversationId: string, before?: number) =>
+        invoke('desktop:conversation-messages', { conversationId, before }),
       sendConversation: (
         conversationId: string,
         content: string,

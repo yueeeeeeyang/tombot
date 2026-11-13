@@ -54,7 +54,6 @@ func TestLiveDeploymentCheck(t *testing.T) {
 	for role, path := range value.server.Database.DSNFiles {
 		value.server.Database.DSNFiles[role] = relocate(path)
 	}
-	value.node.ClientUID, value.node.ClientGID = api.uid, api.gid
 	value.image.Platform = "linux/" + runtime.GOARCH
 	fs := filesystem{base: "/", owner: 0}
 	materializeFixture(t, fs, value, paths, api)

@@ -229,15 +229,18 @@ func (connection *deadlineConnection) Write(buffer []byte) (int, error) {
 	return connection.Conn.Write(buffer)
 }
 
+// guardedTransport 固定允许的单个来源与请求方法；发现调用只放行 GET，流式调用只放行 POST。
 type guardedTransport struct {
 	transport                         *http.Transport
 	endpoint                          string
 	maxRequestBytes, maxResponseBytes int64
 	failure                           error
+	method                            string
+	contentType                       string
 }
 
 func (transport *guardedTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.Method != "POST" || request.URL.String() != transport.endpoint || (request.Host != "" && request.Host != request.URL.Host) {
+	if request.Method != transport.method || request.URL.String() != transport.endpoint || (request.Host != "" && request.Host != request.URL.Host) {
 		transport.failure = ErrAddressDenied
 		return nil, transport.failure
 	}
@@ -255,7 +258,7 @@ func (transport *guardedTransport) RoundTrip(request *http.Request) (*http.Respo
 	}
 	if response.StatusCode == 200 {
 		mediaType, _, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
-		if err != nil || mediaType != "text/event-stream" || response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity" {
+		if err != nil || mediaType != transport.contentType || response.Header.Get("Content-Encoding") != "" && response.Header.Get("Content-Encoding") != "identity" {
 			transport.failure = ErrProtocol
 			return nil, errors.Join(transport.failure, response.Body.Close())
 		}
@@ -286,7 +289,8 @@ func (body *limitedBody) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
-func (gateway *Gateway) client(endpoint string) (*http.Client, *guardedTransport, error) {
+// client 构造受出口策略约束的 HTTP 客户端；方法与成功响应类型由调用方固定，不接受请求内覆盖。
+func (gateway *Gateway) client(endpoint, method, contentType string) (*http.Client, *guardedTransport, error) {
 	parsed, err := parseEndpoint(endpoint)
 	if err != nil {
 		return nil, nil, err
@@ -298,6 +302,6 @@ func (gateway *Gateway) client(endpoint string) (*http.Client, *guardedTransport
 	// HTTP/1.1 独立连接使读写时限不影响其他请求，且每次请求都重新验证 DNS 和策略。
 	transport := &http.Transport{Proxy: nil, DialContext: gateway.connect(target), TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: gateway.options.RootCAs, NextProtos: []string{"http/1.1"}},
 		TLSHandshakeTimeout: gateway.options.TLSHandshakeTimeout, ResponseHeaderTimeout: gateway.options.ResponseHeaderTimeout, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 64 << 10, ForceAttemptHTTP2: false, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}}
-	guard := &guardedTransport{transport: transport, endpoint: endpoint, maxRequestBytes: gateway.options.MaxRequestBytes, maxResponseBytes: gateway.options.MaxResponseBytes}
+	guard := &guardedTransport{transport: transport, endpoint: endpoint, maxRequestBytes: gateway.options.MaxRequestBytes, maxResponseBytes: gateway.options.MaxResponseBytes, method: method, contentType: contentType}
 	return &http.Client{Transport: guard, Timeout: gateway.options.RequestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, guard, nil
 }
