@@ -18,11 +18,17 @@ export class ApiError extends Error {
     super(message)
   }
 }
+export type OperationMessage = { text: string; tone: 'success' | 'info' }
+
+export function isVerificationCanceled(error: unknown): boolean {
+  return error instanceof ApiError && error.code === 'VERIFICATION_CANCELED'
+}
+
 export type AuthState =
   | { phase: 'checking' }
   | { phase: 'anonymous' }
   | { phase: 'unavailable'; message: string }
-  | { phase: 'authenticated'; principal: Principal }
+  | { phase: 'authenticated'; principal: Principal; renewalError?: string }
 
 const failureSchema = z.object({
   code: z.string(),
@@ -32,6 +38,9 @@ const failureSchema = z.object({
 })
 const PREFIX = '/api/v2/admin'
 const MAX_RESPONSE_BYTES = 1024 * 1024
+const REFRESH_LEAD_MS = 60_000
+const SESSION_LOCK = 'tombot-admin-refresh'
+const refreshContextSchema = z.object({ csrf_token: z.string().min(1).max(128) })
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
   body?: unknown
@@ -49,6 +58,7 @@ export class AdminClient {
   private refreshPromise: Promise<void> | null = null
   private refreshTimer: ReturnType<typeof setTimeout> | null = null
   private accessExpiresAt = 0
+  private messenger: ((message: OperationMessage) => void) | null = null
   private verifier: (() => Promise<void>) | null = null
 
   constructor(private readonly fetcher: typeof fetch = window.fetch.bind(window)) {}
@@ -56,6 +66,10 @@ export class AdminClient {
   /** 页面注册再验证界面；只在服务端明确要求重新验证时调用，验证成功后重放被拒绝的那一次请求。 */
   setVerifier(verifier: (() => Promise<void>) | null) {
     this.verifier = verifier
+  }
+  /** 操作反馈由页面消息层展示，取消验证仍以异常终止原业务流程。 */
+  setMessenger(messenger: ((message: OperationMessage) => void) | null) {
+    this.messenger = messenger
   }
   subscribe = (listener: () => void) => {
     this.listeners.add(listener)
@@ -69,6 +83,7 @@ export class AdminClient {
   }
   private clear() {
     this.epoch++
+    this.refreshPromise = null
     this.csrf = ''
     this.accessExpiresAt = 0
     if (this.refreshTimer) {
@@ -80,24 +95,18 @@ export class AdminClient {
     this.update({ phase: 'anonymous' })
   }
 
-  /**
-   * 自动续期在访问凭据到期前 60 秒触发；提前量足够覆盖一次网络往返，
-   * 又不会因为时钟误差在凭据刚签发时立刻重放续期值。
-   * 续期失败时不自动重试：轮换是单次的，重放旧的续期值会让服务端按泄漏撤销整个会话。
-   */
-  private scheduleRefresh(expiresAt: string | undefined) {
+  /** 在到期前续期；短期凭据至少等待 5 秒，避免客户端时钟偏差形成忙循环。 */
+  private scheduleRefresh(expiresAt: string) {
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer)
       this.refreshTimer = null
     }
-    if (!expiresAt) return
     const expires = Date.parse(expiresAt)
-    if (!Number.isFinite(expires)) return
     this.accessExpiresAt = expires
-    const delay = Math.max(expires - Date.now() - 60_000, 5_000)
+    const delay = Math.max(expires - Date.now() - REFRESH_LEAD_MS, 5_000)
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = null
-      void this.refresh().catch(() => undefined)
+      this.renewInBackground()
     }, delay)
   }
 
@@ -105,8 +114,8 @@ export class AdminClient {
   resumeSessionClock() {
     if (this.state.phase !== 'authenticated' || !this.accessExpiresAt) return
     const remaining = this.accessExpiresAt - Date.now()
-    if (remaining <= 0) {
-      void this.refresh().catch(() => undefined)
+    if (remaining <= REFRESH_LEAD_MS || this.state.renewalError) {
+      this.renewInBackground()
       return
     }
     this.scheduleRefresh(new Date(this.accessExpiresAt).toISOString())
@@ -115,7 +124,110 @@ export class AdminClient {
   async request<T>(path: string, schema: z.ZodType<T>, options: RequestOptions = {}): Promise<T> {
     if (!path.startsWith('/') || path.startsWith('//') || path.includes('..') || path.includes('#'))
       throw new ApiError('REQUEST_INVALID', '请求路径无效')
-    return this.exchange(PREFIX + path, schema, options, true)
+    return this.sessionRequest(path, schema, options)
+  }
+
+  /** 普通请求持共享锁，续期持独占锁，避免另一标签页在请求途中废弃访问凭据及 CSRF。 */
+  private async sessionLock<T>(mode: LockMode, action: () => Promise<T>): Promise<T> {
+    if (!navigator.locks)
+      throw new ApiError('BROWSER_UNSUPPORTED', '浏览器不支持安全会话续期，请使用新版浏览器')
+    try {
+      return await navigator.locks.request(
+        SESSION_LOCK,
+        { mode, signal: AbortSignal.timeout(30_000) },
+        action,
+      )
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'TimeoutError')
+        throw new ApiError('REQUEST_CANCELED', '等待会话同步超时，请稍后重试')
+      throw error
+    }
+  }
+
+  private acceptSession(result: z.infer<typeof sessionSchema>) {
+    if (
+      this.state.phase === 'authenticated' &&
+      this.state.principal.session_id !== result.principal.session_id
+    )
+      this.clear()
+    this.csrf = result.csrf_token
+    this.scheduleRefresh(result.access_expires_at)
+    this.update({ phase: 'authenticated', principal: result.principal })
+  }
+
+  private reportRenewalFailure(error: unknown) {
+    if (this.state.phase === 'authenticated')
+      this.update({ ...this.state, renewalError: `会话续期暂未完成：${errorMessage(error)}` })
+  }
+
+  private renewInBackground() {
+    const generation = this.epoch
+    void this.refresh(false).catch((error) => {
+      // 退出或切换身份后，旧续期的取消结果不应覆盖新会话的提示。
+      if (generation === this.epoch) this.reportRenewalFailure(error)
+    })
+  }
+
+  private async sessionRequest<T>(
+    path: string,
+    schema: z.ZodType<T>,
+    options: RequestOptions,
+    recovered = false,
+    verified = false,
+  ): Promise<T> {
+    const generation = this.epoch
+    try {
+      if (this.state.phase !== 'authenticated' || path === '/auth/login')
+        return await this.exchange(PREFIX + path, schema, options, true)
+      if (this.refreshPromise) await this.refreshPromise
+      else if (this.accessExpiresAt - Date.now() <= REFRESH_LEAD_MS) await this.refresh(false)
+      return await this.sessionLock('shared', async () => {
+        if (generation !== this.epoch) throw new ApiError('REQUEST_CANCELED', '会话已更换')
+        if (options.method && options.method !== 'GET') {
+          // Cookie 在标签页间共享，内存中的 CSRF 不共享；写入前读取当前值。
+          const current = await this.exchange(PREFIX + '/auth/session', sessionSchema, {}, true)
+          this.acceptSession(current)
+          if (generation !== this.epoch)
+            throw new ApiError('REQUEST_CANCELED', '会话已更换，请重新操作')
+        }
+        return this.exchange(PREFIX + path, schema, options, true)
+      })
+    } catch (error) {
+      if (generation !== this.epoch) throw error
+      if (error instanceof ApiError && error.code === 'SESSION_INVALID') {
+        if (!recovered && this.state.phase === 'authenticated') {
+          await this.refresh(false)
+          if (generation !== this.epoch)
+            throw new ApiError('REQUEST_CANCELED', '会话已更换，请重新操作')
+          if (!options.method || options.method === 'GET')
+            return this.sessionRequest(path, schema, options, true, verified)
+          throw new ApiError('SESSION_RENEWED', '会话已恢复，请核实当前状态后重新提交操作')
+        }
+        this.clear()
+      }
+      // 已明确在业务执行前被拒绝的再验证请求才允许重放，弹窗期间不持浏览器锁。
+      if (
+        error instanceof ApiError &&
+        error.code === 'VERIFICATION_REQUIRED' &&
+        !verified &&
+        this.verifier
+      ) {
+        try {
+          await this.verifier()
+        } catch (cause) {
+          if (isVerificationCanceled(cause))
+            this.messenger?.({ tone: 'info', text: '已取消授权，操作已终止' })
+          throw cause
+        }
+        if (generation !== this.epoch || options.signal?.aborted)
+          throw new ApiError('REQUEST_CANCELED', '请求已取消，请重新操作')
+        this.messenger?.({ tone: 'success', text: '授权成功，正在继续操作' })
+        const result = await this.sessionRequest(path, schema, options, recovered, true)
+        this.messenger?.({ tone: 'success', text: '操作成功' })
+        return result
+      }
+      throw error
+    }
   }
 
   private async exchange<T>(
@@ -124,7 +236,6 @@ export class AdminClient {
     options: RequestOptions,
     adminSession: boolean,
     expectedStatus?: number,
-    isReplay = false,
   ): Promise<T> {
     const generation = this.epoch
     const controller = new AbortController()
@@ -175,7 +286,6 @@ export class AdminClient {
         throw new ApiError('REQUEST_CANCELED', '请求已取消')
       if (response.ok && expectedStatus !== undefined && response.status !== expectedStatus)
         throw new ApiError('RESPONSE_INVALID', '服务未返回预期的完成状态，请先核实操作结果')
-      if (adminSession && response.status === 401 && path !== PREFIX + '/auth/login') this.clear()
       const bytes = new Uint8Array(size)
       let offset = 0
       chunks.forEach((chunk) => {
@@ -193,17 +303,6 @@ export class AdminClient {
       if (!response.ok) {
         const failure = failureSchema.safeParse(value)
         if (!failure.success) throw new ApiError('SERVICE_UNAVAILABLE', '服务暂不可用，请稍后重试')
-        // 服务端在进入业务事务前拒绝了请求，因此验证通过后重放同一次调用是安全的；
-        // 只重放一次，避免验证反复失败时形成循环。
-        if (
-          !isReplay &&
-          adminSession &&
-          failure.data.code === 'VERIFICATION_REQUIRED' &&
-          this.verifier
-        ) {
-          await this.verifier()
-          return this.exchange(path, schema, options, adminSession, expectedStatus, true)
-        }
         throw new ApiError(
           failure.data.code,
           failure.data.message,
@@ -261,11 +360,7 @@ export class AdminClient {
   async restore() {
     const generation = this.epoch
     try {
-      const result = await this.request('/auth/session', sessionSchema)
-      if (generation !== this.epoch) return
-      this.csrf = result.csrf_token
-      this.scheduleRefresh(result.access_expires_at)
-      this.update({ phase: 'authenticated', principal: result.principal })
+      await this.refresh(false)
     } catch (error) {
       if (generation !== this.epoch) return
       this.update({ phase: 'unavailable', message: errorMessage(error) })
@@ -273,13 +368,18 @@ export class AdminClient {
   }
   async login(username: string, password: string, code: string) {
     this.clear()
-    const result = await this.request('/auth/login', sessionSchema, {
-      method: 'POST',
-      body: { username, password, code, device_name: 'Web 管理平台' },
-    })
-    this.csrf = result.csrf_token
-    this.scheduleRefresh(result.access_expires_at)
-    this.update({ phase: 'authenticated', principal: result.principal })
+    const result = await this.sessionLock('exclusive', () =>
+      this.exchange(
+        PREFIX + '/auth/login',
+        sessionSchema,
+        {
+          method: 'POST',
+          body: { username, password, code, device_name: 'Web 管理平台' },
+        },
+        true,
+      ),
+    )
+    this.acceptSession(result)
   }
   async logout() {
     await this.request('/auth/logout', z.undefined(), { method: 'POST', body: {} })
@@ -288,32 +388,53 @@ export class AdminClient {
   async verify(password: string, code: string) {
     await this.request('/auth/verify', z.undefined(), { method: 'POST', body: { password, code } })
   }
-  /** 续期单独发起，失败不重放可能已执行的管理动作；多标签页通过浏览器锁串行轮换。 */
-  refresh(): Promise<void> {
+  /** 先检查共享 Cookie 的当前状态；轮换请求不自动重试，也不重放业务写入。 */
+  refresh(force = true): Promise<void> {
     if (this.refreshPromise) return this.refreshPromise
     const generation = this.epoch
     const run = async () => {
       if (generation !== this.epoch) throw new ApiError('REQUEST_CANCELED', '会话已更换')
-      const current = await this.request('/auth/session', sessionSchema)
-      this.csrf = current.csrf_token
-      const result = await this.request('/auth/refresh', sessionSchema, {
-        method: 'POST',
-        body: {},
-      })
-      this.csrf = result.csrf_token
-      this.scheduleRefresh(result.access_expires_at)
-      this.update({ phase: 'authenticated', principal: result.principal })
+      try {
+        const current = await this.exchange(PREFIX + '/auth/session', sessionSchema, {}, true)
+        if (!force && Date.parse(current.access_expires_at) - Date.now() > REFRESH_LEAD_MS) {
+          this.acceptSession(current)
+          return
+        }
+      } catch (error) {
+        if (!(error instanceof ApiError) || error.code !== 'SESSION_INVALID') throw error
+      }
+      // 访问 Cookie 已到期也能取回 CSRF；只读校验会拒绝已消费的续期值，避免响应丢失后的重放。
+      const context = await this.exchange(
+        PREFIX + '/auth/refresh-context',
+        refreshContextSchema,
+        {},
+        true,
+      )
+      this.csrf = context.csrf_token
+      const result = await this.exchange(
+        PREFIX + '/auth/refresh',
+        sessionSchema,
+        {
+          method: 'POST',
+          body: {},
+        },
+        true,
+      )
+      this.acceptSession(result)
     }
-    this.refreshPromise = (
-      navigator.locks
-        ? navigator.locks.request('tombot-admin-refresh', run)
-        : Promise.reject(
-            new ApiError('BROWSER_UNSUPPORTED', '浏览器不支持安全会话续期，请重新登录'),
-          )
-    ).finally(() => {
-      this.refreshPromise = null
-    })
-    return this.refreshPromise
+    const promise = this.sessionLock('exclusive', run)
+      .catch((error: unknown) => {
+        if (generation === this.epoch) {
+          if (error instanceof ApiError && error.code === 'SESSION_INVALID') this.clear()
+          else this.reportRenewalFailure(error)
+        }
+        throw error
+      })
+      .finally(() => {
+        if (this.refreshPromise === promise) this.refreshPromise = null
+      })
+    this.refreshPromise = promise
+    return promise
   }
 }
 

@@ -1,4 +1,4 @@
-import type { SelectOption } from '../../components/Select'
+import type { SelectOption } from '../../../../../../ui/Select'
 
 /** 每只猫咪可选的模型。只在这里维护，界面和存储校验都引用这份名单。 */
 export const CAT_MODELS = [

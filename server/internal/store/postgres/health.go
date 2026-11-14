@@ -34,7 +34,7 @@ func ValidateSingleDatabase(connections []string) error {
 	return nil
 }
 
-// VerifyCurrent 只读核对完整迁移账本；运行服务不持有迁移权限，不自动补齐或转换数据库。
+// VerifyCurrent 只读核对完整迁移账本；业务连接不持有迁移权限，不自动补齐或转换数据库。
 func (database *Database) VerifyCurrent(ctx context.Context) (failure error) {
 	migrations, err := readMigrations(migrationFiles)
 	if err != nil {
@@ -54,7 +54,7 @@ func (database *Database) VerifyCurrent(ctx context.Context) (failure error) {
 		return err
 	}
 	if count != len(migrations) {
-		return errors.New("PostgreSQL 尚未执行全部迁移，请先运行 tomdb")
+		return errors.New("PostgreSQL 尚未执行全部迁移，请先启动 tomd 完成数据库升级")
 	}
 	return nil
 }

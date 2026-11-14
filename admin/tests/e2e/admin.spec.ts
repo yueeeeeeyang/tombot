@@ -1,3 +1,4 @@
+import { chooseOption } from './select'
 import { expect, test } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 
@@ -5,7 +6,7 @@ const id = (value: number) => value.toString().padStart(26, '0')
 const timestamp = new Date().toISOString()
 
 // 网络替身只在浏览器测试中注册；生产构建没有演示数据或认证旁路。
-test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({ page }, testInfo) => {
+test('管理页面主题、窄屏、模态焦点与模型启用流程', async ({ page }, testInfo) => {
   const problems: string[] = []
   page.on('pageerror', (error) => problems.push(error.message))
   await page.addInitScript(() => {
@@ -33,6 +34,7 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
     output_limit: 8192,
     supports_tools: true,
     supports_vision: true,
+    metadata: {},
     is_enabled: true,
     revision: 1,
   }
@@ -45,7 +47,7 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
     current_version: null as number | null,
   }
   const versions: object[] = []
-  let publishCount = 0
+  let enableCount = 0
   await page.route('**/api/v2/admin/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname.replace('/api/v2/admin', '')
@@ -54,6 +56,8 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
     if (path === '/auth/session')
       body = {
         principal: {
+          username: 'test-admin',
+          display_name: '测试管理员',
           user_id: id(1),
           session_id: id(2),
           device_id: id(3),
@@ -61,6 +65,8 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
           scope: 'admin',
         },
         csrf_token: randomUUID(),
+        access_expires_at: new Date(Date.now() + 600_000).toISOString(),
+        expires_at: new Date(Date.now() + 3_600_000).toISOString(),
       }
     else if (path === '/users')
       body = {
@@ -87,44 +93,52 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
           },
         ],
       }
+    else if (path === `/model-providers/${provider.id}`) body = { provider }
     else if (path === '/model-providers') body = { providers: [provider] }
     else if (path === `/model-providers/${provider.id}/models`) body = { models: [model] }
     else if (path === `/model-providers/${provider.id}/credentials`) body = { credentials: [] }
+    else if (path === `/model-policies/${policy.id}`) body = { policy }
     else if (path === '/model-policies') body = { policies: [policy] }
     else if (path === `/model-policies/${policy.id}/versions` && method === 'GET')
       body = { versions }
     else if (path === `/model-policies/${policy.id}/versions` && method === 'POST') {
       expect(route.request().postDataJSON()).toEqual({
-        model_id: model.id,
-        credential_id: null,
-        output_limit: 4096,
-        prices: {},
+        routing_mode: 'priority',
+        candidates: [{ model_id: model.id, priority: 1, weight: 1, output_limit: 4096 }],
       })
       policy.revision++
       versions.push({
         policy_id: policy.id,
         version: 1,
-        provider_id: provider.id,
-        model_id: model.id,
-        credential_id: null,
-        configuration: {
-          ...model,
-          protocol: provider.protocol,
-          base_url: provider.base_url,
-          output_limit: 4096,
-          prices: {},
-        },
-        status: 'draft',
-        published_at: null,
+        routing_mode: 'priority',
+        candidates: [
+          {
+            position: 1,
+            provider_id: provider.id,
+            model_id: model.id,
+            credential_id: null,
+            priority: 1,
+            weight: 1,
+            configuration: {
+              ...model,
+              protocol: provider.protocol,
+              base_url: provider.base_url,
+              output_limit: 4096,
+              prices: {},
+            },
+          },
+        ],
+        is_enabled: false,
+        verified_at: null,
       })
       body = { version: versions[0] }
-    } else if (path === `/model-policies/${policy.id}/versions/1/publish`) {
+    } else if (path === `/model-policies/${policy.id}/versions/1/enable`) {
       expect(route.request().postDataJSON()).toEqual({ expected_revision: 2 })
       expect(route.request().headers()['x-csrf-token']).toBeTruthy()
-      publishCount++
+      enableCount++
       policy.current_version = 1
       policy.revision++
-      versions[0] = { ...versions[0], status: 'published', published_at: timestamp }
+      versions[0] = { ...versions[0], is_enabled: true, verified_at: timestamp }
       body = { version: versions[0] }
     } else if (path === '/computer-nodes') body = { nodes: [] }
     else if (path === '/computer-images') body = { images: [] }
@@ -139,7 +153,8 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
   expect(response?.headers()['content-security-policy']).not.toContain('unsafe-eval')
   await expect(page.getByRole('heading', { name: '用户', exact: true })).toBeVisible()
   await expect(page.getByText('设计工作账户')).toBeVisible()
-  await page.getByLabel('外观').selectOption('light')
+  await page.getByRole('button', { name: /^账户菜单/ }).click()
+  await page.getByRole('menuitemradio', { name: '浅色' }).click()
   await page.screenshot({
     path: testInfo.outputPath('users-light.png'),
     fullPage: true,
@@ -150,30 +165,32 @@ test('管理页面主题、窄屏、模态焦点与模型发布流程', async ({
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog')).toHaveCount(0)
   await expect(page.getByRole('button', { name: '创建用户', exact: true })).toBeFocused()
-  await page.getByRole('button', { name: '模型供应商', exact: true }).click()
-  await page.getByLabel('外观').selectOption('dark')
+  await page.getByRole('link', { name: '模型供应商', exact: true }).click()
+  await page.getByRole('button', { name: /^账户菜单/ }).click()
+  await page.getByRole('menuitemradio', { name: '深色' }).click()
   await expect(page.getByText('团队模型服务')).toBeVisible()
   await page.screenshot({
     path: testInfo.outputPath('models-dark.png'),
     fullPage: true,
     animations: 'disabled',
   })
-  await page.getByRole('button', { name: '模型策略', exact: true }).click()
-  await page.getByRole('button', { name: '版本与发布' }).click()
-  await page.getByRole('button', { name: '创建版本草稿' }).click()
-  await page.getByRole('button', { name: '团队模型服务', exact: true }).click()
-  await page.getByLabel('模型', { exact: true }).selectOption(model.id)
-  await page.getByLabel('凭据版本').selectOption('none')
-  await page.getByLabel('最大输出 token').fill('4096')
-  await page.getByRole('button', { name: '确认创建版本草稿' }).click()
-  await expect(page.getByText('草稿', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '测试并发布', exact: true }).click()
-  await page.getByRole('button', { name: '确认测试并发布版本' }).click()
+  await page.getByRole('link', { name: '模型策略', exact: true }).click()
+  await page.getByRole('link', { name: '版本管理' }).click()
+  await page.getByRole('button', { name: '创建策略版本' }).click()
+  await chooseOption(page, '候选供应商', '团队模型服务')
+  await chooseOption(page, '候选模型', '团队通用模型')
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByText('参数设置', { exact: false }).click()
+  await page.getByLabel('团队通用模型 输出上限').fill('4096')
+  await page.getByRole('button', { name: '保存版本' }).click()
+  await expect(page.getByText('已停用', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '启用', exact: true }).click()
+  await page.getByRole('button', { name: '确认启用版本 v1' }).click()
   await expect(page.getByText('v1', { exact: true })).toBeVisible()
-  expect(publishCount).toBe(1)
+  await expect.poll(() => enableCount).toBe(1)
   await page.setViewportSize({ width: 390, height: 844 })
   await page.getByRole('button', { name: '切换导航' }).click()
-  await page.getByRole('button', { name: '用户', exact: true }).click()
+  await page.getByRole('link', { name: '用户', exact: true }).click()
   await expect(page.getByText('设计工作账户')).toBeVisible()
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,

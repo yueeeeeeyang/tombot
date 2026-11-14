@@ -113,22 +113,36 @@ func ClientTLS(certificate tls.Certificate, fingerprints []Fingerprint) (*tls.Co
 	if err != nil {
 		return nil, err
 	}
-	if len(fingerprints) == 0 {
-		return nil, errors.New("节点证书指纹数量无效")
-	}
-	allowed := allowedSet(fingerprints)
-	now := time.Now()
-	if now.Before(leaf.NotBefore) || !now.Before(leaf.NotAfter) {
+	if time.Now().Before(leaf.NotBefore) || !time.Now().Before(leaf.NotAfter) {
 		return nil, errors.New("客户端证书不在有效期内")
 	}
-	return &tls.Config{
-		MinVersion:   tls.VersionTLS13,
-		Certificates: []tls.Certificate{certificate},
-		// 指纹固定替代链校验，因此关闭默认校验并在回调里同时核对指纹与有效期。
+	configuration, err := PinnedTLS(fingerprints)
+	if err != nil {
+		return nil, err
+	}
+	configuration.Certificates = []tls.Certificate{certificate}
+	verify := configuration.VerifyPeerCertificate
+	configuration.VerifyPeerCertificate = func(raw [][]byte, chains [][]*x509.Certificate) error {
+		if len(raw) != 1 {
+			return errors.New("节点未提供唯一证书")
+		}
+		return verify(raw, chains)
+	}
+	return configuration, nil
+}
+
+// PinnedTLS 用于首次引导；发送授权之前固定服务证书并核对有效期。
+func PinnedTLS(fingerprints []Fingerprint) (*tls.Config, error) {
+	if len(fingerprints) == 0 {
+		return nil, errors.New("服务证书指纹不能为空")
+	}
+	allowed := allowedSet(fingerprints)
+	return &tls.Config{MinVersion: tls.VersionTLS13,
+		// 信任来自管理平台交付的固定指纹，不能使用首次连接返回的证书建立信任。
 		InsecureSkipVerify: true,
 		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-			if len(raw) != 1 {
-				return errors.New("节点未提供唯一证书")
+			if len(raw) == 0 {
+				return errors.New("服务未提供证书")
 			}
 			return verifyLeaf(raw[0], allowed, time.Now())
 		},

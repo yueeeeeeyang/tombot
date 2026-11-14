@@ -26,6 +26,35 @@ var _ modelregistry.Verifier = (*Gateway)(nil)
 func (gateway *Gateway) Verify(parent context.Context, configuration modelregistry.Configuration, credential []byte) error {
 	ctx, cancel := context.WithTimeout(parent, gateway.options.RequestTimeout)
 	defer cancel()
+	if err := gateway.Probe(ctx, configuration, credential, "connectivity"); err != nil {
+		return err
+	}
+	if configuration.SupportsTools {
+		if err := gateway.Probe(ctx, configuration, credential, "tools"); err != nil {
+			return err
+		}
+	}
+	if configuration.SupportsVision {
+		return gateway.verifyVision(ctx, configuration, credential)
+	}
+	return nil
+}
+
+// Probe 复用发布验证规则执行单项探测；只允许固定类型，工具探测不执行外部操作。
+func (gateway *Gateway) Probe(parent context.Context, configuration modelregistry.Configuration, credential []byte, kind string) error {
+	ctx, cancel := context.WithTimeout(parent, gateway.options.RequestTimeout)
+	defer cancel()
+	switch kind {
+	case "connectivity":
+		return gateway.verifyConnectivity(ctx, configuration, credential)
+	case "tools":
+		return gateway.verifyTools(ctx, configuration, credential)
+	default:
+		return ErrVerification
+	}
+}
+
+func (gateway *Gateway) verifyConnectivity(ctx context.Context, configuration modelregistry.Configuration, credential []byte) error {
 	nonce := ids.New()
 	input := Input{Messages: []provider.Message{{Role: "user", Blocks: []domain.MessageBlock{{Kind: "text", Text: "Return exactly this verification value, with no other text: " + nonce}}}}}
 	reply, err := gateway.textProbe(ctx, configuration, credential, input)
@@ -35,57 +64,66 @@ func (gateway *Gateway) Verify(parent context.Context, configuration modelregist
 	if strings.TrimSpace(reply) != nonce {
 		return ErrVerification
 	}
-	if configuration.SupportsTools {
-		input.Messages[0].Blocks[0].Text = "Call verify_capability once with the nonce " + nonce + ". Do not call any other tool."
-		input.Tools = []provider.ToolSchema{{Name: "verify_capability", Description: "Return a verification nonce. This tool has no external effects.", InputSchema: json.RawMessage(`{"type":"object","properties":{"nonce":{"type":"string"}},"required":["nonce"],"additionalProperties":false}`)}}
-		input.ToolChoice = "required"
-		count := 0
-		_, err = gateway.Call(ctx, configuration, credential, input, func(event provider.Event) error {
-			if event.Kind != "tool_use_end" {
-				return nil
-			}
-			count++
-			if count != 1 || event.ToolName != "verify_capability" || len(event.InputDelta) > 1024 {
-				return ErrVerification
-			}
-			var result struct {
-				Nonce string `json:"nonce"`
-			}
-			decoder := json.NewDecoder(strings.NewReader(event.InputDelta))
-			decoder.DisallowUnknownFields()
-			if decoder.Decode(&result) != nil || result.Nonce != nonce {
-				return ErrVerification
-			}
-			var trailing any
-			if decoder.Decode(&trailing) != io.EOF {
-				return ErrVerification
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		if count != 1 {
-			return ErrVerification
-		}
+	return nil
+}
+
+func (gateway *Gateway) verifyTools(ctx context.Context, configuration modelregistry.Configuration, credential []byte) error {
+	nonce := ids.New()
+	input := Input{Messages: []provider.Message{{Role: "user", Blocks: []domain.MessageBlock{{Kind: "text", Text: "Call verify_capability once with the nonce " + nonce + ". Do not call any other tool."}}}}}
+	input.Tools = []provider.ToolSchema{{Name: "verify_capability", Description: "Return a verification nonce. This tool has no external effects.", InputSchema: json.RawMessage(`{"type":"object","properties":{"nonce":{"type":"string"}},"required":["nonce"],"additionalProperties":false}`)}}
+	input.ToolChoice = "required"
+	if configuration.Protocol == "responses" || configuration.ReasoningEffort != "" {
+		// 思考模式的部分服务只接受自动选择；仍严格验证一次工具及随机参数。
+		input.ToolChoice = "auto"
 	}
-	if configuration.SupportsVision {
-		artifact, expected, err := visionChallenge()
-		if err != nil {
-			return err
+	count := 0
+	_, err := gateway.Call(ctx, configuration, credential, input, func(event provider.Event) error {
+		if event.Kind != "tool_use_end" {
+			return nil
 		}
-		input = Input{Messages: []provider.Message{{Role: "user", Blocks: []domain.MessageBlock{{Kind: "text", Text: "Read the six vertical color bands in the image from left to right. Reply only with their English color names separated by commas. Use red, green, blue, yellow, cyan, or magenta."}, {Kind: "artifact", Artifact: artifact}}}}}
-		reply, err = gateway.textProbe(ctx, configuration, credential, input)
-		if err != nil {
-			return err
-		}
-		parts := strings.Split(strings.TrimSpace(reply), ",")
-		for index := range parts {
-			parts[index] = strings.ToLower(strings.TrimSpace(parts[index]))
-		}
-		if strings.Join(parts, ",") != expected {
+		count++
+		if count != 1 || event.ToolName != "verify_capability" || len(event.InputDelta) > 1024 {
 			return ErrVerification
 		}
+		var result struct {
+			Nonce string `json:"nonce"`
+		}
+		decoder := json.NewDecoder(strings.NewReader(event.InputDelta))
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&result) != nil || result.Nonce != nonce {
+			return ErrVerification
+		}
+		var trailing any
+		if decoder.Decode(&trailing) != io.EOF {
+			return ErrVerification
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrVerification
+	}
+	return nil
+}
+
+func (gateway *Gateway) verifyVision(ctx context.Context, configuration modelregistry.Configuration, credential []byte) error {
+	artifact, expected, err := visionChallenge()
+	if err != nil {
+		return err
+	}
+	input := Input{Messages: []provider.Message{{Role: "user", Blocks: []domain.MessageBlock{{Kind: "text", Text: "Read the six vertical color bands in the image from left to right. Reply only with their English color names separated by commas. Use red, green, blue, yellow, cyan, or magenta."}, {Kind: "artifact", Artifact: artifact}}}}}
+	reply, err := gateway.textProbe(ctx, configuration, credential, input)
+	if err != nil {
+		return err
+	}
+	parts := strings.Split(strings.TrimSpace(reply), ",")
+	for index := range parts {
+		parts[index] = strings.ToLower(strings.TrimSpace(parts[index]))
+	}
+	if strings.Join(parts, ",") != expected {
+		return ErrVerification
 	}
 	return nil
 }

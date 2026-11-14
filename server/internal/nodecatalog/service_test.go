@@ -198,9 +198,12 @@ func TestCatalogIntegration(t *testing.T) {
 		}
 		changed.ImageReference = registration.ImageReference
 		changed.ImageID = ids.New()
-		if _, err := other.Register(t.Context(), changed, ids.New()); !errors.Is(err, ErrConflict) {
-			t.Fatal("相同镜像引用登记不同 ID", err)
+		if _, err := other.Register(t.Context(), changed, ids.New()); err != nil {
+			t.Fatal("多个节点应允许使用同一镜像摘要", err)
 		}
+		execute(t, pool, `DELETE FROM tombot.admin_audit_events WHERE target_id IN ($1,$2)`, other.nodeID, changed.ImageID)
+		execute(t, pool, `DELETE FROM tombot.computer_nodes WHERE id=$1`, other.nodeID)
+		execute(t, pool, `DELETE FROM tombot.computer_images WHERE id=$1`, changed.ImageID)
 		assertCounts(1, 1, 2)
 	})
 	t.Run("审计失败不遗留部分目录且错误脱敏", func(t *testing.T) {

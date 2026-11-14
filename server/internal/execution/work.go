@@ -62,7 +62,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 			return err
 		}
 		if policy != nil && version != nil {
-			work.Selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version}
+			work.Selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version, RunID: lease.RunID}
 		}
 		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, 0, service.options.ContextMessages+1)
 		if err != nil {
@@ -111,7 +111,7 @@ func (service *Service) BindModel(ctx context.Context, lease Lease) (modelregist
 			return err
 		}
 		if policy != nil && version != nil {
-			selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version}
+			selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version, RunID: lease.RunID}
 		}
 		return nil
 	}
@@ -122,6 +122,7 @@ func (service *Service) BindModel(ctx context.Context, lease Lease) (modelregist
 		return *selection, nil
 	}
 	resolved, err := service.resolver.Resolve(ctx, lease.UserID, lease.BotID)
+	resolved.RunID = lease.RunID
 	if err != nil {
 		return modelregistry.Selection{}, err
 	}

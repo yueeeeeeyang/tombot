@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Select } from '../../components/Select'
+import { Select } from '../../../../../../ui/Select'
 import { getBackend } from '../desktop/backend'
 import { validateSettingsDraft, type SettingsDraft } from './settings'
 

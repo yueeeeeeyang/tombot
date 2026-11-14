@@ -18,7 +18,7 @@ func TestDesktopImageReferenceUsesActualPixels(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref := &domain.ArtifactRef{ID: ids.New(), BotID: ids.New(), MediaType: "image/png", Width: 1280, Height: 800, Bytes: pixels.Len(), Content: pixels.Bytes()}
-	for _, kind := range []string{"anthropic", "openai_compat"} {
+	for _, kind := range []string{"anthropic", "openai_compat", "responses"} {
 		t.Run(kind, func(t *testing.T) {
 			request := minimalRequest()
 			request.Model.SupportsVision = true

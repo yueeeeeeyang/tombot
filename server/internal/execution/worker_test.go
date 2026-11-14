@@ -79,11 +79,11 @@ func (fixture fixture) toolsModel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := fixture.registry.CreateDraft(ctx, fixture.actor, ids.New(), modelregistry.DraftRequest{PolicyID: fixture.policyID, ModelID: model.ID, OutputLimit: 256})
+	version, err := fixture.registry.CreateVersion(ctx, fixture.actor, ids.New(), modelregistry.VersionRequest{PolicyID: fixture.policyID, RoutingMode: "priority", Candidates: []modelregistry.CandidateRequest{{ModelID: model.ID, OutputLimit: routingInt(256), Priority: 1, Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = fixture.registry.Publish(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
+	if _, err = fixture.registry.EnableVersion(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -164,7 +164,7 @@ func TestPersistentWorker(t *testing.T) {
 			if fixture.sessionState(t, lease) != "active" {
 				t.Error("纯文本模型调用未取得电脑执行权")
 			}
-			if configuration.ModelKey != "execution-fixture" || len(credential) != 0 || len(input.Tools) != 0 || len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.System != bot.SystemPrompt {
+			if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 0 || len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.System != bot.SystemPrompt {
 				t.Error("模型调用未使用所属运行快照")
 			}
 			return emitText(emit, "已经完成资料核对。")

@@ -21,8 +21,9 @@ type Input struct {
 
 // Result 区分流是否完整与上游实际用量；nil 用量或计数字段明确表示未知。
 type Result struct {
-	IsComplete bool                    `json:"is_complete"`
-	Usage      *provider.ReportedUsage `json:"usage"`
+	CanFailover bool                    `json:"can_failover"`
+	IsComplete  bool                    `json:"is_complete"`
+	Usage       *provider.ReportedUsage `json:"usage"`
 }
 
 // Call 在独立受控连接中执行一次请求。回调必须遵守调用上下文，不能保留凭据或阻塞无限时间。
@@ -74,22 +75,21 @@ func (gateway *Gateway) Call(parent context.Context, configuration modelregistry
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
 	}
-	path := "/chat/completions"
-	if configuration.Protocol == "anthropic" {
-		path = "/messages"
-	}
+	path := provider.GenerationPath(configuration.Protocol)
 	client, guard, err := gateway.client(strings.TrimRight(configuration.BaseURL, "/")+path, http.MethodPost, "text/event-stream")
 	if err != nil {
 		return Result{}, err
 	}
 	defer guard.transport.CloseIdleConnections()
 	adapter := &provider.HTTP{Spec: domain.Provider{Kind: configuration.Protocol, BaseURL: configuration.BaseURL, IsEnabled: true}, Credential: credential, Client: client}
-	request := provider.Request{Model: domain.Model{ModelKey: configuration.ModelKey, ContextWindow: configuration.ContextLimit, MaxOutput: configuration.OutputLimit, SupportsTools: configuration.SupportsTools, SupportsVision: configuration.SupportsVision}, System: input.System, Messages: input.Messages, Tools: input.Tools, ToolChoice: input.ToolChoice}
+	request := provider.Request{Model: domain.Model{ModelKey: configuration.ModelKey, ContextWindow: configuration.ContextLimit, MaxOutput: configuration.OutputLimit, SupportsTools: configuration.SupportsTools, SupportsVision: configuration.SupportsVision}, System: input.System, Messages: input.Messages, Tools: input.Tools, ToolChoice: input.ToolChoice, ReasoningEffort: configuration.ReasoningEffort}
 	var callbackErr error
+	emitted := false
 	usage, err := adapter.Stream(ctx, request, func(event provider.Event) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		emitted = true
 		callbackErr = emit(event)
 		return callbackErr
 	})
@@ -102,12 +102,19 @@ func (gateway *Gateway) Call(parent context.Context, configuration modelregistry
 		return result, callbackErr
 	}
 	if ctx.Err() != nil {
+		result.CanFailover = !emitted && parent.Err() == nil && errors.Is(ctx.Err(), context.DeadlineExceeded)
 		return result, ctx.Err()
 	}
 	if guard.failure != nil {
 		return result, guard.failure
 	}
 	var failure *domain.Error
+	if !emitted && parent.Err() == nil && errors.As(err, &failure) {
+		switch failure.Code {
+		case "PROVIDER_RATE_LIMITED", "PROVIDER_UNAVAILABLE", "PROVIDER_NETWORK":
+			result.CanFailover = true
+		}
+	}
 	if errors.As(err, &failure) && strings.HasPrefix(failure.Code, "PROVIDER_INVALID_") {
 		return result, ErrProtocol
 	}

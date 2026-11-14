@@ -77,3 +77,40 @@ func TestAdminBuildValidation(t *testing.T) {
 		t.Fatal("缺少构建仍启动")
 	}
 }
+
+func TestAdminPageRoutes(t *testing.T) {
+	fixture := buildFixture()
+	handler, err := New(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+	for _, route := range []string{"users", "administrators", "computer-nodes", "model-providers", "model-policies", "model-providers/" + id, "model-policies/" + id + "/versions"} {
+		for _, method := range []string{"GET", "HEAD", "POST"} {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(method, "/admin/"+route, nil))
+			if method == "POST" {
+				if response.Code != 405 {
+					t.Fatal("页面路径接受写请求", route)
+				}
+				continue
+			}
+			if response.Code != 200 || !strings.Contains(response.Header().Get("Content-Type"), "text/html") {
+				t.Fatal("深层页面不能直接访问", route, response.Code)
+			}
+			if method == "GET" && !bytes.Equal(response.Body.Bytes(), fixture["index.html"].Data) {
+				t.Fatal("页面未返回构建入口", route)
+			}
+			if method == "HEAD" && response.Body.Len() != 0 {
+				t.Fatal("页面 HEAD 返回正文", route)
+			}
+		}
+	}
+	for _, route := range []string{"model-providers/invalid", "model-policies/" + id, "model-providers/" + id + "/missing", "assets/missing.js", "api/v2/admin/users", "%75sers", "users/../private", "model-providers/../../private", "model-policies/" + id + "/versions/missing"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/admin/"+route, nil))
+		if response.Code != 404 {
+			t.Fatal("非页面路径错误回退 HTML", route, response.Code)
+		}
+	}
+}

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ShieldCheck } from 'lucide-react'
+import { BrandAvatar } from '../components/BrandAvatar'
 import { AdminClient, ApiError } from '../api/client'
 import type { AdministratorSetup } from '../api/schemas'
 import { Alert, Field } from '../components'
@@ -96,7 +96,7 @@ export function AdminSetup({
   return (
     <>
       <div className="brand-icon">
-        <ShieldCheck size={28} />
+        <BrandAvatar />
       </div>
       <h1 ref={heading} tabIndex={-1}>
         创建首位管理员

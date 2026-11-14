@@ -35,6 +35,7 @@ func (authorizer *testAuthorizer) RequireAdmin(_ context.Context, actor identity
 type testVerifier struct {
 	calls     atomic.Int64
 	verify    func(context.Context, Configuration, []byte) error
+	probe     func(context.Context, Configuration, []byte, string) error
 	discovery []DiscoveredModel
 	discover  func(context.Context, string, string, []byte) error
 }
@@ -56,6 +57,14 @@ func (verifier *testVerifier) Verify(ctx context.Context, configuration Configur
 	verifier.calls.Add(1)
 	if verifier.verify != nil {
 		return verifier.verify(ctx, configuration, credential)
+	}
+	return nil
+}
+
+func (verifier *testVerifier) Probe(ctx context.Context, configuration Configuration, credential []byte, kind string) error {
+	verifier.calls.Add(1)
+	if verifier.probe != nil {
+		return verifier.probe(ctx, configuration, credential, kind)
 	}
 	return nil
 }
@@ -163,21 +172,21 @@ func (fixture fixture) revision(t *testing.T, policyID string) int64 {
 	}
 	return revision
 }
-func (fixture fixture) draft(t *testing.T, policyID string, credentialID *string, output int) Version {
+func (fixture fixture) createVersion(t *testing.T, policyID string, credentialID *string, output int) Version {
 	t.Helper()
-	version, err := fixture.service.CreateDraft(context.Background(), fixture.actor, ids.New(), DraftRequest{PolicyID: policyID, ModelID: fixture.model.ID, CredentialID: credentialID, OutputLimit: output})
+	version, err := fixture.service.CreateVersion(context.Background(), fixture.actor, ids.New(), VersionRequest{PolicyID: policyID, RoutingMode: "priority", Candidates: []CandidateRequest{{ModelID: fixture.model.ID, CredentialID: credentialID, OutputLimit: routingInt(output), Priority: 1, Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return version
 }
-func (fixture fixture) publish(t *testing.T, version Version) Version {
+func (fixture fixture) enableVersion(t *testing.T, version Version) Version {
 	t.Helper()
-	published, err := fixture.service.Publish(context.Background(), fixture.actor, ids.New(), version.PolicyID, version.Number, fixture.revision(t, version.PolicyID))
+	enabled, err := fixture.service.EnableVersion(context.Background(), fixture.actor, ids.New(), version.PolicyID, version.Number, fixture.revision(t, version.PolicyID))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return published
+	return enabled
 }
 func (fixture fixture) policy(t *testing.T) Version {
 	t.Helper()
@@ -185,7 +194,7 @@ func (fixture fixture) policy(t *testing.T) Version {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return fixture.publish(t, fixture.draft(t, policy.ID, &fixture.credential.ID, 512))
+	return fixture.enableVersion(t, fixture.createVersion(t, policy.ID, &fixture.credential.ID, 512))
 }
 func requireError(t *testing.T, err, want error) {
 	t.Helper()
@@ -280,7 +289,7 @@ func TestRegistryIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		check(platform.PolicyID)
-		if err = fixture.service.RevokeVersion(ctx, fixture.actor, ids.New(), platform.PolicyID, platform.Number); err != nil {
+		if err = fixture.service.DisableVersion(ctx, fixture.actor, ids.New(), platform.PolicyID, platform.Number, fixture.revision(t, platform.PolicyID)); err != nil {
 			t.Fatal(err)
 		}
 		_, err = fixture.service.Resolve(ctx, user, bot)
@@ -307,13 +316,13 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		second := fixture.publish(t, fixture.draft(t, first.PolicyID, &nextCredential.ID, 256))
+		second := fixture.enableVersion(t, fixture.createVersion(t, first.PolicyID, &nextCredential.ID, 256))
 		selection, err := fixture.service.Resolve(ctx, user, bot)
 		if err != nil || selection.Version != second.Number {
 			t.Fatal("新运行没有绑定新版本", err)
 		}
 		var borrowed []byte
-		if err = fixture.service.Use(ctx, oldSelection, func(_ context.Context, configuration Configuration, plaintext []byte) error {
+		if err = fixture.service.Use(ctx, withModel(oldSelection, fixture.model.ID), func(_ context.Context, configuration Configuration, plaintext []byte) error {
 			if configuration.OutputLimit != 512 || !bytes.Equal(plaintext, fixture.plaintext) {
 				return errors.New("旧运行配置被改写")
 			}
@@ -326,15 +335,15 @@ func TestRegistryIntegration(t *testing.T) {
 			t.Fatal("回调后凭据未清零")
 		}
 		calls := fixture.verifier.calls.Load()
-		if _, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), first.PolicyID, first.Number, 1); err != nil || fixture.verifier.calls.Load() != calls {
-			t.Fatal("重复发布重放了探测", err)
+		if _, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), first.PolicyID, first.Number, fixture.revision(t, first.PolicyID)); err != nil || fixture.verifier.calls.Load() != calls {
+			t.Fatal("重复启用重放了探测", err)
 		}
 		if err = fixture.service.RevokeCredential(ctx, fixture.actor, ids.New(), fixture.credential.ID); err != nil {
 			t.Fatal(err)
 		}
-		err = fixture.service.Use(ctx, oldSelection, func(context.Context, Configuration, []byte) error { t.Fatal("已撤销凭据进入调用"); return nil })
+		err = fixture.service.Use(ctx, withModel(oldSelection, fixture.model.ID), func(context.Context, Configuration, []byte) error { t.Fatal("已撤销凭据进入调用"); return nil })
 		requireError(t, err, ErrUnavailable)
-		if err = fixture.service.Use(ctx, selection, func(_ context.Context, _ Configuration, plaintext []byte) error {
+		if err = fixture.service.Use(ctx, withModel(selection, fixture.model.ID), func(_ context.Context, _ Configuration, plaintext []byte) error {
 			if !bytes.Equal(plaintext, nextPlaintext) {
 				return errors.New("新凭据未生效")
 			}
@@ -345,7 +354,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if err = fixture.service.SetEnabled(ctx, fixture.actor, ids.New(), "provider", fixture.provider.ID, 1, false); err != nil {
 			t.Fatal(err)
 		}
-		err = fixture.service.Use(ctx, selection, func(context.Context, Configuration, []byte) error {
+		err = fixture.service.Use(ctx, withModel(selection, fixture.model.ID), func(context.Context, Configuration, []byte) error {
 			t.Fatal("已停用供应商进入调用")
 			return nil
 		})
@@ -353,13 +362,13 @@ func TestRegistryIntegration(t *testing.T) {
 		err = fixture.service.SetEnabled(ctx, fixture.actor, ids.New(), "provider", fixture.provider.ID, 1, true)
 		requireError(t, err, ErrConflict)
 	})
-	t.Run("探测不持事务且竞争后拒绝发布", func(t *testing.T) {
+	t.Run("探测不持事务且竞争后拒绝启用", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
 		policy, err := fixture.service.CreatePolicy(ctx, fixture.actor, ids.New(), "竞争策略")
 		if err != nil {
 			t.Fatal(err)
 		}
-		version := fixture.draft(t, policy.ID, &fixture.credential.ID, 512)
+		version := fixture.createVersion(t, policy.ID, &fixture.credential.ID, 512)
 		revision := fixture.revision(t, policy.ID)
 		started, release := make(chan struct{}), make(chan struct{})
 		fixture.verifier.verify = func(ctx context.Context, _ Configuration, _ []byte) error {
@@ -373,7 +382,7 @@ func TestRegistryIntegration(t *testing.T) {
 		}
 		finished := make(chan error, 1)
 		go func() {
-			_, err := fixture.service.Publish(ctx, fixture.actor, ids.New(), policy.ID, version.Number, revision)
+			_, err := fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), policy.ID, version.Number, revision)
 			finished <- err
 		}()
 		select {
@@ -381,12 +390,12 @@ func TestRegistryIntegration(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatal("探测未开始")
 		}
-		fixture.draft(t, policy.ID, &fixture.credential.ID, 128)
+		fixture.createVersion(t, policy.ID, &fixture.credential.ID, 128)
 		close(release)
 		requireError(t, <-finished, ErrConflict)
 		stored, err := fixture.service.GetVersion(ctx, fixture.actor, policy.ID, version.Number)
-		if err != nil || stored.Status != "draft" {
-			t.Fatal("竞争失败仍发布了版本", err)
+		if err != nil || stored.IsEnabled || stored.VerifiedAt != nil {
+			t.Fatal("竞争失败仍启用了版本", err)
 		}
 	})
 	t.Run("探测失败脱敏与超时", func(t *testing.T) {
@@ -395,9 +404,9 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		version := fixture.draft(t, policy.ID, &fixture.credential.ID, 512)
+		version := fixture.createVersion(t, policy.ID, &fixture.credential.ID, 512)
 		fixture.verifier.verify = func(_ context.Context, _ Configuration, plaintext []byte) error { return errors.New(string(plaintext)) }
-		_, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
+		_, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
 		requireError(t, err, ErrVerification)
 		if strings.Contains(err.Error(), string(fixture.plaintext)) {
 			t.Fatal("探测错误泄露凭据")
@@ -407,20 +416,20 @@ func TestRegistryIntegration(t *testing.T) {
 			t.Fatal("失败审计未保存", err)
 		}
 		fixture.verifier.verify = func(ctx context.Context, _ Configuration, _ []byte) error { <-ctx.Done(); return ctx.Err() }
-		_, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
+		_, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
 		requireError(t, err, ErrVerification)
 	})
-	t.Run("探测期间撤销凭据不能发布", func(t *testing.T) {
+	t.Run("探测期间撤销凭据不能启用", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
 		policy, err := fixture.service.CreatePolicy(ctx, fixture.actor, ids.New(), "撤销策略")
 		if err != nil {
 			t.Fatal(err)
 		}
-		version := fixture.draft(t, policy.ID, &fixture.credential.ID, 512)
+		version := fixture.createVersion(t, policy.ID, &fixture.credential.ID, 512)
 		fixture.verifier.verify = func(ctx context.Context, _ Configuration, _ []byte) error {
 			return fixture.service.RevokeCredential(ctx, fixture.actor, ids.New(), fixture.credential.ID)
 		}
-		_, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
+		_, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
 		requireError(t, err, ErrUnavailable)
 	})
 	t.Run("并发版本号不重复", func(t *testing.T) {
@@ -436,7 +445,7 @@ func TestRegistryIntegration(t *testing.T) {
 		results := make(chan result, 8)
 		for range 8 {
 			go func() {
-				version, err := fixture.service.CreateDraft(ctx, fixture.actor, ids.New(), DraftRequest{PolicyID: policy.ID, ModelID: fixture.model.ID, CredentialID: &fixture.credential.ID, OutputLimit: 512})
+				version, err := fixture.service.CreateVersion(ctx, fixture.actor, ids.New(), VersionRequest{PolicyID: policy.ID, RoutingMode: "priority", Candidates: []CandidateRequest{{ModelID: fixture.model.ID, CredentialID: &fixture.credential.ID, OutputLimit: routingInt(512), Priority: 1, Weight: 1}}})
 				results <- result{version.Number, err}
 			}()
 		}
@@ -444,7 +453,7 @@ func TestRegistryIntegration(t *testing.T) {
 		for range 8 {
 			value := <-results
 			if value.err != nil || seen[value.number] {
-				t.Fatal("并发草稿版本分配失败", value.err)
+				t.Fatal("并发停用版本分配失败", value.err)
 			}
 			seen[value.number] = true
 		}
@@ -474,7 +483,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if _, err := fixture.pool.Exec(`UPDATE tombot.model_credentials SET destroyed_at=transaction_timestamp(),nonce=NULL,ciphertext=NULL WHERE id=$1`, fixture.credential.ID); err == nil {
 			t.Fatal("数据库允许销毁仍被策略引用的凭据")
 		}
-		if err := fixture.service.RevokeVersion(ctx, fixture.actor, ids.New(), version.PolicyID, version.Number); err != nil {
+		if err := fixture.service.DisableVersion(ctx, fixture.actor, ids.New(), version.PolicyID, version.Number, fixture.revision(t, version.PolicyID)); err != nil {
 			t.Fatal(err)
 		}
 		for range 2 {
@@ -514,7 +523,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err = rotated.Use(ctx, selection, func(_ context.Context, _ Configuration, plaintext []byte) error {
+		if err = rotated.Use(ctx, withModel(selection, fixture.model.ID), func(_ context.Context, _ Configuration, plaintext []byte) error {
 			if !bytes.Equal(plaintext, fixture.plaintext) {
 				return errors.New("轮换后旧凭据无法解密")
 			}
@@ -538,7 +547,7 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = missing.Use(ctx, selection, func(context.Context, Configuration, []byte) error {
+		err = missing.Use(ctx, withModel(selection, fixture.model.ID), func(context.Context, Configuration, []byte) error {
 			t.Fatal("缺失历史主密钥仍调用模型")
 			return nil
 		})
@@ -547,9 +556,9 @@ func TestRegistryIntegration(t *testing.T) {
 	t.Run("版本分页无未知价格补零与停用用户", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
 		first := fixture.policy(t)
-		second := fixture.publish(t, fixture.draft(t, first.PolicyID, &fixture.credential.ID, 256))
+		second := fixture.enableVersion(t, fixture.createVersion(t, first.PolicyID, &fixture.credential.ID, 256))
 		versions, err := fixture.service.ListVersions(ctx, fixture.actor, first.PolicyID, 0, 1)
-		if err != nil || len(versions) != 1 || versions[0].Number != second.Number || versions[0].Configuration.Prices.Input != nil {
+		if err != nil || len(versions) != 1 || versions[0].Number != second.Number || versions[0].Candidates[0].Configuration.Prices.Input != nil {
 			t.Fatal("版本分页或未知价格错误", err)
 		}
 		versions, err = fixture.service.ListVersions(ctx, fixture.actor, first.PolicyID, second.Number, 1)
@@ -560,17 +569,17 @@ func TestRegistryIntegration(t *testing.T) {
 		if err = fixture.service.SetDefault(ctx, fixture.actor, ids.New(), first.PolicyID, fixture.revision(t, first.PolicyID)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), first.PolicyID, first.Number, 1); err != nil {
-			t.Fatal(err)
+		if _, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), first.PolicyID, first.Number, 1); !errors.Is(err, ErrConflict) {
+			t.Fatal("过期启用请求未拒绝", err)
 		}
 		selected, err := fixture.service.Resolve(ctx, user, bot)
 		if err != nil || selected.Version != second.Number {
-			t.Fatal("重复发布旧版本改变了新运行路由", err)
+			t.Fatal("重复启用旧版本改变了新运行路由", err)
 		}
 		execute(t, fixture.pool, `UPDATE tombot.users SET status='disabled' WHERE id=$1`, user)
 		_, err = fixture.service.Resolve(ctx, user, bot)
 		requireError(t, err, ErrNotFound)
-		err = fixture.service.Use(ctx, selected, func(context.Context, Configuration, []byte) error { t.Fatal("停用用户仍调用模型"); return nil })
+		err = fixture.service.Use(ctx, withModel(selected, fixture.model.ID), func(context.Context, Configuration, []byte) error { t.Fatal("停用用户仍调用模型"); return nil })
 		requireError(t, err, ErrNotFound)
 	})
 	t.Run("数据库拒绝改写历史与越权读取", func(t *testing.T) {
@@ -582,10 +591,10 @@ func TestRegistryIntegration(t *testing.T) {
 		}{
 			{`UPDATE tombot.model_providers SET base_url='https://changed.example.test',revision=revision+1 WHERE id=$1`, []any{fixture.provider.ID}},
 			{`UPDATE tombot.models SET model_key='changed',revision=revision+1 WHERE id=$1`, []any{fixture.model.ID}},
-			{`UPDATE tombot.model_policy_versions SET configuration='{}' WHERE policy_id=$1`, []any{version.PolicyID}},
+			{`UPDATE tombot.model_policy_candidates SET configuration='{}' WHERE policy_id=$1`, []any{version.PolicyID}},
 			{`UPDATE tombot.model_credentials SET ciphertext=nonce WHERE id=$1`, []any{fixture.credential.ID}},
 			{`DELETE FROM tombot.model_policy_versions WHERE policy_id=$1`, []any{version.PolicyID}},
-			{`UPDATE tombot.model_policies SET current_version=NULL,revision=revision+1 WHERE id=$1`, []any{version.PolicyID}},
+			{`UPDATE tombot.model_policy_versions SET verified_at=NULL WHERE policy_id=$1`, []any{version.PolicyID}},
 		} {
 			err := fixture.service.control.Platform(ctx, func(transaction *sql.Tx) error {
 				_, err := transaction.ExecContext(ctx, statement.query, statement.arguments...)
@@ -614,8 +623,8 @@ func TestRegistryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		version := fixture.draft(t, policy.ID, &replacement, 512)
-		_, err = fixture.service.Publish(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
+		version := fixture.createVersion(t, policy.ID, &replacement, 512)
+		_, err = fixture.service.EnableVersion(ctx, fixture.actor, ids.New(), policy.ID, version.Number, fixture.revision(t, policy.ID))
 		requireError(t, err, ErrCredential)
 		if fixture.verifier.calls.Load() != 0 {
 			t.Fatal("未认证的凭据进入探测")

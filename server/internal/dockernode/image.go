@@ -114,6 +114,7 @@ func readImageProgress(reader io.Reader) error {
 			return failure("image_pull_progress_invalid")
 		}
 		var message struct {
+			Stream      string           `json:"stream"`
 			Status      string           `json:"status"`
 			Error       string           `json:"error"`
 			ErrorDetail *json.RawMessage `json:"errorDetail"`
@@ -124,7 +125,7 @@ func readImageProgress(reader io.Reader) error {
 		if message.Error != "" || message.ErrorDetail != nil {
 			return failure("image_pull_stream_failed")
 		}
-		if message.Status == "" {
+		if message.Status == "" && message.Stream == "" {
 			return failure("image_pull_progress_invalid")
 		}
 		count++

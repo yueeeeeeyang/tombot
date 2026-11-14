@@ -8,11 +8,15 @@ import (
 	"io.yueyang/tom/internal/identity"
 )
 
-// DiscoveredModel 是供应商模型列表返回的一项，只含标识与显示名。
-// 上下文与输出上限不在上游列表里，登记时必须由管理员显式填写，不能推断。
+// DiscoveredModel 保留上游明确返回的模型规格；可选字段缺失时由管理员补充。
 type DiscoveredModel struct {
-	ModelKey    string `json:"model_key"`
-	DisplayName string `json:"display_name"`
+	ModelKey       string        `json:"model_key"`
+	DisplayName    string        `json:"display_name"`
+	ContextLimit   *int          `json:"context_limit,omitempty"`
+	OutputLimit    *int          `json:"output_limit,omitempty"`
+	SupportsTools  *bool         `json:"supports_tools,omitempty"`
+	SupportsVision *bool         `json:"supports_vision,omitempty"`
+	Metadata       ModelMetadata `json:"metadata"`
 }
 
 // Discoverer 通过受控出口读取供应商模型列表；实现不得跟随跳转或回传上游响应正文。
@@ -20,7 +24,7 @@ type Discoverer interface {
 	Discover(context.Context, string, string, []byte) ([]DiscoveredModel, error)
 }
 
-// ListRemoteModels 读取指定供应商当前可用的模型标识，供管理员挑选后登记到目录。
+// ListRemoteModels 读取指定供应商当前可用的模型标识和规格，供管理员挑选后登记到目录。
 // 该操作只读，不改变目录；登记仍走 CreateModel 的能力与上限校验。
 // 使用该供应商最新未撤销的凭据；没有可用凭据时明确拒绝，而不是返回空列表。
 func (service *Service) ListRemoteModels(ctx context.Context, actor identity.Principal, providerID string) ([]DiscoveredModel, error) {
@@ -50,7 +54,7 @@ func (service *Service) ListRemoteModels(ctx context.Context, actor identity.Pri
 		if err != nil {
 			return err
 		}
-		credential, err = service.decrypt(ctx, transaction, Version{ProviderID: providerID, CredentialID: &credentialID})
+		credential, err = service.decrypt(ctx, transaction, Candidate{ProviderID: providerID, CredentialID: &credentialID})
 		return err
 	})
 	if err != nil {

@@ -20,7 +20,7 @@ import release_bundle as release
 
 def make_payload(directory):
     binaries = release.binary_paths()
-    paths = release.required_paths() | {"admin/assets/index-test.js", "admin/assets/index-test.css"}
+    paths = release.required_paths()
     for name in paths:
         path = directory / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -30,8 +30,6 @@ def make_payload(directory):
             header[:7] = b"\x7fELF\x02\x01\x01"
             struct.pack_into("<HH", header, 16, 2, {"amd64": 62, "arm64": 183}[binaries[name]])
             content = bytes(header)
-        if name == "admin/index.html":
-            content = b'<script src="/admin/assets/index-test.js"></script>'
         path.write_bytes(content)
 
 
@@ -40,6 +38,10 @@ def make_source(directory):
         (directory / name).mkdir(parents=True)
     for name in ("server/go.mod", "server/go.sum", "server/Makefile", "admin/package.json", "ui/theme.css"):
         (directory / name).write_text("source fixture")
+    for name in release.SHARED_ASSETS:
+        target = directory / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"shared asset fixture")
 
 
 def archive_entries(payload, manifest):
@@ -76,6 +78,13 @@ class ReleaseBundleTest(unittest.TestCase):
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             self.assertEqual(release.verify_archive(path, digest), self.manifest)
         self.assertEqual(paths[0].read_bytes(), paths[1].read_bytes())
+        self.assertFalse(any(name.endswith("/bin/tomdb") for name in self.manifest["files"]))
+        self.assertEqual(set(release.HOST_PROGRAMS), {"tomd", "tomnode"})
+        self.assertFalse(any(name.startswith("admin/") for name in self.manifest["files"]))
+        self.assertEqual({name for name in self.manifest["files"] if name.startswith("deploy/systemd/")},
+                         {"deploy/systemd/tombot-node.service"})
+        for obsolete in ("tomdeploy-config", "tomdeploy-check", "tomdocker-bootstrap", "tomimage-prepare"):
+            self.assertFalse(any(name.endswith("/bin/" + obsolete) for name in self.manifest["files"]))
         self.assertEqual({path.name for path in self.directory.iterdir()}, {"payload", "one.tar.gz", "two.tar.gz"})
         with self.assertRaises(release.ReleaseError):
             release.verify_archive(paths[0], "0" * 64)
@@ -84,14 +93,13 @@ class ReleaseBundleTest(unittest.TestCase):
         with self.assertRaises(OSError):
             release.verify_archive(link, digest)
 
-    def test_required_host_programs_image_context_and_frontend_cannot_be_missing(self):
-        for name in ("linux-amd64/bin/tomd", "linux-arm64/bin/tomnode", "admin/index.html",
+    def test_required_host_programs_and_image_context_cannot_be_missing(self):
+        for name in ("linux-amd64/bin/tomd", "linux-arm64/bin/tomnode",
                      "linux-arm64/computer-image/bin/bot-agent", "linux-amd64/computer-image/Dockerfile",
                      "linux-arm64/computer-image/desktop-environment.json", "deploy/tomd.service",
-                     "linux-amd64/bin/tomdeploy-check", "linux-arm64/bin/tomdeploy-check",
-                     "linux-amd64/bin/tomdeploy-config", "linux-arm64/bin/tomdeploy-config",
-                     "deploy/CONFIGURE.md",
-                     "deploy/systemd/tombot-deployment-check.service"):
+                     "linux-amd64/bin/tomnode", "linux-arm64/bin/tomnode",
+                     "deploy/CONFIGURE.md", "deploy/NODE.md", "deploy/SERVER.md", "deploy/node-install.example.json",
+                     "deploy/systemd/tombot-node.service"):
             with self.subTest(name=name):
                 manifest = copy.deepcopy(self.manifest)
                 del manifest["files"][name]
@@ -99,14 +107,14 @@ class ReleaseBundleTest(unittest.TestCase):
                     release.validate_manifest(manifest)
 
     def test_manifest_rejects_invalid_shapes_limits_and_paths(self):
-        for scenario in ("version", "old-format", "platforms", "source", "extra", "boolean-size", "large-file", "mode", "digest", "traversal", "no-assets", "admin-limit"):
+        for scenario in ("version", "old-format", "platforms", "source", "extra", "boolean-size", "large-file", "mode", "digest", "traversal", "external-admin"):
             with self.subTest(scenario=scenario):
                 manifest = copy.deepcopy(self.manifest)
                 file = manifest["files"]["README.md"]
                 if scenario == "version":
                     manifest["version"] = "latest"
                 elif scenario == "old-format":
-                    manifest["format_version"] = 2
+                    manifest["format_version"] = 4
                 elif scenario == "platforms":
                     manifest["platforms"] = ["linux/arm64"]
                 elif scenario == "source":
@@ -123,15 +131,13 @@ class ReleaseBundleTest(unittest.TestCase):
                     file["sha256"] = "invalid"
                 elif scenario == "traversal":
                     manifest["files"]["../outside"] = file
-                elif scenario == "no-assets":
-                    manifest["files"] = {key: value for key, value in manifest["files"].items() if not key.startswith("admin/assets/")}
-                elif scenario == "admin-limit":
-                    manifest["files"]["admin/index.html"]["size"] = (64 << 10) + 1
+                elif scenario == "external-admin":
+                    manifest["files"]["admin/index.html"] = file
                 with self.assertRaises(release.ReleaseError):
                     release.validate_manifest(manifest)
 
     def test_archive_rejects_extra_duplicate_missing_and_changed_contents(self):
-        for scenario in ("extra", "duplicate", "missing", "content", "duplicate-json", "wrong-arch", "wrong-admin-base"):
+        for scenario in ("extra", "duplicate", "missing", "content", "duplicate-json", "wrong-arch"):
             with self.subTest(scenario=scenario):
                 manifest = copy.deepcopy(self.manifest)
                 entries = archive_entries(self.payload, manifest)
@@ -146,10 +152,10 @@ class ReleaseBundleTest(unittest.TestCase):
                     entries[-1] = name, content[:-1] + bytes([content[-1] ^ 1]), mode
                 elif scenario == "duplicate-json":
                     name, content, mode = entries[0]
-                    entries[0] = name, b'{"format_version":3,' + content[1:], mode
+                    entries[0] = name, b'{"format_version":5,' + content[1:], mode
                 else:
-                    name = "linux-arm64/bin/tomd" if scenario == "wrong-arch" else "admin/index.html"
-                    content = (self.payload / "linux-amd64/bin/tomd").read_bytes() if scenario == "wrong-arch" else b'<script src="/assets/index-test.js"></script>'
+                    name = "linux-arm64/bin/tomd"
+                    content = (self.payload / "linux-amd64/bin/tomd").read_bytes()
                     manifest["files"][name]["sha256"] = hashlib.sha256(content).hexdigest()
                     manifest["files"][name]["size"] = len(content)
                     entries = archive_entries(self.payload, manifest)
@@ -202,16 +208,37 @@ class ReleaseBundleTest(unittest.TestCase):
         source, snapshot = self.directory / "source", self.directory / "snapshot"
         make_source(source)
         (source / "admin/.env").write_text("excluded fixture")
+        (source / "server/web/admin/bundle/dist").mkdir(parents=True)
+        (source / "server/web/admin/bundle/dist/stale.js").write_text("stale embedded build")
         (source / "admin/dist").mkdir()
         (source / "admin/dist/old.txt").write_text("stale build")
         digest = release.snapshot_sources(source, snapshot)
         self.assertFalse((snapshot / "admin/.env").exists())
         self.assertFalse((snapshot / "admin/dist").exists())
+        self.assertFalse((snapshot / "server/web/admin/bundle/dist").exists())
         self.assertEqual(release.snapshot_sources(snapshot), digest)
+        for name in release.SHARED_ASSETS:
+            self.assertEqual((snapshot / name).read_bytes(), b"shared asset fixture")
         (source / "ui/theme.css").write_text("updated source")
         self.assertNotEqual(release.snapshot_sources(source), digest)
         self.assertEqual((snapshot / "ui/theme.css").read_text(), "source fixture")
         (source / "ui/linked.css").symlink_to(source / "ui/theme.css")
+        with self.assertRaises(OSError):
+            release.snapshot_sources(source)
+
+    def test_shared_frontend_asset_is_required_and_part_of_snapshot_digest(self):
+        source = self.directory / "source"
+        make_source(source)
+        path = source / release.SHARED_ASSETS[0]
+        digest = release.snapshot_sources(source)
+        path.write_bytes(b"changed asset fixture")
+        self.assertNotEqual(release.snapshot_sources(source), digest)
+        path.unlink()
+        with self.assertRaises(release.ReleaseError):
+            release.snapshot_sources(source)
+        target = source / "shared.png"
+        target.write_bytes(b"linked asset fixture")
+        path.symlink_to(target)
         with self.assertRaises(OSError):
             release.snapshot_sources(source)
 
@@ -250,6 +277,36 @@ class ReleaseBundleTest(unittest.TestCase):
                 with patch.object(release, "compile_artifacts", side_effect=compile_snapshot), self.assertRaises(release.ReleaseError):
                     release.build_release(source, output, "0.2.0-test")
                 self.assertFalse(output.exists())
+
+    def test_embedded_admin_build_boundaries_and_current_binary(self):
+        distribution = self.directory / "dist"
+        (distribution / "assets").mkdir(parents=True)
+        index = b'<script src="/admin/assets/current.js"></script>'
+        script = b'document.title="current-build"'
+        (distribution / "index.html").write_bytes(index)
+        (distribution / "assets/current.js").write_bytes(script)
+        assets = release.read_admin_build(distribution)
+        binary = self.directory / "tomd"
+        binary.write_bytes(b"binary fixture" + index + script)
+        release.validate_embedded_admin(binary, assets)
+        binary.write_bytes(b"old binary" + index)
+        with self.assertRaises(release.ReleaseError):
+            release.validate_embedded_admin(binary, assets)
+        for content in (b"wrong base", b"x" * ((64 << 10) + 1)):
+            (distribution / "index.html").write_bytes(content)
+            with self.assertRaises(release.ReleaseError):
+                release.read_admin_build(distribution)
+        (distribution / "index.html").write_bytes(index)
+        for content in (b"", b"x" * ((8 << 20) + 1)):
+            (distribution / "assets/current.js").write_bytes(content)
+            with self.assertRaises(release.ReleaseError):
+                release.read_admin_build(distribution)
+        (distribution / "assets/current.js").unlink()
+        with self.assertRaises(release.ReleaseError):
+            release.read_admin_build(distribution)
+        (distribution / "assets/current.js").symlink_to(binary)
+        with self.assertRaises(OSError):
+            release.read_admin_build(distribution)
 
     def test_tool_failure_and_timeout_are_explicit(self):
         with contextlib.redirect_stdout(io.StringIO()):

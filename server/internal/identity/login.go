@@ -126,6 +126,11 @@ func (service *Service) Login(ctx context.Context, request LoginRequest, attempt
 }
 
 func (service *Service) issueTokens(ctx context.Context, transaction *sql.Tx, subject subject, session *Session, now time.Time) error {
+	// 登录与续期均读取当前账户展示信息，页面不从可变列表或登录输入推断身份。
+	if err := transaction.QueryRowContext(ctx, subject.render(`SELECT username,display_name FROM {accounts} WHERE id=$1`), session.Principal.UserID).Scan(&session.Principal.Username, &session.Principal.DisplayName); err != nil {
+		return err
+	}
+
 	access, err := secure.Token()
 	if err != nil {
 		return err

@@ -75,7 +75,17 @@ func (stub *identityStub) Authenticate(ctx context.Context, token, scope string)
 	}
 	principal := stub.session.Principal
 	principal.Scope = scope
+	principal.AccessExpiresAt = stub.session.AccessExpiresAt
+	principal.ExpiresAt = stub.session.ExpiresAt
 	return principal, stub.err
+}
+func (stub *identityStub) ValidateRefresh(ctx context.Context, token, scope string) error {
+	stub.record("validate-refresh", ctx, identity.Attempt{})
+	stub.scope = scope
+	if token != string(stub.session.RefreshToken) {
+		return identity.ErrInvalidSession
+	}
+	return stub.err
 }
 func (stub *identityStub) Logout(ctx context.Context, principal identity.Principal, requestID string) error {
 	stub.record("logout", ctx, identity.Attempt{RequestID: requestID})

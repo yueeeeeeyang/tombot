@@ -24,7 +24,7 @@ func TestServiceHost(t *testing.T) {
 func TestLegacyCommandsRejected(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, command := range []string{"doctor", "backup", "restore", "unknown"} {
-		if err := run(t.Context(), logger, []string{command}, ""); err == nil || !strings.Contains(err.Error(), "不接受子命令") {
+		if err := run(t.Context(), logger, []string{command}, ""); err == nil || !strings.Contains(err.Error(), "未知子命令") {
 			t.Fatalf("旧命令 %s 未明确拒绝: %v", command, err)
 		}
 	}

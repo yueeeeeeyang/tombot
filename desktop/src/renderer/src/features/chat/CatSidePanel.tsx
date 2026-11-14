@@ -1,7 +1,7 @@
 import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
-import { Select, type SelectOption } from '../../components/Select'
+import { Select, type SelectOption } from '../../../../../../ui/Select'
 import { catModelOptions } from '../models/catalog'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'

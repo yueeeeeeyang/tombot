@@ -101,3 +101,6 @@ func ubuntuRelease(encoded []byte) error {
 func repositorySource(architecture string) string {
 	return "Types: deb\nURIs: https://download.docker.com/linux/ubuntu\nSuites: noble\nComponents: stable\nArchitectures: " + architecture + "\nSigned-By: /etc/apt/keyrings/tombot-docker.asc\n"
 }
+
+// ValidateHostRelease 供安装向导在修改宿主前复用正式发行版校验。
+func ValidateHostRelease(encoded []byte) error { return ubuntuRelease(encoded) }

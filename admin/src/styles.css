@@ -1,5 +1,6 @@
 @import '../../ui/theme.css';
 @import '../../ui/controls.css';
+@import '../../ui/select.css';
 
 :root {
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -18,7 +19,6 @@ body {
 }
 button,
 input,
-select,
 textarea {
   font: inherit;
 }
@@ -27,6 +27,8 @@ button {
   color: inherit;
   transition: background 150ms;
 }
+/* 目录重载时仍保留焦点，点击由加载状态拦截。 */
+button[aria-disabled='true'],
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
@@ -34,7 +36,6 @@ button:disabled {
 button:focus-visible,
 a:focus-visible,
 input:focus-visible,
-select:focus-visible,
 textarea:focus-visible {
   outline: 2px solid var(--text-secondary);
   outline-offset: 3px;
@@ -92,7 +93,12 @@ small {
   font-weight: 400;
   margin-top: 2px;
 }
-nav button {
+.brand-avatar {
+  flex-shrink: 0;
+  object-fit: contain;
+}
+nav a {
+  text-decoration: none;
   width: 100%;
   border: 0;
   background: transparent;
@@ -105,10 +111,10 @@ nav button {
   color: var(--text-secondary);
   margin-bottom: 5px;
 }
-nav button:hover {
+nav a:hover {
   background: var(--hover);
 }
-nav button[aria-current='page'] {
+nav a[aria-current='page'] {
   background: var(--selected);
   color: var(--text);
   font-weight: 550;
@@ -223,6 +229,7 @@ tbody tr:last-child td {
   background: var(--hover);
 }
 .text-button {
+  text-decoration: none;
   background: transparent;
   border: 0;
   padding: 5px 7px;
@@ -245,6 +252,10 @@ tbody tr:last-child td {
 }
 .pagination > span {
   margin-right: auto;
+}
+.pagination--empty {
+  border-top: 0;
+  padding: 0;
 }
 .pagination button {
   width: auto;
@@ -327,9 +338,7 @@ tbody tr:last-child td {
 }
 .brand-icon {
   display: inline-flex;
-  padding: 13px;
-  background: var(--surface-muted);
-  border-radius: 14px;
+  margin-bottom: 4px;
 }
 .description {
   color: var(--muted);
@@ -371,11 +380,11 @@ tbody tr:last-child td {
   color: var(--muted);
   font-size: 12px;
 }
-.theme-picker select {
+.theme-picker .select-trigger {
   background: transparent;
   color: inherit;
   border: 0;
-  padding: 5px;
+  padding: 6px 8px;
   border-radius: 6px;
   font-size: 12px;
 }
@@ -410,31 +419,6 @@ tbody tr:last-child td {
   border-bottom-color: var(--accent, currentColor);
   font-weight: 600;
 }
-.remote-models {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 4px 2px 12px;
-}
-.remote-model {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  font-size: 13px;
-}
-.remote-model span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.remote-model small {
-  color: var(--text-secondary);
-}
 .dialog-heading {
   display: flex;
   align-items: center;
@@ -453,10 +437,18 @@ tbody tr:last-child td {
   gap: 12px;
   margin-top: 24px;
 }
-.dialog-actions > button {
+.dialog-actions > .primary-button,
+.dialog-actions > .secondary-button {
   width: auto;
   min-width: 96px;
   white-space: nowrap;
+  text-decoration: none;
+}
+.enrollment-token {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  resize: none;
 }
 .notice {
   padding: 12px 16px;
@@ -562,11 +554,462 @@ section + section {
 
 .field,
 .field input,
-.field select,
 .field textarea {
   min-width: 0;
 }
 .dialog {
   --dialog-padding: 24px;
   --dialog-width: min(520px, calc(100vw - 32px));
+}
+
+.model-import-dialog {
+  --dialog-width: min(600px, calc(100vw - 32px));
+}
+.model-import-list {
+  display: grid;
+  gap: 10px;
+  max-height: min(62dvh, 600px);
+  overflow-y: auto;
+  padding: 3px;
+  scrollbar-width: thin;
+}
+.model-import-card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  min-width: 0;
+  background: var(--surface);
+}
+.model-import-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 16px;
+}
+.model-import-header > input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--text);
+}
+.model-import-toggle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding: 16px 0;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  text-align: left;
+}
+.model-import-toggle > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.model-import-toggle strong,
+.model-import-toggle small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.model-import-toggle strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+.model-import-toggle small {
+  margin-top: 2px;
+}
+.model-import-toggle > svg {
+  flex-shrink: 0;
+  color: var(--muted);
+  transition: transform 150ms;
+}
+.model-import-toggle[aria-expanded='true'] > svg {
+  transform: rotate(180deg);
+}
+.model-import-toggle:hover {
+  color: var(--text-secondary);
+}
+.model-import-details {
+  border-top: 1px solid var(--border);
+  padding: 18px 20px;
+}
+.model-import-media {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 0 0 20px;
+}
+.model-import-media dt {
+  margin: 0;
+}
+.model-import-media dd {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+.model-import-card .form-grid {
+  margin-bottom: 0;
+  gap: 18px;
+}
+.model-import-note {
+  color: var(--muted);
+  font-size: 11px;
+  margin: 18px 0 0;
+}
+.form-select {
+  position: relative;
+  min-width: 0;
+}
+.field .select-trigger {
+  min-height: 38px;
+  padding: 9px 10px;
+  background: var(--surface-muted);
+}
+.field .select-trigger:hover:not(:disabled),
+.field .select-trigger[aria-expanded='true'] {
+  background: var(--hover);
+}
+/* 保留表单值和约束校验，焦点及错误提示由可见的自绘控件承接。 */
+.field .select-form-value,
+.select-form-value {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  border: 0;
+}
+.field-error {
+  display: block;
+  color: var(--error-text);
+  margin-top: 6px;
+}
+.select-trigger[aria-invalid='true'] {
+  border-color: var(--error-border);
+}
+@media (max-width: 420px) {
+  .model-import-dialog {
+    --dialog-padding: 20px 16px;
+  }
+  .model-import-details {
+    padding: 16px;
+  }
+  .model-import-header {
+    padding: 0 12px;
+    gap: 10px;
+  }
+  .model-import-card .field-pair {
+    gap: 12px;
+  }
+}
+
+.account-control {
+  position: relative;
+  min-width: 0;
+}
+.account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+  color: var(--text);
+}
+.account-trigger:hover,
+.account-trigger[aria-expanded='true'] {
+  background: var(--surface-muted);
+}
+.account-trigger img,
+.account-trigger > svg {
+  flex-shrink: 0;
+}
+.account-identity {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 3px;
+}
+.account-identity strong,
+.account-identity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-identity strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+.account-identity small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.account-chevron-open {
+  transform: rotate(180deg);
+}
+.account-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  min-width: 180px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 12%);
+  z-index: 20;
+}
+.account-menu-label {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.account-menu button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  font-size: 12px;
+}
+.account-menu button span {
+  flex: 1;
+}
+.account-menu button:hover,
+.account-menu button:focus-visible {
+  background: var(--surface-muted);
+}
+.account-menu-divider {
+  margin: 5px 4px;
+  height: 1px;
+  background: var(--border);
+}
+
+.policy-editor {
+  display: grid;
+  gap: 16px;
+}
+.policy-editor .description,
+.policy-editor .field-hint {
+  margin: 0;
+}
+.policy-candidates-heading,
+.policy-candidate-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.policy-candidates-heading {
+  justify-content: space-between;
+}
+.policy-candidates-heading span,
+.policy-candidate-heading small {
+  color: var(--muted);
+}
+.policy-candidate {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.policy-candidate-heading > div {
+  flex: 1;
+  min-width: 0;
+}
+.policy-candidate-heading strong,
+.policy-candidate-heading small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.policy-candidate-heading small {
+  margin-top: 4px;
+}
+.policy-candidate-order {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.policy-candidate-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.policy-overrides {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.policy-overrides summary,
+.policy-version-candidates summary {
+  cursor: pointer;
+  font-size: 13px;
+}
+.policy-overrides summary span {
+  color: var(--muted);
+  margin-left: 8px;
+}
+.policy-overrides .form-grid {
+  margin-top: 12px;
+}
+.policy-picker {
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+.policy-picker-pages {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.policy-add-model {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 0.65fr) auto;
+  align-items: end;
+  gap: 12px;
+}
+.policy-add-model > .field {
+  min-width: 0;
+}
+.policy-add-model > button {
+  width: auto;
+  white-space: nowrap;
+  margin-bottom: 0;
+}
+.policy-disabled-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.policy-disabled-notice p {
+  margin: 4px 0 0;
+}
+.policy-disabled-notice > button {
+  width: auto;
+  white-space: nowrap;
+}
+.policy-version-candidates > div {
+  padding: 10px 0;
+}
+
+/* 多候选表单只滚动内容区，标题与保存操作保持可见。 */
+.policy-dialog[open] {
+  width: min(720px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.policy-dialog .dialog-heading {
+  flex-shrink: 0;
+}
+.policy-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+.policy-editor-body {
+  display: grid;
+  gap: 16px;
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+.policy-editor .dialog-actions {
+  flex-shrink: 0;
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.policy-candidate {
+  margin: 0;
+}
+.policy-candidate .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 0;
+  gap: 12px;
+}
+.policy-editor .field-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.policy-overrides .field:last-child {
+  grid-column: 1 / -1;
+}
+@media (max-width: 520px) {
+  .policy-dialog[open] {
+    padding: 18px;
+  }
+  .policy-candidate {
+    padding: 12px;
+  }
+  .policy-overrides .form-grid {
+    grid-template-columns: 1fr;
+  }
+  .policy-add-model {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .policy-add-model > button {
+    justify-self: end;
+  }
+}
+
+.messages {
+  position: fixed;
+  inset: 24px 0 auto;
+  margin: 0 auto;
+  padding: 0;
+  width: min(440px, calc(100vw - 32px));
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: var(--text);
+  pointer-events: none;
+}
+.message {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 16%);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.message svg {
+  flex-shrink: 0;
+  color: var(--text-secondary);
 }

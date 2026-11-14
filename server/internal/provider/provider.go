@@ -10,12 +10,28 @@ import (
 type Provider interface {
 	Stream(context.Context, Request, func(Event) error) (Usage, error)
 }
+
+// GenerationPath 返回受支持协议的生成端点；未知协议返回空串，不能隐式退回其他协议。
+func GenerationPath(protocol string) string {
+	switch protocol {
+	case "openai_compat":
+		return "/chat/completions"
+	case "anthropic":
+		return "/messages"
+	case "responses":
+		return "/responses"
+	default:
+		return ""
+	}
+}
+
 type Request struct {
-	Model      domain.Model
-	System     string
-	Messages   []Message
-	Tools      []ToolSchema
-	ToolChoice string
+	Model           domain.Model
+	System          string
+	Messages        []Message
+	Tools           []ToolSchema
+	ToolChoice      string
+	ReasoningEffort string
 }
 type Message struct {
 	Role   string
@@ -44,7 +60,7 @@ type Usage struct {
 }
 
 // ReportedUsage 仅保留上游明确返回的计数；缺失字段为 nil，不用估值或零填充。
-// OpenAI 兼容协议的输入包含缓存，Anthropic 输入计数不包含缓存，结算方必须按该标记解释。
+// Chat Completions 与 Responses 输入包含缓存，Anthropic 输入不包含缓存，结算方必须按该标记解释。
 type ReportedUsage struct {
 	InputTokens        *int `json:"input_tokens"`
 	OutputTokens       *int `json:"output_tokens"`

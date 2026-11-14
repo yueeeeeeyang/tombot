@@ -1,74 +1,27 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import {
-  Bot,
-  Users,
-  Boxes,
-  SlidersHorizontal,
-  Server,
-  ShieldCheck,
-  LogOut,
-  Menu,
-  SunMoon,
-} from 'lucide-react'
+import { BrowserRouter, Link, NavLink, Navigate, Route, Routes } from 'react-router'
+import { Users, Boxes, SlidersHorizontal, Server, ShieldCheck, Menu } from 'lucide-react'
+import { ThemePicker } from './components/ThemePicker'
+import { AccountMenu } from './components/AccountMenu'
 import { AdminClient, ApiError, errorMessage } from './api/client'
 import { Alert, Dialog, Field } from './components'
 import { UsersPage } from './users/UsersPage'
 import { AdministratorsPage } from './users/AdministratorsPage'
 import { NodesPage } from './users/NodesPage'
-import { ModelsPage, PoliciesPage } from './models/ModelsPage'
+import { ModelsPage, PoliciesPage, ProviderPage, PolicyPage } from './models/ModelsPage'
 import { AdminSetup } from './auth/AdminSetup'
+import { Messages } from './components/Messages'
+import { BrandAvatar } from './components/BrandAvatar'
 
-type Theme = 'system' | 'light' | 'dark'
-function readTheme(): Theme {
-  try {
-    const value = localStorage.getItem('tombot-admin-theme')
-    return value === 'light' || value === 'dark' ? value : 'system'
-  } catch {
-    return 'system'
-  }
-}
-function ThemePicker() {
-  const [theme, setTheme] = useState<Theme>(readTheme)
-  const [storageError, setStorageError] = useState(false)
-  useEffect(() => {
-    const preference = matchMedia('(prefers-color-scheme: dark)')
-    const apply = () => {
-      document.documentElement.dataset.theme =
-        theme === 'system' ? (preference.matches ? 'dark' : 'light') : theme
-    }
-    apply()
-    preference.addEventListener('change', apply)
-    return () => preference.removeEventListener('change', apply)
-  }, [theme])
+export function App({ client }: { client: AdminClient }) {
   return (
-    <div className="theme-picker">
-      <SunMoon size={16} />
-      <label>
-        <span className="sr-only">外观</span>
-        <select
-          value={theme}
-          onChange={(event) => {
-            const value = event.target.value as Theme
-            setTheme(value)
-            try {
-              localStorage.setItem('tombot-admin-theme', value)
-              setStorageError(false)
-            } catch {
-              setStorageError(true)
-            }
-          }}
-        >
-          <option value="system">跟随系统</option>
-          <option value="light">浅色</option>
-          <option value="dark">深色</option>
-        </select>
-      </label>
-      {storageError && <small role="status">外观仅在本次页面生效</small>}
-    </div>
+    <BrowserRouter basename="/admin">
+      <AdminSession client={client} />
+    </BrowserRouter>
   )
 }
 
-export function App({ client }: { client: AdminClient }) {
+function AdminSession({ client }: { client: AdminClient }) {
   const state = useSyncExternalStore(client.subscribe, client.snapshot)
   useEffect(() => {
     void client.restore()
@@ -134,7 +87,7 @@ function Login({ client }: { client: AdminClient }) {
     <main className="auth-shell">
       <div className="auth-card">
         <div className="brand-icon">
-          <Bot size={28} />
+          <BrandAvatar />
         </div>
         <h1>TomBot 管理平台</h1>
         <p className="description">管理用户、机器人模型和共享电脑。</p>
@@ -220,16 +173,19 @@ function Login({ client }: { client: AdminClient }) {
 }
 
 function Workspace({ client }: { client: AdminClient }) {
-  const [page, setPage] = useState<'users' | 'administrators' | 'nodes' | 'models' | 'policies'>(
-    'users',
-  )
   // 后台标签页的定时器可能被浏览器推迟，回到前台时按真实剩余时间重新排期。
   useEffect(() => {
     const resume = () => {
       if (document.visibilityState === 'visible') client.resumeSessionClock()
     }
     document.addEventListener('visibilitychange', resume)
-    return () => document.removeEventListener('visibilitychange', resume)
+    window.addEventListener('pageshow', resume)
+    window.addEventListener('online', resume)
+    return () => {
+      document.removeEventListener('visibilitychange', resume)
+      window.removeEventListener('pageshow', resume)
+      window.removeEventListener('online', resume)
+    }
   }, [client])
   const [menu, setMenu] = useState(false)
   const [isVerifying, setIsVerifying] = useState(false)
@@ -244,11 +200,17 @@ function Workspace({ client }: { client: AdminClient }) {
           setIsVerifying(true)
         }),
     )
-    return () => client.setVerifier(null)
+    return () => {
+      client.setVerifier(null)
+      const pending = verifier.current
+      verifier.current = null
+      pending?.reject(new ApiError('REQUEST_CANCELED', '管理会话已关闭'))
+    }
   }, [client])
   const [error, setError] = useState<unknown>()
   const [notice, setNotice] = useState('')
   const [busy, setBusy] = useState(false)
+  const authentication = useSyncExternalStore(client.subscribe, client.snapshot)
   async function sessionAction(action: () => Promise<void>, message: string) {
     setBusy(true)
     setError(undefined)
@@ -265,44 +227,35 @@ function Workspace({ client }: { client: AdminClient }) {
   const navigation = [
     { id: 'users', title: '用户', icon: Users },
     { id: 'administrators', title: '管理员', icon: ShieldCheck },
-    { id: 'nodes', title: '电脑节点', icon: Server },
-    { id: 'models', title: '模型供应商', icon: Boxes },
-    { id: 'policies', title: '模型策略', icon: SlidersHorizontal },
+    { id: 'computer-nodes', title: '电脑节点', icon: Server },
+    { id: 'model-providers', title: '模型供应商', icon: Boxes },
+    { id: 'model-policies', title: '模型策略', icon: SlidersHorizontal },
   ] as const
   return (
     <div className={`admin-shell ${menu ? 'navigation-open' : ''}`}>
       <aside className="navigation">
-        <a className="brand" href="/admin/">
-          <Bot size={24} />
+        <Link className="brand" to="/users" onClick={() => setMenu(false)}>
+          <BrandAvatar size={40} />
           <span>
             TomBot<small>管理平台</small>
           </span>
-        </a>
+        </Link>
         <nav aria-label="管理导航">
           {navigation.map(({ id, title, icon: Icon }) => (
-            <button
-              key={id}
-              aria-current={page === id ? 'page' : undefined}
-              onClick={() => {
-                setPage(id)
-                setMenu(false)
-              }}
-            >
+            <NavLink key={id} to={`/${id}`} onClick={() => setMenu(false)}>
               <Icon size={18} />
               {title}
-            </button>
+            </NavLink>
           ))}
         </nav>
         <div className="navigation-footer">
-          <ThemePicker />
-          <button
-            className="text-button"
-            disabled={busy}
-            onClick={() => void sessionAction(() => client.logout(), '')}
-          >
-            <LogOut size={16} />
-            退出登录
-          </button>
+          {authentication.phase === 'authenticated' && (
+            <AccountMenu
+              principal={authentication.principal}
+              busy={busy}
+              onLogout={() => void sessionAction(() => client.logout(), '')}
+            />
+          )}
         </div>
       </aside>
       <div className="workspace">
@@ -317,24 +270,49 @@ function Workspace({ client }: { client: AdminClient }) {
             <Menu size={19} />
           </button>
           <Alert error={error} />
+          {authentication.phase === 'authenticated' && authentication.renewalError && (
+            <div className="alert" role="alert">
+              <p>{authentication.renewalError}</p>
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy}
+                onClick={() => void sessionAction(() => client.refresh(false), '会话已恢复')}
+              >
+                重新连接
+              </button>
+            </div>
+          )}
           {notice && (
             <p role="status" className="notice">
               {notice}
             </p>
           )}
-          {page === 'users' ? (
-            <UsersPage client={client} />
-          ) : page === 'administrators' ? (
-            <AdministratorsPage client={client} />
-          ) : page === 'nodes' ? (
-            <NodesPage client={client} />
-          ) : page === 'models' ? (
-            <ModelsPage client={client} />
-          ) : (
-            <PoliciesPage client={client} />
-          )}
+          <Routes>
+            <Route path="/" element={<Navigate to="/users" replace />} />
+            <Route path="/users" element={<UsersPage client={client} />} />
+            <Route path="/administrators" element={<AdministratorsPage client={client} />} />
+            <Route path="/computer-nodes" element={<NodesPage client={client} />} />
+            <Route path="/model-providers" element={<ModelsPage client={client} />} />
+            <Route path="/model-providers/:providerID" element={<ProviderPage client={client} />} />
+            <Route path="/model-policies" element={<PoliciesPage client={client} />} />
+            <Route
+              path="/model-policies/:policyID/versions"
+              element={<PolicyPage client={client} />}
+            />
+            <Route
+              path="*"
+              element={
+                <div className="empty-state">
+                  <h2>页面不存在</h2>
+                  <Link to="/users">返回用户目录</Link>
+                </div>
+              }
+            />
+          </Routes>
         </main>
       </div>
+      <Messages client={client} />
       {isVerifying && (
         <Verification
           client={client}
@@ -342,7 +320,7 @@ function Workspace({ client }: { client: AdminClient }) {
             const pending = verifier.current
             verifier.current = null
             setIsVerifying(false)
-            pending?.reject(new ApiError('VERIFICATION_CANCELED', '已取消身份验证，操作未执行'))
+            pending?.reject(new ApiError('VERIFICATION_CANCELED', '已取消授权，操作已终止'))
           }}
           onVerified={() => {
             const pending = verifier.current

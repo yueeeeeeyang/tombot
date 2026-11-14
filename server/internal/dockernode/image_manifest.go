@@ -23,6 +23,8 @@ type ImageManifest struct {
 	Platform           string `json:"platform"`
 	Socket             string `json:"docker_socket"`
 	StateDirectory     string `json:"state_directory"`
+	ArchiveFile        string `json:"archive_file,omitempty"`
+	ArchiveSHA256      string `json:"archive_sha256,omitempty"`
 	AuthenticationFile string `json:"authentication_file,omitempty"`
 	CallTimeoutSeconds int    `json:"call_timeout_seconds"`
 	TimeoutSeconds     int    `json:"timeout_seconds"`
@@ -38,7 +40,13 @@ func (manifest ImageManifest) validate() error {
 	if manifest.Version != 1 || computer.ValidateImageReference(manifest.Reference) != nil || manifest.Platform != "linux/amd64" && manifest.Platform != "linux/arm64" || manifest.CallTimeoutSeconds < 1 || manifest.CallTimeoutSeconds > 300 || manifest.TimeoutSeconds < 30 || manifest.TimeoutSeconds > 3600 || manifest.TimeoutSeconds < manifest.CallTimeoutSeconds {
 		return failure("image_manifest_invalid")
 	}
+	if (manifest.ArchiveFile == "") != (manifest.ArchiveSHA256 == "") || manifest.ArchiveFile != "" && (manifest.AuthenticationFile != "" || len(manifest.ArchiveSHA256) != 64 || strings.Trim(manifest.ArchiveSHA256, "0123456789abcdef") != "") {
+		return failure("image_archive_manifest_invalid")
+	}
 	paths := []string{manifest.Socket, manifest.StateDirectory}
+	if manifest.ArchiveFile != "" {
+		paths = append(paths, manifest.ArchiveFile)
+	}
 	if manifest.AuthenticationFile != "" {
 		paths = append(paths, manifest.AuthenticationFile)
 	}
@@ -85,7 +93,7 @@ func ParseImageManifest(encoded []byte) (ImageManifest, error) {
 	if len(encoded) == 0 || len(encoded) > 16<<10 {
 		return manifest, failure("image_manifest_size_invalid")
 	}
-	err := decodeImageFields(encoded, map[string]any{"version": &manifest.Version, "node_id": &manifest.NodeID, "image_id": &manifest.ImageID, "reference": &manifest.Reference, "platform": &manifest.Platform, "docker_socket": &manifest.Socket, "state_directory": &manifest.StateDirectory, "authentication_file": &manifest.AuthenticationFile, "call_timeout_seconds": &manifest.CallTimeoutSeconds, "timeout_seconds": &manifest.TimeoutSeconds})
+	err := decodeImageFields(encoded, map[string]any{"archive_file": &manifest.ArchiveFile, "archive_sha256": &manifest.ArchiveSHA256, "version": &manifest.Version, "node_id": &manifest.NodeID, "image_id": &manifest.ImageID, "reference": &manifest.Reference, "platform": &manifest.Platform, "docker_socket": &manifest.Socket, "state_directory": &manifest.StateDirectory, "authentication_file": &manifest.AuthenticationFile, "call_timeout_seconds": &manifest.CallTimeoutSeconds, "timeout_seconds": &manifest.TimeoutSeconds})
 	if err != nil {
 		return ImageManifest{}, err
 	}

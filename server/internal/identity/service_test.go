@@ -524,6 +524,46 @@ func TestIdentityIntegration(t *testing.T) {
 		requireError(t, err, ErrRateLimited)
 	})
 
+	t.Run("管理会话到期恢复与只读续期校验", func(t *testing.T) {
+		account := fixture.administrator(t)
+		request := LoginRequest{Username: account.username, Password: account.password, DeviceName: "续期测试浏览器", Platform: "web", Scope: "admin", Code: totpCode(account.secret, time.Now().Unix()/30)}
+		session, err := service.Login(ctx, request, attempt())
+		if err != nil {
+			t.Fatal(err)
+		}
+		principal, err := service.Authenticate(ctx, string(session.AccessToken), "admin")
+		if err != nil || !principal.AccessExpiresAt.Equal(session.AccessExpiresAt) || !principal.ExpiresAt.Equal(session.ExpiresAt) {
+			t.Fatal("查询会话丢失真实到期时间", err)
+		}
+		if principal.Username != account.username || principal.DisplayName != "测试管理员" || session.Principal.Username != account.username || session.Principal.DisplayName != "测试管理员" {
+			t.Fatal("登录或恢复会话缺少真实账户资料")
+		}
+		execute(t, pool, `UPDATE tombot.administrators SET display_name='已更新名称' WHERE id=$1`, account.id)
+		requireError(t, service.ValidateRefresh(ctx, string(session.AccessToken), "admin"), ErrInvalidSession)
+		requireError(t, service.ValidateRefresh(ctx, string(session.RefreshToken), "desktop"), ErrInvalidSession)
+		execute(t, pool, `UPDATE tombot.administrator_session_tokens SET created_at=clock_timestamp()-interval '2 hours',expires_at=clock_timestamp()-interval '1 hour' WHERE session_id=$1 AND kind='access'`, session.Principal.SessionID)
+		_, err = service.Authenticate(ctx, string(session.AccessToken), "admin")
+		requireError(t, err, ErrInvalidSession)
+		if err = service.ValidateRefresh(ctx, string(session.RefreshToken), "admin"); err != nil {
+			t.Fatal("访问凭据到期阻断续期校验", err)
+		}
+		rotated, err := service.Refresh(ctx, string(session.RefreshToken), "admin", attempt())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rotated.Principal.DisplayName != "已更新名称" || rotated.Principal.Username != account.username {
+			t.Fatal("续期未更新账户资料")
+		}
+		requireError(t, service.ValidateRefresh(ctx, string(session.RefreshToken), "admin"), ErrInvalidSession)
+		if err = service.ValidateRefresh(ctx, string(rotated.RefreshToken), "admin"); err != nil {
+			t.Fatal("只读旧值校验撤销了有效会话", err)
+		}
+		if err = service.Logout(ctx, rotated.Principal, ids.New()); err != nil {
+			t.Fatal(err)
+		}
+		requireError(t, service.ValidateRefresh(ctx, string(rotated.RefreshToken), "admin"), ErrInvalidSession)
+	})
+
 	t.Run("损坏凭据与错误密钥明确失败", func(t *testing.T) {
 		account := fixture.active(t)
 		execute(t, pool, `UPDATE tombot.user_credentials SET password_hash='invalid' WHERE user_id=$1`, account.id)

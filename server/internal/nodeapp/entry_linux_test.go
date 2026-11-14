@@ -369,7 +369,7 @@ func TestLinuxNodeBinaryNotifyAndSignal(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, executable)
+	command := exec.CommandContext(ctx, executable, "serve")
 	command.Env = []string{"PATH=/usr/bin:/bin", "TOM_NODE_CONFIG=" + f.path, "NOTIFY_SOCKET=" + notifyPath}
 	command.Stderr = os.Stderr
 	if err := command.Start(); err != nil {
@@ -438,7 +438,7 @@ func TestLinuxNodeBinaryRejectsBrowserRecoveryBeforeListening(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, executable)
+	command := exec.CommandContext(ctx, executable, "serve")
 	command.Env = []string{"PATH=/usr/bin:/bin", "TOM_NODE_CONFIG=" + f.path}
 	if err := command.Run(); err == nil || ctx.Err() != nil {
 		t.Fatal("浏览器恢复失败未及时退出", err)

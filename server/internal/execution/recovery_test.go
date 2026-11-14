@@ -177,6 +177,7 @@ func TestExecutionFailureBoundaries(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		fixture.routeBound(t, next)
 		operation, _, err := oneOperation.BeginOperation(ctx, next, operationRequest("model.1"))
 		if err != nil {
 			t.Fatal(err)

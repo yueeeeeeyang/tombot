@@ -166,6 +166,8 @@ describe('管理传输边界', () => {
         : failure('VERIFICATION_REQUIRED', '该操作需要重新验证管理身份', 403),
     )
     await fixture.client.restore()
+    const messages = vi.fn()
+    fixture.client.setMessenger(messages)
     let verifications = 0
     fixture.client.setVerifier(async () => {
       verifications++
@@ -178,32 +180,73 @@ describe('管理传输边界', () => {
       }),
     ).rejects.toMatchObject({ code: 'VERIFICATION_REQUIRED' })
     expect(verifications).toBe(1)
+    expect(messages).toHaveBeenCalledExactlyOnceWith({
+      tone: 'success',
+      text: '授权成功，正在继续操作',
+    })
     // 原请求被重放一次：总计两次业务请求加一次验证，不会无限循环。
     expect(fixture.calls.filter((call) => call.path === '/users')).toHaveLength(2)
     expect(fixture.calls.filter((call) => call.path === '/auth/verify')).toHaveLength(1)
   })
-  it('取消再验证时不重放，原操作明确失败', async () => {
+  it('取消再验证以消息提示终止，且不重放原操作', async () => {
     const fixture = makeClient(() =>
       failure('VERIFICATION_REQUIRED', '该操作需要重新验证管理身份', 403),
     )
     await fixture.client.restore()
+    const messages = vi.fn()
+    fixture.client.setMessenger(messages)
     fixture.client.setVerifier(async () => {
       throw new ApiError('VERIFICATION_CANCELED', '已取消身份验证，操作未执行')
     })
     await expect(
       fixture.client.request('/users', z.unknown(), { method: 'POST', body: {} }),
     ).rejects.toMatchObject({ code: 'VERIFICATION_CANCELED' })
+    expect(messages).toHaveBeenCalledExactlyOnceWith({
+      tone: 'info',
+      text: '已取消授权，操作已终止',
+    })
     expect(fixture.calls.filter((call) => call.path === '/users')).toHaveLength(1)
+  })
+
+  it('验证通过后先提示授权成功，业务响应成功后才提示操作成功', async () => {
+    let verified = false
+    let finish: (() => void) | undefined
+    const fixture = makeClient(() =>
+      verified
+        ? new Promise<Response>((resolve) => {
+            finish = () => resolve(empty())
+          })
+        : failure('VERIFICATION_REQUIRED', '需要验证', 403),
+    )
+    await fixture.client.restore()
+    const messages = vi.fn()
+    fixture.client.setMessenger(messages)
+    fixture.client.setVerifier(async () => {
+      verified = true
+    })
+    const pending = fixture.client.request('/users', z.undefined(), { method: 'POST', body: {} })
+    await vi.waitFor(() => expect(finish).toBeDefined())
+    expect(messages).toHaveBeenCalledExactlyOnceWith({
+      tone: 'success',
+      text: '授权成功，正在继续操作',
+    })
+    finish!()
+    await pending
+    expect(messages).toHaveBeenLastCalledWith({ tone: 'success', text: '操作成功' })
+    expect(messages).toHaveBeenCalledTimes(2)
+    expect(fixture.calls.filter((call) => call.path === '/users')).toHaveLength(2)
   })
   it('并发续期合并为一次，使用最新 CSRF，不重放业务写入', async () => {
     const fixture = makeClient(() => empty())
-    const request = vi.fn(async (_name: string, callback: () => Promise<void>) => callback())
+    const request = vi.fn(
+      async (_name: string, _options: LockOptions, callback: () => Promise<void>) => callback(),
+    )
     Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
     try {
       await fixture.client.restore()
       await Promise.all([fixture.client.refresh(), fixture.client.refresh()])
       expect(fixture.calls.filter((call) => call.path === '/auth/refresh')).toHaveLength(1)
-      expect(request).toHaveBeenCalledTimes(1)
+      expect(request).toHaveBeenCalledTimes(2)
     } finally {
       Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
     }

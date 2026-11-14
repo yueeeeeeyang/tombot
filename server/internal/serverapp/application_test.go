@@ -17,10 +17,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"io.yueyang/tom/internal/bots"
@@ -29,7 +29,22 @@ import (
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/testkit/pgtest"
+	adminweb "io.yueyang/tom/web/admin"
 )
+
+const testNodeID = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+
+func testAdminPage(t *testing.T) *adminweb.Handler {
+	t.Helper()
+	page, err := adminweb.New(fstest.MapFS{
+		"index.html":         {Data: []byte(`<html lang="zh-CN"><script src="/admin/assets/app-test.js"></script></html>`)},
+		"assets/app-test.js": {Data: []byte(`document.title="机器人管理";`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return page
+}
 
 func testLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
@@ -46,6 +61,7 @@ func prepareApplication(t *testing.T, cluster *pgtest.Cluster) (Config, *x509.Ce
 		clear(key)
 	}
 	pool, name := cluster.Database(t)
+	writeTestFile(t, configuration.Database.MigrationDSNFile, []byte(cluster.DSN(name, "test_owner")))
 	if err := postgres.Migrate(t.Context(), pool); err != nil {
 		t.Fatal(err)
 	}
@@ -54,11 +70,6 @@ func prepareApplication(t *testing.T, cluster *pgtest.Cluster) (Config, *x509.Ce
 		writeTestFile(t, path, []byte(cluster.DSN(name, login)))
 	}
 	writeNodeClientCertificate(t, configuration.Node)
-	if err := os.MkdirAll(filepath.Join(configuration.AdminDirectory, "assets"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	writeTestFile(t, filepath.Join(configuration.AdminDirectory, "index.html"), []byte(`<html lang="zh-CN"><script src="/admin/assets/app-test.js"></script></html>`))
-	writeTestFile(t, filepath.Join(configuration.AdminDirectory, "assets/app-test.js"), []byte(`document.title="机器人管理";`))
 	return configuration, roots, pool, name
 }
 
@@ -134,7 +145,7 @@ func TestApplicationIntegration(t *testing.T) {
 	cluster := pgtest.Start(t)
 	configuration, roots, pool, name := prepareApplication(t, cluster)
 	t.Run("真实组合与退出", func(t *testing.T) {
-		application, err := Open(t.Context(), configuration, testLogger())
+		application, err := Open(t.Context(), configuration, testAdminPage(t), testLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +193,7 @@ func TestApplicationIntegration(t *testing.T) {
 		if status != 400 {
 			t.Fatal("明文请求进入业务处理器")
 		}
-		verifyUserRoutes(t, running, pool, configuration.Node.ID)
+		verifyUserRoutes(t, running, pool, testNodeID)
 		if err := application.Close(); err == nil {
 			t.Fatal("在途服务允许关闭数据库")
 		}
@@ -215,7 +226,7 @@ func TestApplicationIntegration(t *testing.T) {
 		}
 		candidate.Database.DSNFiles[postgres.TenantRole] = filepath.Join(t.TempDir(), "invalid.connection")
 		writeTestFile(t, candidate.Database.DSNFiles[postgres.TenantRole], []byte(cluster.DSN(name, "test_owner")))
-		application, err := Open(t.Context(), candidate, testLogger())
+		application, err := Open(t.Context(), candidate, testAdminPage(t), testLogger())
 		if err == nil {
 			if closeErr := application.Close(); closeErr != nil {
 				t.Error(closeErr)
@@ -237,11 +248,11 @@ func TestApplicationIntegration(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	})
-	t.Run("领域配置错误和前端缺失拒绝启动", func(t *testing.T) {
-		for _, change := range []func(*Config){func(c *Config) { c.Computer.MaxWaiting = 0 }, func(c *Config) { c.Models.Origins = nil }, func(c *Config) { c.Node.ID = "invalid" }, func(c *Config) { c.AdminDirectory = filepath.Join(t.TempDir(), "absent") }} {
+	t.Run("领域配置错误拒绝启动", func(t *testing.T) {
+		for _, change := range []func(*Config){func(c *Config) { c.Computer.MaxWaiting = 0 }, func(c *Config) { c.Models.Concurrency = 0 }, func(c *Config) { c.Node.MaximumNodes = 0 }} {
 			candidate := configuration
 			change(&candidate)
-			application, err := Open(t.Context(), candidate, testLogger())
+			application, err := Open(t.Context(), candidate, testAdminPage(t), testLogger())
 			if err == nil {
 				if closeErr := application.Close(); closeErr != nil {
 					t.Error(closeErr)
@@ -251,7 +262,7 @@ func TestApplicationIntegration(t *testing.T) {
 		}
 	})
 	t.Run("数据库失联使就绪检查失败", func(t *testing.T) {
-		application, err := Open(t.Context(), configuration, testLogger())
+		application, err := Open(t.Context(), configuration, testAdminPage(t), testLogger())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -479,4 +490,11 @@ func writeNodeClientCertificate(t *testing.T, configuration NodeConfig) {
 	writeTestFile(t, configuration.PrivateKeyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
 	clear(private)
 	clear(encoded)
+}
+
+func TestMissingEmbeddedPageRejectsStartup(t *testing.T) {
+	application, err := Open(t.Context(), testConfig(t), nil, testLogger())
+	if application != nil || err == nil {
+		t.Fatal("未注入内置管理页面仍启动")
+	}
 }

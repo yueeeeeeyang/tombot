@@ -73,7 +73,6 @@
 .agent-form input,
 .agent-form textarea,
 .field input,
-.field select,
 .field textarea {
   width: 100%;
   padding: 9px 10px;

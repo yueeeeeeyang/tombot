@@ -1,7 +1,7 @@
 import { Settings, SlidersHorizontal, X } from 'lucide-react'
 import { ModelProviderFields } from './ModelProviderFields'
 import { Dialog } from '../../components/Dialog'
-import { Select } from '../../components/Select'
+import { Select } from '../../../../../../ui/Select'
 import { type SettingsDraft, type SettingsSection, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {

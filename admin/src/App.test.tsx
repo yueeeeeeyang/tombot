@@ -1,3 +1,4 @@
+import { chooseOption } from '../tests/select'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
@@ -47,6 +48,7 @@ describe('管理界面', () => {
     expect(await screen.findByText('用户 49')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '下一页' }))
     expect(await screen.findByText('暂无用户')).toBeInTheDocument()
+    expect(screen.queryByText(/本页 0 条/)).not.toBeInTheDocument()
     expect(screen.queryByText('用户 49')).not.toBeInTheDocument()
     expect(fixture.calls.at(-1)?.path).toContain('before=')
     await userEvent.click(screen.getByRole('button', { name: '返回首页' }))
@@ -77,8 +79,8 @@ describe('管理界面', () => {
     await user.click(await screen.findByRole('button', { name: '创建用户' }))
     await user.type(screen.getByLabelText('用户名'), 'new-user')
     await user.type(screen.getByLabelText('显示名称'), '新用户')
-    await user.selectOptions(screen.getByLabelText('电脑节点'), id(7))
-    await user.selectOptions(screen.getByLabelText('电脑镜像'), id(8))
+    await chooseOption(user, '电脑节点', /^节点/)
+    await chooseOption(user, '电脑镜像', /镜像/)
     await user.click(screen.getByRole('button', { name: '创建用户与电脑' }))
     expect(await screen.findByRole('dialog', { name: '用户创建进度' })).toHaveTextContent(
       '正在读取进度',
@@ -111,8 +113,8 @@ describe('管理界面', () => {
     await user.click(await screen.findByRole('button', { name: '创建用户' }))
     await user.type(screen.getByLabelText('用户名'), 'new-user')
     await user.type(screen.getByLabelText('显示名称'), '新用户')
-    await user.selectOptions(screen.getByLabelText('电脑节点'), id(7))
-    await user.selectOptions(screen.getByLabelText('电脑镜像'), id(8))
+    await chooseOption(user, '电脑节点', /^节点/)
+    await chooseOption(user, '电脑镜像', /镜像/)
     await user.click(screen.getByRole('button', { name: '创建用户与电脑' }))
     expect(await screen.findByText(/创建结果尚未确认/)).toBeInTheDocument()
     expect(bodies).toHaveLength(1)
@@ -138,7 +140,7 @@ describe('管理界面', () => {
     })
     const user = userEvent.setup()
     render(<App client={fixture.client} />)
-    await user.click(await screen.findByRole('button', { name: '模型供应商' }))
+    await user.click(await screen.findByRole('link', { name: '模型供应商' }))
     await user.click(await screen.findByRole('button', { name: '停用' }))
     await user.click(screen.getByRole('button', { name: '确认停用供应商' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('配置已被更新')
@@ -157,7 +159,8 @@ describe('管理界面', () => {
     })
     render(<App client={client} />)
     await screen.findByText('暂无用户')
-    await userEvent.selectOptions(screen.getByLabelText('外观'), 'dark')
+    await userEvent.click(screen.getByRole('button', { name: /^账户菜单/ }))
+    await userEvent.click(screen.getByRole('menuitemradio', { name: '深色' }))
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(localStorage.length).toBe(1)
     invalid = true

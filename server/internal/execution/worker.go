@@ -9,6 +9,7 @@ import (
 	"io.yueyang/tom/internal/botagent"
 	"io.yueyang/tom/internal/bots"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 )
 
 type ModelDirectory interface {
+	Route(context.Context, modelregistry.Selection, modelregistry.Requirements, string) (modelregistry.Selection, error)
 	Use(context.Context, modelregistry.Selection, func(context.Context, modelregistry.Configuration, []byte) error) error
 }
 type ModelCaller interface {
@@ -242,6 +244,8 @@ func failureCode(err error) string {
 		return "MODEL_CONCURRENCY_LIMIT"
 	case errors.Is(err, ErrOperationLimit), errors.Is(err, botagent.ErrOperationLimit):
 		return "OPERATION_LIMIT"
+	case errors.Is(err, modelregistry.ErrNoCandidate):
+		return "MODEL_NO_CANDIDATE"
 	case errors.Is(err, ErrContextLimit), errors.Is(err, botagent.ErrContextLimit):
 		return "CONTEXT_LIMIT"
 	case errors.Is(err, ErrUnavailable):
@@ -353,9 +357,16 @@ func (relay *workerRelay) Model(ctx context.Context, key string, input modelgate
 		return botagent.ModelOutput{}, ErrContextLimit
 	}
 	digest := sha256.Sum256(encoded)
-	if operation, exists := relay.previous[key]; exists {
+	// 恢复时按逻辑步骤复用任意候选的成功结果，不能因后续切换模型重放已完成步骤。
+	for step, operation := range relay.previous {
+		if step != key && !strings.HasPrefix(step, key+".") {
+			continue
+		}
 		if operation.Kind != "model" || !bytes.Equal(operation.RequestDigest, digest[:]) {
 			return botagent.ModelOutput{}, ErrConflict
+		}
+		if operation.Status == "failed" && operation.ErrorCode == "MODEL_ROUTE_RETRY" {
+			continue
 		}
 		if operation.Status == "failed" {
 			return botagent.ModelOutput{}, botagent.ErrModelOutput
@@ -369,16 +380,37 @@ func (relay *workerRelay) Model(ctx context.Context, key string, input modelgate
 		}
 		return output, nil
 	}
+	resolved, err := relay.worker.executor.ResolveScreenshots(ctx, relay.lease, input)
+	if err != nil {
+		return botagent.ModelOutput{}, err
+	}
+	if err = relay.routeModel(ctx, resolved, ""); err != nil {
+		return botagent.ModelOutput{}, err
+	}
+	failures := 0
 	for {
-		output, err := relay.worker.callModel(ctx, relay.lease, relay.session, relay.selection, key, digest[:], input, relay.allowed)
-		// 仅在原子预留明确未成功时等待名额；已发出的请求永不重试。
-		if !errors.Is(err, modelusage.ErrConcurrency) {
+		output, err := relay.worker.callModel(ctx, relay.lease, relay.session, relay.selection, key+"."+strings.ToLower(relay.selection.ModelID), digest[:], resolved, relay.allowed)
+		if errors.Is(err, modelusage.ErrConcurrency) {
+			if !waitPoll(ctx, relay.worker.options.PollInterval) {
+				return botagent.ModelOutput{}, context.Cause(ctx)
+			}
+			continue
+		}
+		if !errors.Is(err, errModelFailover) {
 			return output, err
 		}
-		if !waitPoll(ctx, relay.worker.options.PollInterval) {
+		failures++
+		if failures >= modelregistry.MaxCandidates {
+			return output, modelregistry.ErrNoCandidate
+		}
+		if !waitPoll(ctx, modelFailoverBackoff*time.Duration(min(failures, 5))) {
 			return botagent.ModelOutput{}, context.Cause(ctx)
 		}
+		if err = relay.routeModel(ctx, resolved, relay.selection.ModelID); err != nil {
+			return output, err
+		}
 	}
+
 }
 
 func (relay *workerRelay) Tool(ctx context.Context, key string, call botagent.ToolCall) (botagent.ToolResult, error) {
@@ -399,17 +431,15 @@ func (worker *Worker) callModel(ctx context.Context, lease Lease, session comput
 				return ErrUnavailable
 			}
 		}
-		resolved, err := worker.executor.ResolveScreenshots(callContext, lease, input)
-		if err != nil {
-			return err
-		}
-		input = resolved
 		operation, created, err := worker.executor.BeginOperation(callContext, lease, OperationRequest{StepKey: key, Kind: "model", RequestDigest: digest, Computer: &session, Model: &ModelCall{Configuration: configuration, Lifetime: worker.options.ModelTimeout + worker.options.RecordTimeout}})
 		if err != nil {
 			return err
 		}
 		if !created {
 			if operation.Status == "failed" {
+				if operation.ErrorCode == "MODEL_ROUTE_RETRY" {
+					return errModelFailover
+				}
 				return botagent.ErrModelOutput
 			}
 			if operation.Status != "succeeded" {
@@ -422,13 +452,17 @@ func (worker *Worker) callModel(ctx context.Context, lease Lease, session comput
 		}
 		bounded, stop := context.WithTimeout(callContext, worker.options.ModelTimeout)
 		collector := newCollector(allowed, worker.options.MaxOutputBytes, worker.options.MaxToolCalls)
-		response, callErr := worker.caller.Call(bounded, configuration, credential, input, collector.emit)
+		emitted := false
+		response, callErr := worker.caller.Call(bounded, configuration, credential, input, func(event provider.Event) error { emitted = true; return collector.emit(event) })
 		stop()
 		var outputErr error
 		output, outputErr = collector.result()
 		status, code := "succeeded", ""
 		if callErr != nil || !response.IsComplete {
 			status, code = "unknown", "MODEL_RESULT_UNKNOWN"
+			if response.CanFailover && !emitted && ctx.Err() == nil {
+				status, code = "failed", "MODEL_ROUTE_RETRY"
+			}
 		} else if outputErr != nil {
 			status, code = "failed", "MODEL_OUTPUT_INVALID"
 		}
@@ -456,6 +490,10 @@ func (worker *Worker) callModel(ctx context.Context, lease Lease, session comput
 			return ErrUncertain
 		}
 		if status == "failed" {
+			if code == "MODEL_ROUTE_RETRY" {
+				worker.logger.WarnContext(ctx, "模型调用未产生输出，准备切换备用候选", "user_id", lease.UserID, "run_id", lease.RunID, "model_id", selection.ModelID, "operation_id", operation.ID)
+				return errModelFailover
+			}
 			return botagent.ErrModelOutput
 		}
 		return nil

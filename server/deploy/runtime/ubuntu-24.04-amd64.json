@@ -1,0 +1,14 @@
+{
+  "engine_package_version": "5:29.9.3-1~ubuntu.24.04~noble",
+  "cli_package_version": "5:29.9.3-1~ubuntu.24.04~noble",
+  "containerd_package_version": "2.4.2-4~ubuntu.24.04~noble",
+  "e2fsprogs_package_version": "1.47.0-2.4~exp1ubuntu4.1",
+  "util_linux_package_version": "2.39.3-9ubuntu6.6",
+  "mount_package_version": "2.39.3-9ubuntu6.6",
+  "allowed_engine_versions": [
+    "29.9.3"
+  ],
+  "repository_fingerprint": "9DC858229FC7DD38854AE2D88D81803C0EBFCD88",
+  "timeout_seconds": 3600,
+  "minimum_free_bytes": 1073741824
+}

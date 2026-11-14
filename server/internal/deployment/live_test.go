@@ -43,17 +43,21 @@ func TestLiveDeploymentCheck(t *testing.T) {
 	value, paths, _ := fixtureConfiguration(t)
 	relocate := func(path string) string { return filepath.Join(base, strings.TrimPrefix(path, "/")) }
 	paths = Paths{Server: relocate(paths.Server), Node: relocate(paths.Node), Docker: relocate(paths.Docker), Image: relocate(paths.Image)}
-	value.server.AdminDirectory = relocate(value.server.AdminDirectory)
 	value.server.TLSCertificateFile = relocate(value.server.TLSCertificateFile)
 	value.server.TLSPrivateKeyFile = relocate(value.server.TLSPrivateKeyFile)
 	value.server.IdentityKeyFile = relocate(value.server.IdentityKeyFile)
 	value.server.CSRFKeyFile = relocate(value.server.CSRFKeyFile)
+	value.server.Node.CertificateFile = relocate(value.server.Node.CertificateFile)
+	value.server.Node.PrivateKeyFile = relocate(value.server.Node.PrivateKeyFile)
+	value.node.Control.CertificateFile = relocate(value.node.Control.CertificateFile)
+	value.node.Control.PrivateKeyFile = relocate(value.node.Control.PrivateKeyFile)
 	for name, path := range value.server.ModelKeyFiles {
 		value.server.ModelKeyFiles[name] = relocate(path)
 	}
 	for role, path := range value.server.Database.DSNFiles {
 		value.server.Database.DSNFiles[role] = relocate(path)
 	}
+	value.server.Database.MigrationDSNFile = relocate(value.server.Database.MigrationDSNFile)
 	value.image.Platform = "linux/" + runtime.GOARCH
 	fs := filesystem{base: "/", owner: 0}
 	materializeFixture(t, fs, value, paths, api)
@@ -105,24 +109,25 @@ func TestLiveConfigurationCommand(t *testing.T) {
 	})
 	request, _ := preparationFixture(t)
 	server := request["server"].(map[string]any)
-	server["admin_directory"] = filepath.Join(base, "admin")
 	server["tls_certificate_file"] = filepath.Join(base, "certificate.pem")
 	server["tls_private_key_file"] = filepath.Join(base, "private/tls.key")
 	server["identity_key_file"] = filepath.Join(base, "private/identity.key")
 	server["csrf_key_file"] = filepath.Join(base, "private/csrf.key")
+	server["node"] = map[string]any{"certificate_file": filepath.Join(base, "api-certificate.pem"), "private_key_file": filepath.Join(base, "private/api.key")}
+	request["node"] = map[string]any{"control_tls": map[string]any{"certificate_file": filepath.Join(base, "node-certificate.pem"), "private_key_file": filepath.Join(base, "private/node.key")}}
 	server["model_key_files"] = map[string]string{"current": filepath.Join(base, "private/model.key")}
 	connections := map[string]string{}
 	for _, role := range []string{"identity", "control", "tenant", "dispatch"} {
 		connections["tombot_"+role] = filepath.Join(base, "private/"+role+".connection")
 	}
-	server["database"] = map[string]any{"dsn_files": connections}
+	server["database"] = map[string]any{"dsn_files": connections, "migration_dsn_file": filepath.Join(base, "private/migration.connection")}
 	source, destination := filepath.Join(base, "request.json"), filepath.Join(base, "configuration")
 	if err := os.WriteFile(source, encodeFixture(t, request), 0600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, "/verification/tomdeploy-config")
+	command := exec.CommandContext(ctx, "/verification/tomnode", "configure")
 	command.Env = []string{"TOM_DEPLOYMENT_REQUEST=" + source, "TOM_DEPLOYMENT_OUTPUT=" + destination}
 	var output, diagnostics bytes.Buffer
 	command.Stdout, command.Stderr = &output, &diagnostics
@@ -151,15 +156,15 @@ func TestLiveConfigurationCommand(t *testing.T) {
 	if value.image, err = dockernode.ParseImageManifest(imageContent); err != nil {
 		t.Fatal(err)
 	}
-	registration, err := serverapp.LoadCatalogRequest(filepath.Join(destination, "node-registration.json"))
-	if err != nil || registration.ImageID != report.ImageID {
-		t.Fatal("登记命令不能读取生成的配置", err)
+	if value.image.ImageID != report.ImageID {
+		t.Fatal("生成的镜像身份不一致")
 	}
 	for _, reference := range value.references() {
-		writeFixture(t, filesystem{base: "/", owner: 0}, reference.path, make([]byte, 32), 0600, api.uid)
-	}
-	if err := os.MkdirAll(value.server.AdminDirectory, 0755); err != nil {
-		t.Fatal(err)
+		owner := uint32(0)
+		if reference.api {
+			owner = api.uid
+		}
+		writeFixture(t, filesystem{base: "/", owner: 0}, reference.path, make([]byte, 32), 0600, owner)
 	}
 	if _, err := Check(t.Context(), paths); err != nil {
 		t.Fatal("生成结果无法通过正式配置检查", err)

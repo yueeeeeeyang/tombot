@@ -1,27 +1,31 @@
 # 安装前部署配置核对
 
-`tomdeploy-check` 在自动安装 Docker 之前检查同一宿主上的 API、节点、Docker 引导与镜像准备配置。它只读取四份非秘密配置及引用文件的元信息，不读取数据库连接、加密材料或镜像认证内容，不连接数据库、Docker、模型供应商，不安装软件或创建状态目录。
+`tomnode check` 只检查节点、Docker 和镜像三份配置及节点自身的引用文件，不需要本机存在 API 系统用户、API 配置、数据库连接或管理静态目录。成功返回 `scope: node_configuration`。跨主机节点使用此入口，`tomnode start` 会在安装任何宿主软件之前自动调用。
+
+`tomnode check-deployment` 保留完整部署检查，核对 API、节点、Docker 与镜像四份配置和跨组件关系。它要求本机具有 API 系统身份及全部引用文件，只读取配置和文件元信息，不读取凭据内容、连接数据库或 Docker，不创建状态目录。
 
 ## 启动契约
 
-正式 systemd 顺序为：部署配置检查 → Docker 与宿主磁盘工具引导 → 固定镜像准备 → 节点控制入口。`tombot-docker-bootstrap.service` 同时使用 `Requires`、`After` 依赖检查单元；检查失败不会开始该次自动引导。检查单元不保留已完成状态，每次启动依赖链都会重新核对。API 仍使用 `Wants` 依赖节点，节点故障时可提供登录与历史查询；实际开户仍须有独立能力验收证据。
+一个 [systemd 节点单元](../deploy/systemd/tombot-node.service)调用 `tomnode start`：节点配置检查 → Docker 与宿主磁盘工具引导 → 固定镜像准备 → 节点控制入口。每次启动重新检查，任一步失败或取消均不进入后续阶段。API 单元独立运行；实际开户仍须通过完整能力验收。
 
-程序安装到 `/usr/lib/tombot/tomdeploy-check`，必须由 Linux root 运行，不接受命令参数。四个环境变量只传文件位置：
+只需安装 `/usr/lib/tombot/tomnode`，两个检查子命令均须在 Linux root 下运行。文件路径可使用默认值或环境变量覆盖：
 
-| 环境变量 | 随包单元的路径 |
+| 环境变量 | 默认路径 |
 | --- | --- |
-| `TOM_SERVER_CONFIG` | `/etc/tombot/server.json` |
-| `TOM_NODE_CONFIG` | `/etc/tombot/node.json` |
-| `TOM_DOCKER_INSTALL_MANIFEST` | `/etc/tombot/docker-install.json` |
-| `TOM_IMAGE_PREPARATION_MANIFEST` | `/etc/tombot/computer-image.json` |
+| `TOM_NODE_CONFIG` | `/etc/tombot/node/node.json` |
+| `TOM_DOCKER_INSTALL_MANIFEST` | `/etc/tombot/node/docker-install.json` |
+| `TOM_IMAGE_PREPARATION_MANIFEST` | `/etc/tombot/node/computer-image.json` |
+| `TOM_SERVER_CONFIG`（仅成套检查） | `/etc/tombot/server.json` |
 
-自定义位置时，检查单元及各实际消费配置的服务必须一起更新。检查文件在安装、启用服务前就应存在；可先用[配置生成入口](../deploy/CONFIGURE.md)从单份参数生成，检查命令本身不生成配置，也不创建系统账户。systemd 使用只读文件系统保护、30 秒启动上限和最小读取权限；命令另有 25 秒检查预算，没有重试或失败放行分支。
+检查有 25 秒预算，没有重试或失败放行分支。单独调用只读检查不安装软件或启动服务；统一启动单元还需要执行安装和节点恢复，因此保留宿主挂载可见性，不使用私有挂载命名空间。生成配置见[配置生成入口](../deploy/CONFIGURE.md)。
+
+节点检查与成套检查共用节点身份、镜像平台、Docker socket、目录重叠及配置引用隔离规则，复用正式组件解析器和文件权限检查。下面的 API 账户、租约和跨组件预算要求仅由成套检查核对，未在节点本机伪造这些信息。
 
 ## 检查范围
 
 - 复用 `serverapp`、`nodeapp`、`dockerbootstrap`、`dockernode` 的正式解析入口；配置自身的格式、容量和领域约束只有一套实现。
-- 固定系统用户与主组均为 `tombot-api`，必须是非 root，实际 UID/GID 与节点允许身份一致，不能属于 Docker 组。首次安装前 Docker 组尚不存在可以继续，组查询失败不能当作不存在。
-- API、节点和镜像清单使用同一个节点 ID，验收镜像 ID 一致；API 节点 Unix 端点一致。Docker 引导、节点和镜像准备统一使用 `/run/docker.sock`，镜像架构必须与当前 Linux 宿主一致。
+- 固定系统用户与主组均为 `tombot-api`，必须是非 root，身份用于 API 文件访问校验，不能属于 Docker 组。首次安装前 Docker 组尚不存在可以继续，组查询失败不能当作不存在。
+- API、节点和镜像清单使用同一个节点 ID，验收镜像 ID 一致；API 节点 URL 与监听端口一致；通信身份由双方证书指纹固定。Docker 引导、节点和镜像准备统一使用 `/run/docker.sock`，镜像架构必须与当前 Linux 宿主一致。
 - 节点最大租约覆盖开户与独立验收，节点请求时限覆盖 API 的节点调用预算，用户桌面额度不超过电脑代理并发容量。节点配置示例的最大租约已改为 5 分钟，覆盖 API 默认 3 分钟验收租约；原 2 分钟示例会被明确拒绝。
 - 引导、镜像、节点控制、磁盘控制、用户存储、管理静态目录不能互相包含；控制端点及配置、凭据引用不能落入这些目录或复用同一路径。
 - 四份配置必须属于 root，父目录无链接且不可被其他身份改写。API 配置须能被 `tombot-api` 读取，通常使用 root 所有、0644，或以 API 主组读取的 0640；其他三份使用 root 0600。
@@ -32,14 +36,13 @@
 
 ## 部署变化与回滚
 
-必须成套更新宿主程序、五个 systemd 单元和节点示例。当前发布包为格式版本 3，包含双架构配置生成与检查程序及检查单元；格式 1、2 不再被新核验器接受。历史开发验收包仍保留为原版本证据，不重新标记为本版本验收产物。
+发布包格式为 7，只发布合并后的 `tomnode` 与一个节点服务单元。旧辅助程序及前置服务不再交付；升级时停止旧单元、安装新程序与单元、移除旧入口后重新加载 systemd。多节点自动接入的数据库与配置变更见[接入迁移说明](node-registration.md#升级与回滚)，不接受已移除的单节点字段。
 
-已有配置先调整节点租约上限，并核对 API 账户、文件归属及目录布局，再安装新单元并重新加载 systemd。更严格的关系与权限检查会使原来勉强启动或延迟失败的配置提前失败；不要通过删除依赖单元跳过检查。此变更没有数据库迁移，不改已有用户数据或节点记录。
+回滚须停单排空，恢复原整套程序与单元及配置；保留用户磁盘、节点代次、失败证据与关闭屏障，不能只恢复旧二进制而保留新命令行。完整步骤见[单文件节点部署](../deploy/NODE.md)。
 
-部署回滚选择与当前数据库和节点记录兼容的完整发布版本，按[发布包说明](../deploy/RELEASE.md)停止接单、排空、保存一致恢复点，再统一切换程序和单元。保留配置及控制记录，不删除失败证据，不退回历史 SQL 迁移。
 
 ## 验证入口
 
-常规 `make lint check test` 包含配置关系、权限边界、命令失败路径及 systemd 依赖回归。`TestLiveDeploymentCheck` 通过 `deploymentintegration` 标签编译，需使用 `verification/deployment/Dockerfile` 的专用容器；用真实系统账户验证正常配置、root 私有 API 配置拒绝、旧租约拒绝和不可读引用拒绝。该镜像的 `forbidden` 构建阶段仅用于验证 Docker 组成员被拒绝。
+常规 `make lint check test` 包含配置关系、权限边界、命令失败路径及统一启动顺序、独立节点无需 API 文件及 systemd 单元回归。`TestLiveDeploymentCheck` 通过 `deploymentintegration` 标签编译，需使用 `verification/deployment/Dockerfile` 的专用容器；用真实系统账户验证正常配置、root 私有 API 配置拒绝、旧租约拒绝和不可读引用拒绝。该镜像的 `forbidden` 构建阶段仅用于验证 Docker 组成员被拒绝。
 
 测试配置中的包版本、镜像引用与凭据占位仅用于解析和元信息验证；没有执行安装、拉取、开户或连接真实服务，不能当作受测生产发布清单。真实 Ubuntu systemd 首次安装、宿主挂载/配额/cgroup 及完整开户恢复联调仍须另外验收。

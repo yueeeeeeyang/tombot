@@ -12,11 +12,14 @@ type toolState struct {
 	Started, Ended bool
 }
 type streamState struct {
-	tools      map[int]*toolState
-	usage      Usage
-	done       bool
-	finished   bool
-	characters int
+	tools            map[int]*toolState
+	usage            Usage
+	done             bool
+	finished         bool
+	characters       int
+	responseItems    map[int]*responseItem
+	responseSequence *int
+	responseID       string
 }
 
 func (s *streamState) emitTool(index int, id, name, delta string, emit func(Event) error) error {

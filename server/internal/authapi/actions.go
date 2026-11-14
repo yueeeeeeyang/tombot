@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/identity"
@@ -119,6 +120,29 @@ func (handler *Handler) refresh(scope string) http.HandlerFunc {
 	}
 }
 
+// refreshContext 在访问 Cookie 到期后仍允许同源页面读取续期校验值，凭据本身始终留在 HttpOnly Cookie。
+func (handler *Handler) refreshContext(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery != "" || r.Header.Get("Authorization") != "" {
+		handler.failure(w, r, 400, "AUTH_INPUT_INVALID", "续期校验请求无效")
+		return
+	}
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" {
+		handler.failure(w, r, 403, "ORIGIN_INVALID", "管理操作必须来自管理平台")
+		return
+	}
+	refresh, err := cookieValue(r, refreshCookie)
+	if err == nil {
+		err = handler.identity.ValidateRefresh(r.Context(), refresh, "admin")
+	}
+	if err != nil {
+		handler.serviceError(w, r, err)
+		return
+	}
+	handler.respond(w, r, 200, struct {
+		CSRFToken identity.Credential `json:"csrf_token"`
+	}{identity.Credential(handler.csrf(refresh))})
+}
+
 func (handler *Handler) session(scope string) principalAction {
 	return func(w http.ResponseWriter, r *http.Request, principal identity.Principal) {
 		if scope == "desktop" {
@@ -133,9 +157,11 @@ func (handler *Handler) session(scope string) principalAction {
 			return
 		}
 		handler.respond(w, r, 200, struct {
-			Principal identity.Principal  `json:"principal"`
-			CSRFToken identity.Credential `json:"csrf_token"`
-		}{principal, identity.Credential(handler.csrf(refresh))})
+			Principal       identity.Principal  `json:"principal"`
+			CSRFToken       identity.Credential `json:"csrf_token"`
+			AccessExpiresAt time.Time           `json:"access_expires_at"`
+			ExpiresAt       time.Time           `json:"expires_at"`
+		}{principal, identity.Credential(handler.csrf(refresh)), principal.AccessExpiresAt, principal.ExpiresAt})
 	}
 }
 

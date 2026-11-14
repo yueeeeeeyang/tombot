@@ -6,6 +6,8 @@ export const id = (digit: number) => '0'.repeat(25) + digit.toString()
 export function session() {
   return {
     principal: {
+      username: 'test-admin',
+      display_name: '测试管理员',
       user_id: id(1),
       session_id: id(2),
       device_id: id(3),
@@ -56,6 +58,7 @@ export function makeClient(route: Route) {
   const fetcher = async (input: RequestInfo | URL, options: RequestInit = {}) => {
     const path = String(input).replace('/api/v2/admin', '')
     calls.push({ path, options })
+    if (path === '/auth/refresh-context') return json({ csrf_token: authentication.csrf_token })
     if (path === '/auth/session' || path === '/auth/login' || path === '/auth/refresh')
       return json(authentication)
     if (path === '/auth/logout' || path === '/auth/verify') return empty()

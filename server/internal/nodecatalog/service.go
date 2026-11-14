@@ -92,45 +92,59 @@ func (service *Service) Register(ctx context.Context, registration Registration,
 	}
 	var catalog Catalog
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		// 首次并发写入也可能命中名称或引用唯一索引；先覆盖全部唯一冲突，再复验完整身份，不能吞掉业务冲突。
-		node, err := transaction.ExecContext(ctx, `INSERT INTO tombot.computer_nodes(id,name,status,capacity) VALUES($1,$2,'bootstrapping',$3) ON CONFLICT DO NOTHING`, service.nodeID, registration.Name, registration.Capacity)
-		if err != nil {
-			return err
-		}
-		nodeCreated, err := node.RowsAffected()
-		if err != nil {
-			return err
-		}
-		image, err := transaction.ExecContext(ctx, `INSERT INTO tombot.computer_images(id,reference,is_enabled) VALUES($1,$2,true) ON CONFLICT DO NOTHING`, registration.ImageID, registration.ImageReference)
-		if err != nil {
-			return err
-		}
-		imageCreated, err := image.RowsAffected()
-		if err != nil {
-			return err
-		}
-		catalog, err = service.read(ctx, transaction, registration.ImageID)
-		if errors.Is(err, ErrNotFound) {
-			return ErrConflict
-		}
-		if err != nil {
-			return err
-		}
-		if catalog.Node.Name != registration.Name || catalog.Node.Capacity != registration.Capacity || catalog.Image.Reference != registration.ImageReference {
-			return ErrConflict
-		}
-		if nodeCreated == 1 {
-			if err = audit(ctx, transaction, requestID, "登记部署节点", "computer_node", service.nodeID, map[string]any{"capacity": registration.Capacity, "status": "bootstrapping"}); err != nil {
-				return err
-			}
-		}
-		if imageCreated == 1 {
-			return audit(ctx, transaction, requestID, "登记电脑镜像", "computer_image", registration.ImageID, map[string]any{"is_enabled": true})
-		}
-		return nil
+		var err error
+		catalog, err = service.RegisterInTransaction(ctx, transaction, registration, requestID)
+		return err
 	})
 	if err != nil {
 		return Catalog{}, err
+	}
+	return catalog, nil
+}
+
+// RegisterInTransaction 将目录登记与接入身份的外部事务合并；调用者必须使用控制连接并处理整体提交。
+// 参数校验与幂等规则和 Register 相同，不改变已存在的健康状态及镜像启用状态。
+func (service *Service) RegisterInTransaction(ctx context.Context, transaction *sql.Tx, registration Registration, requestID string) (Catalog, error) {
+	if transaction == nil || registration.Validate() != nil || !validID(requestID) {
+		return Catalog{}, ErrInvalidInput
+	}
+
+	// 首次并发写入也可能命中名称或身份唯一索引；先覆盖全部唯一冲突，再复验完整身份，不能吞掉业务冲突。
+	node, err := transaction.ExecContext(ctx, `INSERT INTO tombot.computer_nodes(id,name,status,capacity) VALUES($1,$2,'bootstrapping',$3) ON CONFLICT DO NOTHING`, service.nodeID, registration.Name, registration.Capacity)
+	if err != nil {
+		return Catalog{}, err
+	}
+	nodeCreated, err := node.RowsAffected()
+	if err != nil {
+		return Catalog{}, err
+	}
+	image, err := transaction.ExecContext(ctx, `INSERT INTO tombot.computer_images(id,reference,is_enabled) VALUES($1,$2,true) ON CONFLICT DO NOTHING`, registration.ImageID, registration.ImageReference)
+	if err != nil {
+		return Catalog{}, err
+	}
+	imageCreated, err := image.RowsAffected()
+	if err != nil {
+		return Catalog{}, err
+	}
+	catalog, err := service.read(ctx, transaction, registration.ImageID)
+	if errors.Is(err, ErrNotFound) {
+		return Catalog{}, ErrConflict
+	}
+	if err != nil {
+		return Catalog{}, err
+	}
+	if catalog.Node.Name != registration.Name || catalog.Node.Capacity != registration.Capacity || catalog.Image.Reference != registration.ImageReference {
+		return Catalog{}, ErrConflict
+	}
+	if nodeCreated == 1 {
+		if err = audit(ctx, transaction, requestID, "登记部署节点", "computer_node", service.nodeID, map[string]any{"capacity": registration.Capacity, "status": "bootstrapping"}); err != nil {
+			return Catalog{}, err
+		}
+	}
+	if imageCreated == 1 {
+		if err := audit(ctx, transaction, requestID, "登记电脑镜像", "computer_image", registration.ImageID, map[string]any{"is_enabled": true}); err != nil {
+			return Catalog{}, err
+		}
 	}
 	return catalog, nil
 }

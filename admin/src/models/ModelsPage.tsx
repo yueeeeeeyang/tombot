@@ -1,16 +1,25 @@
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { z } from 'zod'
-import { Plus, RefreshCw, ArrowLeft } from 'lucide-react'
-import { AdminClient } from '../api/client'
+import { Link, useParams } from 'react-router'
+import { Plus, RefreshCw, ArrowLeft, Server, Boxes, SlidersHorizontal, History } from 'lucide-react'
+import { AdminClient, isVerificationCanceled } from '../api/client'
+import { Select } from '../components/Select'
+import { ModelTestDialog } from './ModelTestDialog'
+import { ModelEditor } from './ModelEditor'
+import { PolicyEditor, routingLabels } from './PolicyEditor'
+import { PullModels, formatModalities } from './PullModels'
 import {
-  credentialsSchema,
   modelsSchema,
   remoteModelsSchema,
+  type RemoteModel,
   policiesSchema,
   providersSchema,
+  providerSchema,
+  policySchema,
   versionsSchema,
   type Policy,
   type Provider,
+  type Model,
 } from '../api/schemas'
 import {
   Alert,
@@ -30,6 +39,8 @@ type FormField = {
   min?: number
   max?: number
   hint?: string
+  defaultValue?: string
+  optional?: boolean
   options?: { value: string; label: string }[]
 }
 type Action = {
@@ -85,7 +96,10 @@ function ActionDialog({
             })
             onSaved()
           } catch (cause) {
-            setError(cause)
+            if (isVerificationCanceled(cause)) {
+              setAttempted(false)
+              setError(undefined)
+            } else setError(cause)
           } finally {
             setBusy(false)
           }
@@ -95,21 +109,20 @@ function ActionDialog({
           {action.fields?.map((field) => (
             <Field key={field.name} label={field.label} hint={field.hint}>
               {field.options ? (
-                <select name={field.name} required defaultValue="">
-                  <option value="" disabled>
-                    请选择
-                  </option>
-                  {field.options.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
+                <Select
+                  name={field.name}
+                  label={field.label}
+                  required={!field.optional}
+                  defaultValue={field.defaultValue ?? ''}
+                  options={field.options}
+                  disabled={busy || attempted}
+                />
               ) : (
                 <input
                   name={field.name}
                   type={field.type ?? 'text'}
-                  required
+                  defaultValue={field.defaultValue}
+                  required={!field.optional}
                   min={field.min}
                   max={field.max}
                   maxLength={field.type === 'password' ? 8192 : 256}
@@ -140,20 +153,7 @@ function ActionDialog({
 export function ModelsPage({ client }: { client: AdminClient }) {
   const [before, setBefore] = useState('')
   const providers = useQuery(client, pagePath('/model-providers', before), providersSchema)
-  const [selected, setSelected] = useState<Provider>()
   const [action, setAction] = useState<Action>()
-  if (selected)
-    return (
-      <ProviderDetail
-        key={selected.id}
-        client={client}
-        provider={selected}
-        onBack={() => {
-          setSelected(undefined)
-          providers.reload()
-        }}
-      />
-    )
   return (
     <>
       <header className="page-heading">
@@ -177,7 +177,8 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                     name: 'protocol',
                     label: '协议',
                     options: [
-                      { value: 'openai_compat', label: 'OpenAI 兼容协议' },
+                      { value: 'responses', label: 'Responses 协议' },
+                      { value: 'openai_compat', label: 'Chat Completions 兼容协议' },
                       { value: 'anthropic', label: 'Anthropic 协议' },
                     ],
                   },
@@ -185,7 +186,7 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                     name: 'base_url',
                     label: '服务地址',
                     type: 'url',
-                    hint: '填写 HTTPS 地址；服务端会验证部署允许的访问范围。',
+                    hint: '填写 HTTPS 地址，支持公网、内网和代理地址。',
                   },
                   {
                     name: 'credential',
@@ -204,6 +205,13 @@ export function ModelsPage({ client }: { client: AdminClient }) {
       </header>
       {!providers.value ? (
         <LoadState error={providers.error} onRetry={providers.reload} />
+      ) : providers.value.providers.length === 0 ? (
+        <div className="empty-state">
+          <Server size={28} />
+          <h2>暂无模型供应商</h2>
+          <p>登记供应商后，可拉取并配置模型。</p>
+          <Pagination before={before} onBefore={setBefore} count={0} last={undefined} />
+        </div>
       ) : (
         <div className="table-card">
           <div className="table-scroll">
@@ -223,22 +231,82 @@ export function ModelsPage({ client }: { client: AdminClient }) {
                       <strong>{provider.name}</strong>
                       <small>{provider.base_url}</small>
                     </td>
-                    <td>{provider.protocol === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容'}</td>
+                    <td>
+                      {
+                        {
+                          anthropic: 'Anthropic',
+                          openai_compat: 'Chat Completions',
+                          responses: 'Responses',
+                        }[provider.protocol]
+                      }
+                    </td>
                     <td>
                       <Status value={provider.is_enabled ? 'active' : 'disabled'} />
                     </td>
                     <td>
                       <div className="actions">
-                        <button className="text-button" onClick={() => setSelected(provider)}>
+                        <Link className="text-button" to={`/model-providers/${provider.id}`}>
                           模型管理
-                        </button>
+                        </Link>
+                        {!provider.is_enabled && (
+                          <button
+                            className="text-button"
+                            onClick={() =>
+                              setAction({
+                                title: '编辑供应商',
+                                description:
+                                  '保存后仍保持停用。修改协议或地址后，原策略需要创建并启用新版本。',
+                                path: `/model-providers/${provider.id}/edit`,
+                                fields: [
+                                  { name: 'name', label: '名称', defaultValue: provider.name },
+                                  {
+                                    name: 'protocol',
+                                    label: '协议',
+                                    defaultValue: provider.protocol,
+                                    options: [
+                                      { value: 'responses', label: 'Responses 协议' },
+                                      {
+                                        value: 'openai_compat',
+                                        label: 'Chat Completions 兼容协议',
+                                      },
+                                      { value: 'anthropic', label: 'Anthropic 协议' },
+                                    ],
+                                  },
+                                  {
+                                    name: 'base_url',
+                                    label: '服务地址',
+                                    type: 'url',
+                                    defaultValue: provider.base_url,
+                                    hint: '填写 HTTPS API 基础地址，不包含 /responses 或 /models 端点。',
+                                  },
+                                  {
+                                    name: 'credential',
+                                    label: '新供应商凭据',
+                                    type: 'password',
+                                    optional: true,
+                                    hint: '留空保留现有凭据。更换主机或端口必须填写新凭据，旧凭据将被撤销。',
+                                  },
+                                ],
+                                transform: (fields) => ({
+                                  expected_revision: provider.revision,
+                                  name: fields.get('name'),
+                                  protocol: fields.get('protocol'),
+                                  base_url: fields.get('base_url'),
+                                  credential: fields.get('credential'),
+                                }),
+                              })
+                            }
+                          >
+                            编辑
+                          </button>
+                        )}
                         <button
                           className="text-button"
                           onClick={() =>
                             setAction({
                               title: provider.is_enabled ? '停用供应商' : '启用供应商',
                               description:
-                                '停用后使用该供应商的调用将被拒绝。已发布版本保持原有配置。',
+                                '停用后使用该供应商的调用将被拒绝。已有版本保持原有配置。',
                               path: `/model-providers/${provider.id}/state`,
                               body: {
                                 expected_revision: provider.revision,
@@ -272,9 +340,6 @@ export function ModelsPage({ client }: { client: AdminClient }) {
               </tbody>
             </table>
           </div>
-          {providers.value.providers.length === 0 && (
-            <p className="empty-state">尚未登记模型供应商。</p>
-          )}
           <Pagination
             before={before}
             onBefore={setBefore}
@@ -301,15 +366,24 @@ export function ModelsPage({ client }: { client: AdminClient }) {
   )
 }
 
-function ProviderDetail({
-  client,
-  provider,
-  onBack,
-}: {
-  client: AdminClient
-  provider: Provider
-  onBack: () => void
-}) {
+const providerResult = z.object({ provider: providerSchema })
+const policyResult = z.object({ policy: policySchema })
+
+export function ProviderPage({ client }: { client: AdminClient }) {
+  const { providerID } = useParams()
+  const result = useQuery(client, `/model-providers/${providerID}`, providerResult)
+  return result.value ? (
+    <ProviderDetail
+      key={result.value.provider.id}
+      client={client}
+      provider={result.value.provider}
+    />
+  ) : (
+    <LoadState error={result.error} onRetry={result.reload} />
+  )
+}
+
+function ProviderDetail({ client, provider }: { client: AdminClient; provider: Provider }) {
   const [modelBefore, setModelBefore] = useState('')
   const models = useQuery(
     client,
@@ -317,17 +391,44 @@ function ProviderDetail({
     modelsSchema,
   )
   const [action, setAction] = useState<Action>()
+  const [offered, setOffered] = useState<RemoteModel[]>()
   const [pulling, setPulling] = useState(false)
+  const [pullError, setPullError] = useState<unknown>()
+  const pullRequest = useRef<AbortController | null>(null)
+  const pullTrigger = useRef<HTMLButtonElement>(null)
+  useEffect(() => () => pullRequest.current?.abort(), [])
+  async function pullModels() {
+    if (pullRequest.current || !models.value) return
+    const controller = new AbortController()
+    pullRequest.current = controller
+    setPulling(true)
+    setPullError(undefined)
+    try {
+      const result = await client.request(
+        `/model-providers/${provider.id}/remote-models`,
+        remoteModelsSchema,
+        { signal: controller.signal, timeout: 30_000 },
+      )
+      if (!controller.signal.aborted) setOffered(result.models)
+    } catch (cause) {
+      if (!controller.signal.aborted) setPullError(cause)
+    } finally {
+      if (!controller.signal.aborted) setPulling(false)
+      if (pullRequest.current === controller) pullRequest.current = null
+    }
+  }
+  const [testing, setTesting] = useState<Model>()
+  const [editing, setEditing] = useState<Model>()
   function close() {
     setAction(undefined)
     models.reload()
   }
   return (
     <>
-      <button className="text-button back-button" onClick={onBack}>
+      <Link className="text-button back-button" to="/model-providers">
         <ArrowLeft size={16} />
         全部供应商
-      </button>
+      </Link>
       <header className="page-heading">
         <div>
           <h1>{provider.name}</h1>
@@ -338,8 +439,15 @@ function ProviderDetail({
         <div className="section-heading">
           <h2>模型目录</h2>
           <div className="actions">
-            <button className="secondary-button" onClick={() => setPulling(true)}>
-              从供应商拉取
+            <button
+              className="secondary-button"
+              ref={pullTrigger}
+              onClick={() => void pullModels()}
+              disabled={pulling}
+              aria-disabled={pulling || !models.value}
+              aria-busy={pulling}
+            >
+              {pulling ? '正在拉取…' : '从供应商拉取'}
             </button>
             <button
               className="secondary-button"
@@ -396,8 +504,16 @@ function ProviderDetail({
             </button>
           </div>
         </div>
+        <Alert error={pullError} />
         {!models.value ? (
           <LoadState error={models.error} onRetry={models.reload} />
+        ) : models.value.models.length === 0 ? (
+          <div className="empty-state">
+            <Boxes size={28} />
+            <h2>暂无模型</h2>
+            <p>从供应商拉取或手动登记模型后，可配置并测试模型能力。</p>
+            <Pagination before={modelBefore} onBefore={setModelBefore} count={0} last={undefined} />
+          </div>
         ) : (
           <div className="table-card">
             <div className="table-scroll">
@@ -426,8 +542,18 @@ function ProviderDetail({
                         {[model.supports_tools && '工具', model.supports_vision && '图像']
                           .filter(Boolean)
                           .join('、') || '文本'}
+                        <small>
+                          供应商输入：{formatModalities(model.metadata.input_modalities)}
+                        </small>
+                        <small>
+                          供应商输出：{formatModalities(model.metadata.output_modalities)}
+                        </small>
+                        <small>思考级别：{model.reasoning_effort || '供应商默认'}</small>
                       </td>
                       <td>
+                        <button className="text-button" onClick={() => setTesting(model)}>
+                          测试模型
+                        </button>
                         <button
                           className="text-button"
                           onClick={() =>
@@ -443,13 +569,32 @@ function ProviderDetail({
                         >
                           {model.is_enabled ? '停用' : '启用'}
                         </button>
+                        {!model.is_enabled && (
+                          <>
+                            <button className="text-button" onClick={() => setEditing(model)}>
+                              编辑
+                            </button>
+                            <button
+                              className="text-button"
+                              onClick={() =>
+                                setAction({
+                                  title: '删除模型',
+                                  path: `/models/${model.id}/delete`,
+                                  description: `确定删除「${model.display_name}」？删除后不可恢复；已被策略版本引用的模型不能删除。`,
+                                  body: { expected_revision: model.revision },
+                                })
+                              }
+                            >
+                              删除
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            {!models.value.models.length && <p className="empty-state">尚未登记模型。</p>}
             <Pagination
               before={modelBefore}
               onBefore={setModelBefore}
@@ -460,14 +605,34 @@ function ProviderDetail({
         )}
       </section>
       {action && <ActionDialog client={client} action={action} onClose={close} onSaved={close} />}
-      {pulling && (
+      {testing && (
+        <ModelTestDialog
+          client={client}
+          provider={provider}
+          model={testing}
+          onClose={() => setTesting(undefined)}
+        />
+      )}
+      {editing && (
+        <ModelEditor
+          client={client}
+          model={editing}
+          onClose={() => {
+            setEditing(undefined)
+            models.reload()
+          }}
+        />
+      )}
+      {offered && (
         <PullModels
           client={client}
           providerID={provider.id}
+          offered={offered}
+          returnFocusRef={pullTrigger}
           registered={models.value?.models.map((model) => model.model_key) ?? []}
-          onClose={() => setPulling(false)}
+          onClose={() => setOffered(undefined)}
           onImported={() => {
-            setPulling(false)
+            setOffered(undefined)
             models.reload()
           }}
         />
@@ -476,214 +641,16 @@ function ProviderDetail({
   )
 }
 
-// PullModels 读取供应商模型列表，勾选后按统一规格登记到目录。
-// 上游列表没有上下文与输出上限，因此这些规格必须由管理员显式填写。
-function PullModels({
-  client,
-  providerID,
-  registered,
-  onClose,
-  onImported,
-}: {
-  client: AdminClient
-  providerID: string
-  registered: string[]
-  onClose: () => void
-  onImported: () => void
-}) {
-  const [models, setModels] = useState<{ model_key: string; display_name: string }[] | null>(null)
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [error, setError] = useState<unknown>()
-  const [busy, setBusy] = useState(false)
-  const [progress, setProgress] = useState('')
-  const form = useRef<HTMLFormElement>(null)
-  const known = new Set(registered)
-
-  async function load() {
-    setError(undefined)
-    setBusy(true)
-    try {
-      const result = await client.request(
-        `/model-providers/${providerID}/remote-models`,
-        remoteModelsSchema,
-        { timeout: 30_000 },
-      )
-      setModels(result.models)
-      setSelected(
-        new Set(
-          result.models.filter((item) => !known.has(item.model_key)).map((item) => item.model_key),
-        ),
-      )
-    } catch (cause) {
-      setError(cause)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function submit() {
-    if (busy || !form.current?.reportValidity() || selected.size === 0) return
-    const fields = new FormData(form.current)
-    const base = {
-      context_limit: Number(fields.get('context_limit')),
-      output_limit: Number(fields.get('output_limit')),
-      supports_tools: fields.get('supports_tools') === 'true',
-      supports_vision: fields.get('supports_vision') === 'true',
-    }
-    setBusy(true)
-    setError(undefined)
-    let imported = 0
-    try {
-      for (const item of models ?? []) {
-        if (!selected.has(item.model_key)) continue
-        setProgress(`正在登记 ${item.model_key}（${imported + 1}/${selected.size}）`)
-        await client.request(`/model-providers/${providerID}/models`, modelsSchema, {
-          method: 'POST',
-          body: {
-            ...base,
-            provider_id: providerID,
-            model_key: item.model_key,
-            display_name: item.display_name,
-          },
-          timeout: 20_000,
-        })
-        imported++
-      }
-      onImported()
-    } catch (cause) {
-      // 已登记的模型保留；失败的模型标识不自动重试，由管理员确认后重新提交。
-      setError(cause)
-      setProgress(`已登记 ${imported} 个，其余未完成`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <Dialog title="从供应商拉取模型" onClose={onClose} busy={busy}>
-      <p className="description">
-        读取供应商当前提供的模型标识。上游不提供上下文与输出上限，请填写适用于所选模型的规格。
-      </p>
-      <Alert error={error} />
-      {!models ? (
-        <p role="status">
-          {busy ? '正在读取供应商模型…' : '点击下方按钮读取供应商当前提供的模型列表。'}
-        </p>
-      ) : (
-        <form
-          ref={form}
-          onSubmit={(event) => {
-            event.preventDefault()
-            void submit()
-          }}
-        >
-          <section className="remote-models" aria-label="可选模型">
-            {models.length === 0 && <p className="empty-state">供应商没有返回任何模型。</p>}
-            {models.map((item) => (
-              <label key={item.model_key} className="remote-model">
-                <input
-                  type="checkbox"
-                  checked={selected.has(item.model_key)}
-                  disabled={busy || known.has(item.model_key)}
-                  onChange={(event) => {
-                    const next = new Set(selected)
-                    if (event.target.checked) next.add(item.model_key)
-                    else next.delete(item.model_key)
-                    setSelected(next)
-                  }}
-                />
-                <span>
-                  <strong>{item.display_name}</strong>
-                  <small>{item.model_key}</small>
-                </span>
-                {known.has(item.model_key) && <span className="status">已登记</span>}
-              </label>
-            ))}
-          </section>
-          <fieldset disabled={busy} className="form-grid">
-            <Field label="上下文上限">
-              <input
-                name="context_limit"
-                type="number"
-                required
-                min={1}
-                max={100000000}
-                defaultValue={128000}
-              />
-            </Field>
-            <Field label="输出上限">
-              <input
-                name="output_limit"
-                type="number"
-                required
-                min={1}
-                max={100000000}
-                defaultValue={8192}
-              />
-            </Field>
-            <Field label="工具调用">
-              <select name="supports_tools" defaultValue="true">
-                <option value="true">支持</option>
-                <option value="false">不支持</option>
-              </select>
-            </Field>
-            <Field label="图像输入">
-              <select name="supports_vision" defaultValue="false">
-                <option value="true">支持</option>
-                <option value="false">不支持</option>
-              </select>
-            </Field>
-          </fieldset>
-          {progress && <p role="status">{progress}</p>}
-          <div className="dialog-actions">
-            <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>
-              取消
-            </button>
-            <button type="submit" className="primary-button" disabled={busy || selected.size === 0}>
-              {busy ? '正在登记…' : `登记所选（${selected.size}）`}
-            </button>
-          </div>
-        </form>
-      )}
-      {!models && !busy && (
-        <div className="dialog-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>
-            取消
-          </button>
-          <button type="button" className="primary-button" onClick={() => void load()}>
-            重新读取
-          </button>
-        </div>
-      )}
-    </Dialog>
-  )
-}
-
 export function PoliciesPage({ client }: { client: AdminClient }) {
   const [before, setBefore] = useState('')
   const policies = useQuery(client, pagePath('/model-policies', before), policiesSchema)
-  const [selectedID, setSelectedID] = useState<string>()
-  const selected = policies.value?.policies.find((policy) => policy.id === selectedID)
   const [action, setAction] = useState<Action>()
-  if (selected)
-    return (
-      <PolicyDetail
-        key={selected.id}
-        client={client}
-        policy={selected}
-        onChanged={policies.reload}
-        onBack={() => {
-          setSelectedID(undefined)
-          policies.reload()
-        }}
-      />
-    )
   return (
     <>
       <header className="page-heading">
         <div>
           <h1>模型策略</h1>
-          <p>草稿通过能力测试后发布；用户和机器人无需配置模型。</p>
+          <p>配置多个候选模型和路由方式，按任务能力选择；每个策略只能启用一个版本。</p>
         </div>
         <div className="actions">
           <button className="icon-button" aria-label="刷新策略" onClick={policies.reload}>
@@ -706,6 +673,13 @@ export function PoliciesPage({ client }: { client: AdminClient }) {
       </header>
       {!policies.value ? (
         <LoadState error={policies.error} onRetry={policies.reload} />
+      ) : policies.value.policies.length === 0 ? (
+        <div className="empty-state">
+          <SlidersHorizontal size={28} />
+          <h2>暂无模型策略</h2>
+          <p>创建策略后，可配置候选模型和路由方式。</p>
+          <Pagination before={before} onBefore={setBefore} count={0} last={undefined} />
+        </div>
       ) : (
         <div className="table-card">
           <div className="table-scroll">
@@ -725,15 +699,15 @@ export function PoliciesPage({ client }: { client: AdminClient }) {
                       <strong>{policy.name}</strong>
                       {policy.is_default && <small>平台默认策略</small>}
                     </td>
-                    <td>{policy.current_version ? `v${policy.current_version}` : '尚未发布'}</td>
+                    <td>{policy.current_version ? `v${policy.current_version}` : '未启用版本'}</td>
                     <td>
-                      <Status value={policy.is_enabled ? 'active' : 'disabled'} />
+                      <Status value={policy.is_enabled ? 'enabled' : 'disabled'} />
                     </td>
                     <td>
                       <div className="actions">
-                        <button className="text-button" onClick={() => setSelectedID(policy.id)}>
-                          版本与发布
-                        </button>
+                        <Link className="text-button" to={`/model-policies/${policy.id}/versions`}>
+                          版本管理
+                        </Link>
                         {!policy.is_default && policy.current_version && policy.is_enabled && (
                           <button
                             className="text-button"
@@ -772,7 +746,6 @@ export function PoliciesPage({ client }: { client: AdminClient }) {
               </tbody>
             </table>
           </div>
-          {!policies.value.policies.length && <p className="empty-state">尚未创建模型策略。</p>}
           <Pagination
             before={before}
             onBefore={setBefore}
@@ -799,15 +772,28 @@ export function PoliciesPage({ client }: { client: AdminClient }) {
   )
 }
 
+export function PolicyPage({ client }: { client: AdminClient }) {
+  const { policyID } = useParams()
+  const result = useQuery(client, `/model-policies/${policyID}`, policyResult)
+  return result.value ? (
+    <PolicyDetail
+      key={result.value.policy.id}
+      client={client}
+      policy={result.value.policy}
+      onChanged={result.reload}
+    />
+  ) : (
+    <LoadState error={result.error} onRetry={result.reload} />
+  )
+}
+
 function PolicyDetail({
   client,
   policy,
-  onBack,
   onChanged,
 }: {
   client: AdminClient
   policy: Policy
-  onBack: () => void
   onChanged: () => void
 }) {
   const [before, setBefore] = useState('')
@@ -816,26 +802,54 @@ function PolicyDetail({
     pagePath(`/model-policies/${policy.id}/versions`, before),
     versionsSchema,
   )
-  const [draft, setDraft] = useState(false)
+  const [creating, setCreating] = useState(false)
   const [action, setAction] = useState<Action>()
   // 策略修订可能被其他管理者修改；操作完成后重新读取策略及版本，不在前端推算修订。
   return (
     <>
-      <button className="text-button back-button" onClick={onBack}>
+      <Link className="text-button back-button" to="/model-policies">
         <ArrowLeft size={16} />
         全部策略
-      </button>
+      </Link>
       <header className="page-heading">
         <div>
           <h1>{policy.name}</h1>
-          <p>每次修改创建新版本，已发布的配置保持不变。</p>
+          <p>版本可随时启用或停用，同一策略只能启用一个版本；切换仅影响新任务。</p>
         </div>
-        <button className="primary-button" onClick={() => setDraft(true)}>
-          创建版本草稿
+        <button className="primary-button" onClick={() => setCreating(true)}>
+          创建策略版本
         </button>
       </header>
+      {!policy.is_enabled && (
+        <div className="notice policy-disabled-notice">
+          <div>
+            <strong>策略已停用</strong>
+            <p id="policy-disabled-reason">请先启用策略，再启用所需版本。</p>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() =>
+              setAction({
+                title: '启用策略',
+                description: '启用后，该策略下的有效版本可供任务使用。',
+                path: `/model-policies/${policy.id}/state`,
+                body: { expected_revision: policy.revision, is_enabled: true },
+              })
+            }
+          >
+            启用策略
+          </button>
+        </div>
+      )}
       {!versions.value ? (
         <LoadState error={versions.error} onRetry={versions.reload} />
+      ) : versions.value.versions.length === 0 ? (
+        <div className="empty-state">
+          <History size={28} />
+          <h2>暂无策略版本</h2>
+          <p>创建版本并添加候选模型后，可启用该版本供新任务使用。</p>
+          <Pagination before={before} onBefore={setBefore} count={0} last={undefined} />
+        </div>
       ) : (
         <div className="table-card">
           <div className="table-scroll">
@@ -843,8 +857,8 @@ function PolicyDetail({
               <thead>
                 <tr>
                   <th>版本</th>
-                  <th>模型</th>
-                  <th>输出上限</th>
+                  <th>路由方式</th>
+                  <th>候选模型</th>
                   <th>状态</th>
                   <th>操作</th>
                 </tr>
@@ -852,46 +866,66 @@ function PolicyDetail({
               <tbody>
                 {versions.value.versions.map((version) => (
                   <tr key={version.version}>
-                    <td>v{version.version}</td>
-                    <td>{version.configuration.model_key}</td>
-                    <td>{version.configuration.output_limit.toLocaleString()}</td>
                     <td>
-                      <Status value={version.status} />
+                      <strong>v{version.version}</strong>
+                    </td>
+                    <td>{routingLabels[version.routing_mode]}</td>
+                    <td>
+                      <details className="policy-version-candidates">
+                        <summary>
+                          {version.candidates.length} 个模型 ·{' '}
+                          {version.candidates[0]?.configuration.model_key}
+                          {version.candidates.length > 1 ? ' 等' : ''}
+                        </summary>
+                        {version.candidates.map((candidate) => (
+                          <div key={candidate.model_id}>
+                            <strong>{candidate.configuration.model_key}</strong>
+                            <small>
+                              优先级 {candidate.priority}
+                              {version.routing_mode === 'weighted'
+                                ? ` · 权重 ${candidate.weight}`
+                                : ''}{' '}
+                              · 输出 {candidate.configuration.output_limit.toLocaleString()}
+                              {candidate.configuration.supports_tools ? ' · 工具' : ''}
+                              {candidate.configuration.supports_vision ? ' · 图像' : ''}
+                            </small>
+                          </div>
+                        ))}
+                      </details>
                     </td>
                     <td>
-                      {version.status !== 'revoked' && (
-                        <button
-                          className="text-button"
-                          onClick={() =>
-                            setAction(
-                              version.status === 'draft'
-                                ? {
-                                    title: '测试并发布版本',
-                                    description:
-                                      '服务端将实际测试文本、工具和图像能力。全部通过后才发布，并影响使用该策略的新运行。测试会产生供应商调用。',
-                                    path: `/model-policies/${policy.id}/versions/${version.version}/publish`,
-                                    body: { expected_revision: policy.revision },
-                                  }
-                                : {
-                                    title: '撤销版本',
-                                    description:
-                                      '撤销后依赖该版本的调用将被拒绝。已记录的配置和用量仍保留。',
-                                    path: `/model-policies/${policy.id}/versions/${version.version}/revoke`,
-                                    body: {},
-                                  },
-                            )
-                          }
-                        >
-                          {version.status === 'draft' ? '测试并发布' : '撤销'}
-                        </button>
-                      )}
+                      <Status value={version.is_enabled ? 'enabled' : 'disabled'} />
+                    </td>
+                    <td>
+                      <button
+                        className="text-button"
+                        disabled={!policy.is_enabled && !version.is_enabled}
+                        aria-describedby={
+                          !policy.is_enabled && !version.is_enabled
+                            ? 'policy-disabled-reason'
+                            : undefined
+                        }
+                        onClick={() =>
+                          setAction({
+                            title: `${version.is_enabled ? '停用' : '启用'}版本 v${version.version}`,
+                            description: version.is_enabled
+                              ? '停用后新任务无法使用此策略，正在执行的任务保持原版本。可以随时重新启用。'
+                              : version.verified_at
+                                ? '启用此版本时会自动停用同策略的其他版本，正在执行的任务保持原版本。'
+                                : '首次启用将实际测试全部候选的文本、工具和图像能力；全部通过后启用并替换当前版本。测试会产生供应商调用。',
+                            path: `/model-policies/${policy.id}/versions/${version.version}/${version.is_enabled ? 'disable' : 'enable'}`,
+                            body: { expected_revision: policy.revision },
+                          })
+                        }
+                      >
+                        {version.is_enabled ? '停用' : '启用'}
+                      </button>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {!versions.value.versions.length && <p className="empty-state">尚未创建策略版本。</p>}
           <Pagination
             before={before}
             onBefore={setBefore}
@@ -900,174 +934,34 @@ function PolicyDetail({
           />
         </div>
       )}
-      {draft && (
-        <DraftDialog client={client} policy={policy} onClose={onChanged} onSaved={onChanged} />
-      )}
-      {action && (
-        <ActionDialog client={client} action={action} onClose={onChanged} onSaved={onChanged} />
-      )}
-    </>
-  )
-}
-
-function DraftDialog({
-  client,
-  policy,
-  onClose,
-  onSaved,
-}: {
-  client: AdminClient
-  policy: Policy
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [before, setBefore] = useState('')
-  const providers = useQuery(client, pagePath('/model-providers', before), providersSchema)
-  const [provider, setProvider] = useState('')
-  if (provider)
-    return (
-      <DraftForm
-        client={client}
-        policy={policy}
-        provider={provider}
-        onClose={onClose}
-        onSaved={onSaved}
-      />
-    )
-  return (
-    <Dialog title="选择模型供应商" onClose={onClose}>
-      {!providers.value ? (
-        <LoadState error={providers.error} onRetry={providers.reload} />
-      ) : (
-        <>
-          <div className="choice-list">
-            {providers.value.providers.map((value) => (
-              <button
-                className="secondary-button"
-                key={value.id}
-                disabled={!value.is_enabled}
-                onClick={() => setProvider(value.id)}
-              >
-                {value.name}
-                {!value.is_enabled && '（已停用）'}
-              </button>
-            ))}
-          </div>
-          {!providers.value.providers.length && (
-            <p className="empty-state">请先登记供应商和模型。</p>
-          )}
-          <Pagination
-            before={before}
-            onBefore={setBefore}
-            count={providers.value.providers.length}
-            last={providers.value.providers.at(-1)?.id}
-          />
-        </>
-      )}
-    </Dialog>
-  )
-}
-
-function DraftForm({
-  client,
-  policy,
-  provider,
-  onClose,
-  onSaved,
-}: {
-  client: AdminClient
-  policy: Policy
-  provider: string
-  onClose: () => void
-  onSaved: () => void
-}) {
-  const [modelBefore, setModelBefore] = useState('')
-  const [credentialBefore, setCredentialBefore] = useState('')
-  const models = useQuery(
-    client,
-    pagePath(`/model-providers/${provider}/models`, modelBefore),
-    modelsSchema,
-  )
-  const credentials = useQuery(
-    client,
-    pagePath(`/model-providers/${provider}/credentials`, credentialBefore),
-    credentialsSchema,
-  )
-  if (!models.value || !credentials.value)
-    return (
-      <Dialog title="读取模型与凭据" onClose={onClose}>
-        <LoadState
-          error={models.error || credentials.error}
-          onRetry={() => {
-            models.reload()
-            credentials.reload()
+      {creating && (
+        <PolicyEditor
+          client={client}
+          policy={policy}
+          onClose={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false)
+            versions.reload()
+            onChanged()
           }}
         />
-      </Dialog>
-    )
-  return (
-    <div>
-      <ActionDialog
-        client={client}
-        onClose={onClose}
-        onSaved={onSaved}
-        action={{
-          title: '创建版本草稿',
-          path: `/model-policies/${policy.id}/versions`,
-          description: '选择固定模型和凭据版本。价格尚未录入时，费用保持未知。',
-          fields: [
-            {
-              name: 'model_id',
-              label: '模型',
-              options: models.value.models
-                .filter((model) => model.is_enabled)
-                .map((model) => ({
-                  value: model.id,
-                  label: `${model.display_name} · 输出上限 ${model.output_limit}`,
-                })),
-            },
-            {
-              name: 'credential_id',
-              label: '凭据版本',
-              options: [
-                { value: 'none', label: '无需凭据' },
-                ...credentials.value.credentials
-                  .filter((value) => !value.is_revoked && !value.is_destroyed)
-                  .map((value) => ({ value: value.id, label: `v${value.version}` })),
-              ],
-            },
-            {
-              name: 'output_limit',
-              label: '最大输出 token',
-              type: 'number',
-              min: 1,
-              max: 100_000_000,
-            },
-          ],
-          transform: (fields) => ({
-            model_id: fields.get('model_id'),
-            credential_id:
-              fields.get('credential_id') === 'none' ? null : fields.get('credential_id'),
-            output_limit: Number(fields.get('output_limit')),
-            prices: {},
-          }),
-        }}
-      >
-        <div className="catalog-pages">
-          <Pagination
-            before={modelBefore}
-            onBefore={setModelBefore}
-            count={models.value.models.length}
-            last={models.value.models.at(-1)?.id}
-          />
-          <Pagination
-            before={credentialBefore}
-            onBefore={setCredentialBefore}
-            count={credentials.value.credentials.length}
-            last={credentials.value.credentials.at(-1)?.version.toString()}
-          />
-        </div>
-      </ActionDialog>
-    </div>
+      )}
+      {action && (
+        <ActionDialog
+          client={client}
+          action={action}
+          onClose={() => {
+            setAction(undefined)
+            versions.reload()
+            onChanged()
+          }}
+          onSaved={() => {
+            setAction(undefined)
+            versions.reload()
+            onChanged()
+          }}
+        />
+      )}
+    </>
   )
 }

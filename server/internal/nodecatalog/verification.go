@@ -25,7 +25,15 @@ type VerificationOptions struct {
 
 // Validate 要求租约覆盖检查、清理、心跳和提交预算，拒绝未指定镜像、无界资源或无限核实。
 func (options VerificationOptions) Validate() error {
-	if !validID(options.ImageID) || options.Resources.Validate() != nil || options.CallTimeout < time.Second || options.CallTimeout > time.Minute ||
+	if !validID(options.ImageID) {
+		return errors.New("节点验收镜像无效")
+	}
+	return options.ValidateBudgets()
+}
+
+// ValidateBudgets 校验所有节点共享的验收预算，镜像身份由接入目录提供。
+func (options VerificationOptions) ValidateBudgets() error {
+	if options.Resources.Validate() != nil || options.CallTimeout < time.Second || options.CallTimeout > time.Minute ||
 		options.LeaseDuration < 5*options.CallTimeout || options.LeaseDuration > 10*time.Minute || options.Interval < time.Minute || options.Interval > 30*time.Minute ||
 		options.Lifetime < options.Interval+options.LeaseDuration || options.Lifetime > time.Hour || options.RetryDelay < time.Second || options.RetryDelay > time.Minute || options.MaxAttempts < 1 || options.MaxAttempts > 20 {
 		return errors.New("节点验收镜像、资源或有限预算无效")

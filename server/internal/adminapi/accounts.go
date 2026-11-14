@@ -15,6 +15,7 @@ import (
 	"io.yueyang/tom/internal/httpjson"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 )
 
 // Accounts 仅包含平台管理动作；本地首位管理员引导方法不会注册到 HTTP。
@@ -36,10 +37,9 @@ type Administrators interface {
 	CreateAdministrator(context.Context, identity.Principal, string, string, string, identity.Attempt) (identity.AdministratorSetup, error)
 }
 
-// Nodes 是节点目录配置接口；节点连接入口仍只来自部署配置，不接受页面输入的地址。
+// Nodes 只向近期验证的管理员签发一次性接入凭据。
 type Nodes interface {
-	Register(context.Context, identity.Principal, nodecatalog.Registration, string) (nodecatalog.Catalog, error)
-	Get(context.Context, identity.Principal, string) (nodecatalog.Catalog, error)
+	Issue(context.Context, identity.Principal, string) (nodeenrollment.Grant, error)
 }
 
 // Handler 必须由认证门保护全部路径，包括未匹配和方法错误响应。
@@ -78,8 +78,7 @@ func New(service Accounts, administratorsService Administrators, nodes Nodes, mo
 	router.Post("/api/v2/admin/users/{userID}/activation", handler.activation)
 	router.Get("/api/v2/admin/administrators", catalogHandler(handler, "administrators", administratorsService.ListAdministrators))
 	router.Post("/api/v2/admin/administrators", handler.createAdministrator)
-	router.Post("/api/v2/admin/computer-nodes", handler.registerNode)
-	router.Get("/api/v2/admin/computer-nodes/{imageID}", handler.nodeCatalog)
+	router.Post("/api/v2/admin/computer-nodes/enrollment-tokens", handler.enrollmentToken)
 	router.Get("/api/v2/admin/user-creation-operations/{operationID}", handler.operation)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/retry", handler.retry)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/reconcile", handler.reconcile)
@@ -230,28 +229,19 @@ func (handler *Handler) createAdministrator(w http.ResponseWriter, r *http.Reque
 	handler.respond(w, r, http.StatusCreated, setup)
 }
 
-// registerNode 只登记目录元数据；节点是否可用仍由心跳、部署检查与真实能力验收决定。
-func (handler *Handler) registerNode(w http.ResponseWriter, r *http.Request) {
-	var registration nodecatalog.Registration
-	if !handler.decode(w, r, &registration) {
+// enrollmentToken 只返回一次接入凭据，节点信息由持有凭据的节点签名登记。
+func (handler *Handler) enrollmentToken(w http.ResponseWriter, r *http.Request) {
+	var request struct{}
+	if !handler.decode(w, r, &request) {
 		return
 	}
-	identity := current(r)
-	catalog, err := handler.nodes.Register(r.Context(), identity.principal, registration, identity.attempt.RequestID)
+	actor := current(r)
+	grant, err := handler.nodes.Issue(r.Context(), actor.principal, actor.attempt.RequestID)
 	if err != nil {
 		handler.nodeError(w, r, err)
 		return
 	}
-	handler.respond(w, r, http.StatusCreated, catalog)
-}
-
-func (handler *Handler) nodeCatalog(w http.ResponseWriter, r *http.Request) {
-	catalog, err := handler.nodes.Get(r.Context(), current(r).principal, chi.URLParam(r, "imageID"))
-	if err != nil {
-		handler.nodeError(w, r, err)
-		return
-	}
-	handler.respond(w, r, http.StatusOK, catalog)
+	handler.respond(w, r, http.StatusCreated, grant)
 }
 
 func (handler *Handler) nodeError(w http.ResponseWriter, r *http.Request, err error) {

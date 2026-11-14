@@ -116,12 +116,18 @@ func (preparer imagePreparer) prepare(ctx context.Context, manifest ImageManifes
 	}()
 	image, err := preparer.engine.inspectImage(ctx, manifest.Reference)
 	if errors.Is(err, errMissing) {
-		authentication, err := preparer.authentication(manifest)
-		if err != nil {
-			return report, err
-		}
-		if err := preparer.engine.pullImage(ctx, manifest.Reference, manifest.Platform, authentication); err != nil {
-			return report, err
+		if manifest.ArchiveFile != "" {
+			if err := preparer.importArchive(ctx, manifest); err != nil {
+				return report, err
+			}
+		} else {
+			authentication, err := preparer.authentication(manifest)
+			if err != nil {
+				return report, err
+			}
+			if err := preparer.engine.pullImage(ctx, manifest.Reference, manifest.Platform, authentication); err != nil {
+				return report, err
+			}
 		}
 		image, err = preparer.engine.inspectImage(ctx, manifest.Reference)
 		if err != nil {

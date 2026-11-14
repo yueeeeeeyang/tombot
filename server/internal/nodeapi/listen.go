@@ -14,19 +14,28 @@ func Listen(address string, configuration *tls.Config, allowPublic bool) (net.Li
 	if configuration == nil || configuration.MinVersion < tls.VersionTLS13 {
 		return nil, errors.New("节点监听缺少 TLS 1.3 配置")
 	}
-	// 端口 0 表示由内核分配，只用于测试；部署配置另有最少端口要求。
-	parsed, err := netip.ParseAddrPort(address)
-	if err != nil || parsed.Port() > 65535 {
-		return nil, errors.New("节点监听地址无效")
-	}
-	if !allowPublic && !isPrivateAddress(parsed.Addr()) {
-		return nil, errors.New("节点监听公网地址需要显式允许")
+	parsed, err := ParseListenAddress(address, allowPublic)
+	if err != nil {
+		return nil, err
 	}
 	listener, err := net.Listen("tcp", parsed.String())
 	if err != nil {
 		return nil, errors.New("节点监听端口无法绑定")
 	}
 	return tls.NewListener(listener, configuration), nil
+}
+
+// ParseListenAddress 复用监听地址与公网许可校验，供安装前检查使用；无效或未许可的地址返回错误。
+// 端口 0 由内核分配，仅用于监听测试，部署配置另行要求非零端口。
+func ParseListenAddress(address string, allowPublic bool) (netip.AddrPort, error) {
+	parsed, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return netip.AddrPort{}, errors.New("节点监听地址无效")
+	}
+	if !allowPublic && !isPrivateAddress(parsed.Addr()) {
+		return netip.AddrPort{}, errors.New("节点监听公网地址需要显式允许")
+	}
+	return parsed, nil
 }
 
 // isPrivateAddress 只放行回环、私网、链路本地与 IPv6 唯一本地地址。

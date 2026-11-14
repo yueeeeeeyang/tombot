@@ -13,69 +13,51 @@ import (
 )
 
 type versionState struct {
-	version                                         Version
-	policyRevision, providerRevision, modelRevision int64
-	currentVersion                                  *int64
-	isAvailable                                     bool
+	version        Version
+	policyRevision int64
+	isAvailable    bool
+	candidates     []candidateState
 }
 
 func lockPolicy(ctx context.Context, transaction *sql.Tx, policyID string) error {
 	return requireRow(transaction.QueryRowContext(ctx, `SELECT id FROM tombot.model_policies WHERE id=$1 FOR UPDATE`, policyID))
 }
-
-func readVersion(ctx context.Context, transaction *sql.Tx, policyID string, number int64, lock bool) (versionState, error) {
+func readVersion(ctx context.Context, tx *sql.Tx, policyID string, number int64, lock bool) (versionState, error) {
 	var state versionState
-	var encoded []byte
-	var canonical Configuration
-	query := `SELECT v.policy_id,v.version,v.provider_id,v.model_id,v.credential_id,v.configuration,v.status,v.published_at,
-		policy.revision,p.revision,m.revision,policy.current_version,
-		policy.is_enabled AND p.is_enabled AND m.is_enabled AND (v.credential_id IS NULL OR c.revoked_at IS NULL),
-		p.protocol,p.base_url,m.model_key,m.context_limit,m.output_limit,m.supports_tools,m.supports_vision
-		FROM tombot.model_policy_versions v JOIN tombot.model_policies policy ON policy.id=v.policy_id
-		JOIN tombot.model_providers p ON p.id=v.provider_id JOIN tombot.models m ON m.provider_id=v.provider_id AND m.id=v.model_id
-		LEFT JOIN tombot.model_credentials c ON c.provider_id=v.provider_id AND c.id=v.credential_id
-		WHERE v.policy_id=$1 AND v.version=$2`
+	query := `SELECT v.policy_id,v.version,v.routing_mode,coalesce(p.current_version=v.version,false),v.verified_at,p.revision,p.is_enabled
+ FROM tombot.model_policy_versions v JOIN tombot.model_policies p ON p.id=v.policy_id WHERE v.policy_id=$1 AND v.version=$2`
 	if lock {
-		query += ` FOR SHARE OF policy,p,m,v`
+		query += ` FOR SHARE OF p,v`
 	}
 	v := &state.version
-	err := transaction.QueryRowContext(ctx, query, policyID, number).Scan(&v.PolicyID, &v.Number, &v.ProviderID, &v.ModelID, &v.CredentialID, &encoded, &v.Status, &v.PublishedAt,
-		&state.policyRevision, &state.providerRevision, &state.modelRevision, &state.currentVersion, &state.isAvailable,
-		&canonical.Protocol, &canonical.BaseURL, &canonical.ModelKey, &canonical.ContextLimit, &canonical.OutputLimit, &canonical.SupportsTools, &canonical.SupportsVision)
+	err := tx.QueryRowContext(ctx, query, policyID, number).Scan(&v.PolicyID, &v.Number, &v.RoutingMode, &v.IsEnabled, &v.VerifiedAt, &state.policyRevision, &state.isAvailable)
 	if errors.Is(err, sql.ErrNoRows) {
 		return state, ErrNotFound
 	}
 	if err != nil {
 		return state, err
 	}
-	v.Configuration, err = decodeConfiguration(encoded)
-	if err != nil {
-		return state, err
+	state.candidates, err = readCandidates(ctx, tx, policyID, number, lock)
+	for _, c := range state.candidates {
+		v.Candidates = append(v.Candidates, c.candidate)
 	}
-	configuration := v.Configuration
-	if configuration.Protocol != canonical.Protocol || configuration.BaseURL != canonical.BaseURL || configuration.ModelKey != canonical.ModelKey ||
-		configuration.ContextLimit != canonical.ContextLimit || configuration.OutputLimit > canonical.OutputLimit ||
-		configuration.SupportsTools != canonical.SupportsTools || configuration.SupportsVision != canonical.SupportsVision {
-		return state, ErrUnavailable
-	}
-	return state, nil
+	return state, err
 }
-
 func decodeConfiguration(encoded []byte) (Configuration, error) {
-	var configuration Configuration
+	var config Configuration
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
-	if len(encoded) > 16<<10 || decoder.Decode(&configuration) != nil {
-		return Configuration{}, ErrUnavailable
+	if len(encoded) > 16<<10 || decoder.Decode(&config) != nil {
+		return config, ErrUnavailable
 	}
 	var trailing any
-	if decoder.Decode(&trailing) != io.EOF || !configuration.valid() {
+	if decoder.Decode(&trailing) != io.EOF || !config.valid() {
 		return Configuration{}, ErrUnavailable
 	}
-	return configuration, nil
+	return config, nil
 }
 
-// ListVersions 用单次有界查询读取草稿与历史，不为每行额外访问目录或凭据。
+// ListVersions 聚合候选快照，单次有界查询避免按版本逐行访问目录。
 func (service *Service) ListVersions(ctx context.Context, actor identity.Principal, policyID string, before int64, limit int) ([]Version, error) {
 	if err := service.authorizer.RequireAdmin(ctx, actor, false); err != nil {
 		return nil, err
@@ -84,90 +66,94 @@ func (service *Service) ListVersions(ctx context.Context, actor identity.Princip
 		return nil, ErrInvalidInput
 	}
 	versions := []Version{}
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		rows, err := transaction.QueryContext(ctx, `SELECT policy_id,version,provider_id,model_id,credential_id,configuration,status,published_at FROM tombot.model_policy_versions
-			WHERE policy_id=$1 AND ($2::bigint=0 OR version<$2) ORDER BY version DESC LIMIT $3`, policyID, before, limit)
+	err := service.transaction(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `WITH page AS (SELECT v.policy_id,v.version,v.routing_mode,v.verified_at,coalesce(p.current_version=v.version,false) AS is_enabled
+   FROM tombot.model_policy_versions v JOIN tombot.model_policies p ON p.id=v.policy_id
+   WHERE v.policy_id=$1 AND ($2::bigint=0 OR v.version<$2) ORDER BY v.version DESC LIMIT $3)
+   SELECT p.policy_id,p.version,p.routing_mode,p.is_enabled,p.verified_at,
+   jsonb_agg(to_jsonb(c)-ARRAY['policy_id','version'] ORDER BY c.position)
+   FROM page p JOIN tombot.model_policy_candidates c USING(policy_id,version)
+   GROUP BY p.policy_id,p.version,p.routing_mode,p.is_enabled,p.verified_at ORDER BY p.version DESC`, policyID, before, limit)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var version Version
+			var v Version
 			var encoded []byte
-			if err = rows.Scan(&version.PolicyID, &version.Number, &version.ProviderID, &version.ModelID, &version.CredentialID, &encoded, &version.Status, &version.PublishedAt); err != nil {
+			if err = rows.Scan(&v.PolicyID, &v.Number, &v.RoutingMode, &v.IsEnabled, &v.VerifiedAt, &encoded); err != nil {
 				return err
 			}
-			version.Configuration, err = decodeConfiguration(encoded)
-			if err != nil {
-				return err
+			if json.Unmarshal(encoded, &v.Candidates) != nil || len(v.Candidates) < 1 || len(v.Candidates) > MaxCandidates {
+				return ErrUnavailable
 			}
-			versions = append(versions, version)
+			for _, c := range v.Candidates {
+				if !c.Configuration.valid() {
+					return ErrUnavailable
+				}
+			}
+			versions = append(versions, v)
 		}
 		return rows.Err()
 	})
-	if err != nil {
-		return nil, err
-	}
-	return versions, nil
+	return versions, err
 }
 
-// CreateDraft 从受管目录生成完整快照，串行分配递增版本；不接受任意客户端模型参数。
-func (service *Service) CreateDraft(ctx context.Context, actor identity.Principal, requestID string, request DraftRequest) (Version, error) {
+// CreateVersion 原子创建停用版本和候选快照；参数和凭据默认继承，历史配置不可原地修改。
+func (service *Service) CreateVersion(ctx context.Context, actor identity.Principal, requestID string, request VersionRequest) (Version, error) {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return Version{}, err
 	}
-	if !validID(request.PolicyID) || !validID(request.ModelID) || (request.CredentialID != nil && !validID(*request.CredentialID)) {
+	if !validID(request.PolicyID) || !validRoutingMode(request.RoutingMode) || len(request.Candidates) < 1 || len(request.Candidates) > MaxCandidates {
 		return Version{}, ErrInvalidInput
 	}
-	version := Version{PolicyID: request.PolicyID, ModelID: request.ModelID, CredentialID: request.CredentialID, Status: "draft"}
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		if err := lockPolicy(ctx, transaction, request.PolicyID); err != nil {
+	seen := map[string]bool{}
+	for _, c := range request.Candidates {
+		if !validID(c.ModelID) || seen[c.ModelID] || c.Priority < 1 || c.Priority > 1000 || c.Weight < 1 || c.Weight > 1000 || c.CredentialID != nil && !validID(*c.CredentialID) {
+			return Version{}, ErrInvalidInput
+		}
+		seen[c.ModelID] = true
+	}
+	v := Version{PolicyID: request.PolicyID, RoutingMode: request.RoutingMode, Candidates: []Candidate{}}
+	err := service.transaction(ctx, func(tx *sql.Tx) error {
+		if err := lockPolicy(ctx, tx, v.PolicyID); err != nil {
 			return err
 		}
-		configuration := Configuration{Prices: request.Prices}
-		maximumOutput := 0
-		err := transaction.QueryRowContext(ctx, `SELECT p.id,p.protocol,p.base_url,m.model_key,m.context_limit,m.output_limit,m.supports_tools,m.supports_vision
-			FROM tombot.models m JOIN tombot.model_providers p ON p.id=m.provider_id WHERE m.id=$1 FOR SHARE OF p,m`, request.ModelID).
-			Scan(&version.ProviderID, &configuration.Protocol, &configuration.BaseURL, &configuration.ModelKey, &configuration.ContextLimit, &maximumOutput, &configuration.SupportsTools, &configuration.SupportsVision)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(version),0)+1 FROM tombot.model_policy_versions WHERE policy_id=$1`, v.PolicyID).Scan(&v.Number); err != nil {
 			return err
 		}
-		configuration.OutputLimit = request.OutputLimit
-		if !configuration.valid() || configuration.OutputLimit > maximumOutput {
-			return ErrInvalidInput
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tombot.model_policy_versions(policy_id,version,routing_mode) VALUES($1,$2,$3)`, v.PolicyID, v.Number, v.RoutingMode); err != nil {
+			return err
 		}
-		version.Configuration = configuration
-		if request.CredentialID != nil {
-			if err = requireRow(transaction.QueryRowContext(ctx, `SELECT id FROM tombot.model_credentials WHERE id=$1 AND provider_id=$2 AND revoked_at IS NULL FOR SHARE`, *request.CredentialID, version.ProviderID)); err != nil {
+		for i, request := range request.Candidates {
+			c, err := snapshotCandidate(ctx, tx, request, i+1)
+			if err != nil {
 				return err
 			}
+			encoded, err := json.Marshal(c.Configuration)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.model_policy_candidates(policy_id,version,position,provider_id,model_id,credential_id,configuration,priority,weight)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, v.PolicyID, v.Number, c.Position, c.ProviderID, c.ModelID, c.CredentialID, encoded, c.Priority, c.Weight); err != nil {
+				return err
+			}
+			v.Candidates = append(v.Candidates, c)
 		}
-		if err = transaction.QueryRowContext(ctx, `SELECT coalesce(max(version),0)+1 FROM tombot.model_policy_versions WHERE policy_id=$1`, request.PolicyID).Scan(&version.Number); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE tombot.model_policies SET revision=revision+1 WHERE id=$1`, v.PolicyID); err != nil {
 			return err
 		}
-		encoded, err := json.Marshal(configuration)
-		if err != nil {
-			return err
-		}
-		if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.model_policy_versions(policy_id,version,provider_id,model_id,credential_id,configuration,status) VALUES($1,$2,$3,$4,$5,$6,'draft')`, version.PolicyID, version.Number, version.ProviderID, version.ModelID, version.CredentialID, encoded); err != nil {
-			return err
-		}
-		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policies SET revision=revision+1 WHERE id=$1`, version.PolicyID); err != nil {
-			return err
-		}
-		return audit(ctx, transaction, actor, requestID, "新增模型策略草稿", version.PolicyID, map[string]any{"version": version.Number})
+		return audit(ctx, tx, actor, requestID, "新增多模型策略版本", v.PolicyID, map[string]any{"version": v.Number, "candidates": len(v.Candidates), "routing_mode": v.RoutingMode})
 	})
 	if err != nil {
 		return Version{}, err
 	}
-	return version, nil
+	return v, nil
 }
 
-// Publish 在事务外验证声明能力，再核对所有修订并原子发布。回包丢失后重查同版本不会重复验证。
-func (service *Service) Publish(ctx context.Context, actor identity.Principal, requestID, policyID string, number, expectedRevision int64) (Version, error) {
+// EnableVersion 首次启用前逐个验证候选；测试不持事务，提交时复验修订并原子替换唯一启用版本。
+// 已验证版本只检查当前可用性；修订冲突、能力验证失败或目录变动均保持原版本不变。
+func (service *Service) EnableVersion(ctx context.Context, actor identity.Principal, requestID, policyID string, number, expectedRevision int64) (Version, error) {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return Version{}, err
 	}
@@ -175,100 +161,129 @@ func (service *Service) Publish(ctx context.Context, actor identity.Principal, r
 		return Version{}, ErrInvalidInput
 	}
 	var initial versionState
-	var plaintext []byte
-	defer func() { clear(plaintext) }()
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
+	var credentials [][]byte
+	defer func() {
+		for _, value := range credentials {
+			clear(value)
+		}
+	}()
+	err := service.transaction(ctx, func(tx *sql.Tx) error {
 		var err error
-		initial, err = readVersion(ctx, transaction, policyID, number, false)
+		initial, err = readVersion(ctx, tx, policyID, number, true)
 		if err != nil {
 			return err
 		}
-		if initial.version.Status == "published" {
-			return nil
-		}
-		if !initial.isAvailable || initial.version.Status != "draft" {
-			return ErrUnavailable
-		}
-		if initial.policyRevision != expectedRevision || (initial.currentVersion != nil && number <= *initial.currentVersion) {
+		if initial.policyRevision != expectedRevision {
 			return ErrConflict
 		}
-		plaintext, err = service.decrypt(ctx, transaction, initial.version)
-		return err
+		if !initial.isAvailable || !hasAvailableCandidate(initial) {
+			return ErrUnavailable
+		}
+		if initial.version.VerifiedAt != nil {
+			return nil
+		}
+		for _, c := range initial.candidates {
+			if !c.available {
+				return ErrUnavailable
+			}
+			plaintext, err := service.decrypt(ctx, tx, c.candidate)
+			if err != nil {
+				return err
+			}
+			credentials = append(credentials, plaintext)
+		}
+		return nil
 	})
 	if err != nil {
 		return Version{}, err
 	}
-	if initial.version.Status == "published" {
-		return initial.version, nil
-	}
-	verificationContext, cancel := context.WithTimeout(ctx, service.options.VerificationTimeout)
-	err = service.verifier.Verify(verificationContext, initial.version.Configuration, plaintext)
-	verificationErr := verificationContext.Err()
-	cancel()
-	clear(plaintext)
-	plaintext = nil
-	if err != nil || verificationErr != nil {
-		if ctx.Err() != nil {
-			return Version{}, ctx.Err()
+	if initial.version.VerifiedAt == nil {
+		bounded, cancel := context.WithTimeout(ctx, service.options.VerificationTimeout)
+		defer cancel()
+		for i, c := range initial.candidates {
+			err = service.verifier.Verify(bounded, c.candidate.Configuration, credentials[i])
+			clear(credentials[i])
+			if err != nil || bounded.Err() != nil {
+				if ctx.Err() != nil {
+					return Version{}, ctx.Err()
+				}
+				if recordErr := service.transaction(ctx, func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx, `INSERT INTO tombot.admin_audit_events(id,actor_id,action,target_kind,target_id,request_id,result,changes)
+      VALUES($1,$2,'模型策略能力验证失败','model_configuration',$3,$4,'failed',jsonb_build_object('version',$5::bigint,'model_id',$6::text))`, ids.New(), actor.UserID, policyID, requestID, number, c.candidate.ModelID)
+					return err
+				}); recordErr != nil {
+					return Version{}, recordErr
+				}
+				return Version{}, ErrVerification
+			}
 		}
-		// 上游错误可能含请求头和响应正文，只持久化固定失败分类。
-		if recordErr := service.transaction(ctx, func(transaction *sql.Tx) error {
-			_, writeErr := transaction.ExecContext(ctx, `INSERT INTO tombot.admin_audit_events(id,actor_id,action,target_kind,target_id,request_id,result,changes)
-				VALUES($1,$2,'模型策略能力验证失败','model_configuration',$3,$4,'failed',jsonb_build_object('version',$5::bigint))`, ids.New(), actor.UserID, policyID, requestID, number)
-			return writeErr
-		}); recordErr != nil {
-			return Version{}, recordErr
-		}
-		return Version{}, ErrVerification
 	}
 	if err = service.authorize(ctx, actor, requestID); err != nil {
 		return Version{}, err
 	}
-	var published Version
-	err = service.transaction(ctx, func(transaction *sql.Tx) error {
-		if err := lockPolicy(ctx, transaction, policyID); err != nil {
+	var enabled Version
+	err = service.transaction(ctx, func(tx *sql.Tx) error {
+		if err := lockPolicy(ctx, tx, policyID); err != nil {
 			return err
 		}
-		current, err := readVersion(ctx, transaction, policyID, number, true)
+		current, err := readVersion(ctx, tx, policyID, number, true)
 		if err != nil {
 			return err
 		}
-		if current.version.Status == "published" {
-			published = current.version
-			return nil
-		}
-		if !current.isAvailable || current.version.Status != "draft" {
-			return ErrUnavailable
-		}
-		if current.policyRevision != initial.policyRevision || current.providerRevision != initial.providerRevision || current.modelRevision != initial.modelRevision {
+		if current.policyRevision != initial.policyRevision {
 			return ErrConflict
 		}
-		// 再次锁定并认证凭据，防止探测期间撤销后仍把策略发布为可用。
-		check, err := service.decrypt(ctx, transaction, current.version)
-		clear(check)
+		if !current.isAvailable || !hasAvailableCandidate(current) {
+			return ErrUnavailable
+		}
+		if current.version.IsEnabled {
+			enabled = current.version
+			return nil
+		}
+		if initial.version.VerifiedAt == nil {
+			for i, c := range current.candidates {
+				if !c.available {
+					return ErrUnavailable
+				}
+				if c.providerRevision != initial.candidates[i].providerRevision || c.modelRevision != initial.candidates[i].modelRevision {
+					return ErrConflict
+				}
+				check, err := service.decrypt(ctx, tx, c.candidate)
+				clear(check)
+				if err != nil {
+					return err
+				}
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE tombot.model_policy_versions SET verified_at=clock_timestamp() WHERE policy_id=$1 AND version=$2`, policyID, number); err != nil {
+				return err
+			}
+		}
+		if _, err = tx.ExecContext(ctx, `UPDATE tombot.model_policies SET current_version=$2,revision=revision+1 WHERE id=$1`, policyID, number); err != nil {
+			return err
+		}
+		state, err := readVersion(ctx, tx, policyID, number, false)
 		if err != nil {
 			return err
 		}
-		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policy_versions SET status='published' WHERE policy_id=$1 AND version=$2`, policyID, number); err != nil {
-			return err
-		}
-		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policies SET current_version=$2,revision=revision+1 WHERE id=$1`, policyID, number); err != nil {
-			return err
-		}
-		state, err := readVersion(ctx, transaction, policyID, number, false)
-		if err != nil {
-			return err
-		}
-		published = state.version
-		return audit(ctx, transaction, actor, requestID, "发布模型策略版本", policyID, map[string]any{"version": number})
+		enabled = state.version
+		return audit(ctx, tx, actor, requestID, "启用模型策略版本", policyID, map[string]any{"version": number})
 	})
 	if err != nil {
 		return Version{}, err
 	}
-	return published, nil
+	return enabled, nil
 }
 
-// GetVersion 返回指定版本的管理视图，不向普通用户提供供应商地址与凭据标识。
+func hasAvailableCandidate(state versionState) bool {
+	for _, c := range state.candidates {
+		if c.available {
+			return true
+		}
+	}
+	return false
+}
+
+// GetVersion 返回完整历史快照；目录状态变化不会隐藏管理员的历史记录。
 func (service *Service) GetVersion(ctx context.Context, actor identity.Principal, policyID string, number int64) (Version, error) {
 	if err := service.authorizer.RequireAdmin(ctx, actor, false); err != nil {
 		return Version{}, err
@@ -276,43 +291,40 @@ func (service *Service) GetVersion(ctx context.Context, actor identity.Principal
 	if !validID(policyID) || number < 1 {
 		return Version{}, ErrInvalidInput
 	}
-	var version Version
-	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		state, err := readVersion(ctx, transaction, policyID, number, false)
-		version = state.version
+	var v Version
+	err := service.transaction(ctx, func(tx *sql.Tx) error {
+		state, err := readVersion(ctx, tx, policyID, number, false)
+		v = state.version
 		return err
 	})
-	if err != nil {
-		return Version{}, err
-	}
-	return version, nil
+	return v, err
 }
 
-// RevokeVersion 保留历史配置并使后续使用失败；不会偷偷回退到旧版本或平台默认策略。
-func (service *Service) RevokeVersion(ctx context.Context, actor identity.Principal, requestID, policyID string, number int64) error {
+// DisableVersion 清除所选版本；已停用版本重复操作不影响其他版本，已有运行保持原配置。
+func (service *Service) DisableVersion(ctx context.Context, actor identity.Principal, requestID, policyID string, number, expectedRevision int64) error {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return err
 	}
-	if !validID(policyID) || number < 1 {
+	if !validID(policyID) || number < 1 || expectedRevision < 1 {
 		return ErrInvalidInput
 	}
-	return service.transaction(ctx, func(transaction *sql.Tx) error {
-		if err := lockPolicy(ctx, transaction, policyID); err != nil {
+	return service.transaction(ctx, func(tx *sql.Tx) error {
+		if err := lockPolicy(ctx, tx, policyID); err != nil {
 			return err
 		}
-		state, err := readVersion(ctx, transaction, policyID, number, false)
+		state, err := readVersion(ctx, tx, policyID, number, true)
 		if err != nil {
 			return err
 		}
-		if state.version.Status == "revoked" {
+		if state.policyRevision != expectedRevision {
+			return ErrConflict
+		}
+		if !state.version.IsEnabled {
 			return nil
 		}
-		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policy_versions SET status='revoked' WHERE policy_id=$1 AND version=$2`, policyID, number); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE tombot.model_policies SET revision=revision+1,current_version=NULL WHERE id=$1`, policyID); err != nil {
 			return err
 		}
-		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policies SET revision=revision+1 WHERE id=$1`, policyID); err != nil {
-			return err
-		}
-		return audit(ctx, transaction, actor, requestID, "撤销模型策略版本", policyID, map[string]any{"version": number})
+		return audit(ctx, tx, actor, requestID, "停用模型策略版本", policyID, map[string]any{"version": number})
 	})
 }

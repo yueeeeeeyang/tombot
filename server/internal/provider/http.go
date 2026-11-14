@@ -42,9 +42,9 @@ func statusError(status int) error {
 }
 
 func (p *HTTP) request(ctx context.Context, body []byte) (*http.Response, error) {
-	path := "/chat/completions"
-	if p.Spec.Kind == "anthropic" {
-		path = "/messages"
+	path := GenerationPath(p.Spec.Kind)
+	if path == "" {
+		return nil, upstreamError("PROVIDER_BAD_REQUEST")
 	}
 	// 生成请求可能已经计费或执行；通用兼容协议不能证明 429 或 5xx 没有产生副作用。
 	// 因此状态码、回包丢失和网络失败都只返回本次结果，不自动重放 POST。
@@ -109,6 +109,9 @@ func (p *HTTP) Stream(parent context.Context, req Request, onEvent func(Event) e
 		if p.Spec.Kind == "anthropic" {
 			return state.anthropic([]byte(payload), onEvent)
 		}
+		if p.Spec.Kind == "responses" {
+			return state.responses([]byte(payload), onEvent)
+		}
 		return state.openAI(payload, onEvent)
 	}
 	for scan.Scan() {
@@ -169,7 +172,7 @@ func (p *HTTP) Stream(parent context.Context, req Request, onEvent func(Event) e
 }
 
 // artifactParts 仅在有视觉能力且当前上下文已验证字节时编码图片。其余情况显式告诉模型可用的文件路径。
-func artifactParts(ref *domain.ArtifactRef, model domain.Model, anthropic bool) ([]any, error) {
+func artifactParts(ref *domain.ArtifactRef, model domain.Model, protocol string) ([]any, error) {
 	if ref == nil {
 		return nil, domain.NewError(400, "ATTACHMENT_INVALID", "Missing attachment metadata.")
 	}
@@ -185,8 +188,10 @@ func artifactParts(ref *domain.ArtifactRef, model domain.Model, anthropic bool) 
 			return nil, domain.NewError(400, "ATTACHMENT_INVALID", "Invalid image payload size.")
 		}
 		encoded := base64.StdEncoding.EncodeToString(ref.Content)
-		if anthropic {
+		if protocol == "anthropic" {
 			parts = append(parts, map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": ref.MediaType, "data": encoded}})
+		} else if protocol == "responses" {
+			parts = append(parts, map[string]string{"type": "input_image", "image_url": "data:" + ref.MediaType + ";base64," + encoded})
 		} else {
 			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:" + ref.MediaType + ";base64," + encoded}})
 		}
@@ -195,12 +200,19 @@ func artifactParts(ref *domain.ArtifactRef, model domain.Model, anthropic bool) 
 	} else if ref.IsImage() {
 		description += "\nImage pixels are not included in this request."
 	}
-	return append(parts, map[string]string{"type": "text", "text": description}), nil
+	textType := "text"
+	if protocol == "responses" {
+		textType = "input_text"
+	}
+	return append(parts, map[string]string{"type": textType, "text": description}), nil
 }
 
 func (p *HTTP) encode(req Request) ([]byte, error) {
 	if req.Model.ModelKey == "" || req.Model.MaxOutput < 1 {
 		return nil, domain.NewError(400, "MODEL_INVALID", "A model key and output limit are required.")
+	}
+	if p.Spec.Kind == "responses" {
+		return encodeResponses(req)
 	}
 	if p.Spec.Kind == "anthropic" {
 		messages := []any{}
@@ -209,7 +221,7 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 			for _, block := range message.Blocks {
 				switch block.Kind {
 				case "artifact":
-					parts, err := artifactParts(block.Artifact, req.Model, true)
+					parts, err := artifactParts(block.Artifact, req.Model, "anthropic")
 					if err != nil {
 						return nil, err
 					}
@@ -224,7 +236,7 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 					if block.ToolResult != nil {
 						var content any = block.ToolResult.Content
 						if block.ToolResult.Artifact != nil && !block.ToolResult.IsError {
-							parts, err := artifactParts(block.ToolResult.Artifact, req.Model, true)
+							parts, err := artifactParts(block.ToolResult.Artifact, req.Model, "anthropic")
 							if err != nil {
 								return nil, err
 							}
@@ -237,6 +249,9 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 			messages = append(messages, map[string]any{"role": message.Role, "content": blocks})
 		}
 		body := map[string]any{"model": req.Model.ModelKey, "max_tokens": req.Model.MaxOutput, "stream": true, "messages": messages}
+		if req.ReasoningEffort != "" {
+			body["output_config"] = map[string]string{"effort": req.ReasoningEffort}
+		}
 		if req.System != "" {
 			body["system"] = []any{map[string]any{"type": "text", "text": req.System, "cache_control": map[string]string{"type": "ephemeral"}}}
 		}
@@ -280,7 +295,7 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 				contentParts = append(contentParts, map[string]string{"type": "text", "text": block.Text})
 			case "artifact":
 				hasArtifact = true
-				parts, err := artifactParts(block.Artifact, req.Model, false)
+				parts, err := artifactParts(block.Artifact, req.Model, "openai_compat")
 				if err != nil {
 					return nil, err
 				}
@@ -296,7 +311,7 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 			case "tool_result":
 				if block.ToolResult != nil {
 					if block.ToolResult.Artifact != nil && !block.ToolResult.IsError {
-						parts, err := artifactParts(block.ToolResult.Artifact, req.Model, false)
+						parts, err := artifactParts(block.ToolResult.Artifact, req.Model, "openai_compat")
 						if err != nil {
 							return nil, err
 						}
@@ -322,6 +337,9 @@ func (p *HTTP) encode(req Request) ([]byte, error) {
 	}
 	flushToolImages()
 	body := map[string]any{"model": req.Model.ModelKey, "max_completion_tokens": req.Model.MaxOutput, "stream": true, "stream_options": map[string]bool{"include_usage": true}, "messages": messages}
+	if req.ReasoningEffort != "" {
+		body["reasoning_effort"] = req.ReasoningEffort
+	}
 	if p.Spec.Preset == "deepseek" {
 		delete(body, "max_completion_tokens")
 		body["max_tokens"] = req.Model.MaxOutput

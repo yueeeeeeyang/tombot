@@ -1,10 +1,10 @@
 # 固定电脑镜像准备
 
-`tomimage-prepare` 在 Linux 宿主以 root 执行，负责将部署指定的一个固定摘要镜像准备到本机 Docker，并复验平台和代理入口。API/Worker 不读取仓库认证、不加入 Docker 组，也不发起镜像拉取。命令没有创建容器、删除镜像、修改标签、导入归档、设置节点或用户电脑就绪的接口。
+`tomnode prepare-image` 在 Linux 宿主以 root 执行，负责将部署指定的一个固定摘要镜像准备到本机 Docker，并复验平台和代理入口。API/Worker 不读取仓库认证、不加入 Docker 组，也不发起镜像拉取。命令没有创建容器、删除镜像、修改标签、设置节点或用户电脑就绪的接口。
 
 ## 部署入口
 
-节点和镜像身份先按[目录登记](node-registration.md)生成并保留。镜像准备清单使用相同的 `node_id`、`image_id` 与固定仓库摘要；本命令不连接 PostgreSQL，后续完整节点激活还须核对这两类记录。`make build` 和 `make release` 已包含本命令，安装与宿主架构匹配的程序到 `/usr/lib/tombot/tomimage-prepare`。
+节点和镜像身份由首次安装自动生成或已有运行配置提供，再按[目录登记](node-registration.md)接入主服务。镜像准备清单使用相同的 `node_id`、`image_id` 与固定仓库摘要；本命令不连接 PostgreSQL，后续完整节点激活还须核对这两类记录。`make build` 和 `make release` 已包含本命令，只需安装与宿主架构匹配的 `/usr/lib/tombot/tomnode`。
 
 清单格式见 [JSON Schema](../deploy/computer-image.schema.json)。下面是字段示意，中文占位必须替换为发布时的真实值，不能直接安装为生产清单：
 
@@ -22,18 +22,18 @@
 }
 ```
 
-清单和可选认证文件为 root 所有的普通文件，权限 0600，拒绝硬链接、符号链接、重复键、大小写别名、未知字段、空值及尾随内容。所有路径须为规范绝对路径，父目录均由 root 管理且不可被普通用户写入。平台必须与程序实际运行宿主相同，仅接受 Linux amd64/arm64。状态目录由部署建立，不能与用户工作区或节点生命周期记录混用。Docker socket 必须由 root 持有且权限为 0600 或 0660；镜像准备和运行节点共用此检查，拒绝向所有用户开放的管理 socket。
+清单和可选认证文件为 root 所有的普通文件，权限 0600，拒绝硬链接、符号链接、重复键、大小写别名、未知字段、空值及尾随内容。所有路径须为规范绝对路径，父目录均由 root 管理且不可被普通用户写入。平台必须与程序实际运行宿主相同，仅接受 Linux amd64/arm64。状态目录由节点 systemd 单元建立，不能与用户工作区或节点生命周期记录混用。Docker socket 必须由 root 持有且权限为 0600 或 0660；镜像准备和运行节点共用此检查，拒绝向所有用户开放的管理 socket。
 
 ```sh
-TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json \
-/usr/lib/tombot/tomimage-prepare
+TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/node/computer-image.json \
+/usr/lib/tombot/tomnode prepare-image
 ```
 
-不接受命令行参数。[镜像准备单元](../deploy/systemd/tombot-image-prepare.service)依赖 Docker 引导并位于独立节点之前；[节点单元](../deploy/systemd/tombot-node.service)依赖该准备步骤，[API 单元](../deploy/tomd.service)再依赖节点。模板使用 `StateDirectory=tombot-node/images` 创建私有记录目录，不自动生成真实镜像摘要或登记身份。[独立节点程序](../internal/nodeapp/README.md)已接通，完整节点激活仍待联合验收，本次没有安装、启用或重启宿主服务。
+`prepare-image` 子命令不接受额外参数。正常部署由 `tomnode start` 在配置检查和 Docker 引导之后直接调用本模块，不再安装独立镜像准备程序或单元。[节点单元](../deploy/systemd/tombot-node.service)使用 `StateDirectory=tombot-node/images` 建立私有记录目录，实际镜像摘要及登记身份仍由部署提供。完整节点能力仍待联合验收。
 
-## 拉取和复验
+## 离线导入与复验
 
-同一镜像 ID 使用持久文件锁串行处理，总时限也包含等待锁。每次先刷盘 `preparing` 意图，再检查实际引擎；即使上次记录成功，也不能跳过本次检查。只有明确返回镜像不存在时，才发送一次指定摘要与平台的拉取请求；未知引擎错误不触发拉取，下载失败不在同一次调用里自动重试。
+同一镜像 ID 使用持久文件锁串行处理，总时限也包含等待锁。每次先刷盘 `preparing` 意图，再检查实际引擎；即使上次记录成功，也不能跳过本次检查。只有明确返回镜像不存在时，才执行镜像准备。新版离线安装清单包含 `archive_file` 与 `archive_sha256`：归档必须是 root 0600、无链接的受保护文件，最大 16 GiB；在同一文件描述符上核验 SHA-256 后通过 Docker `images/load` 导入，再复验固定仓库摘要、平台及入口约定。不解压到宿主目录，不发送仓库认证，不在失败时回退联网。既有显式仓库运行配置未指定归档时才拉取固定摘要；未知引擎错误不触发导入或拉取，失败不在同次调用自动重试。
 
 拉取采用固定 Engine API v1.47 的 `fromImage` 和 `platform` 参数，通过本机 Unix socket 连接，不读取 Docker CLI 配置或环境代理。按 Docker 协议，关闭 HTTP 连接会取消对应拉取；本实现用总体上下文约束下载，连接与响应头使用较短时限。[Docker Engine API 定义](https://raw.githubusercontent.com/moby/moby/v27.5.1/docs/api/v1.47.yaml)
 
@@ -55,7 +55,7 @@ TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json \
 
 状态存于独立目录中的 `<image_id>.image.json`，版本 1，阶段为 `preparing`、`available`、`failed`。相同镜像身份不能改绑另一节点、摘要或平台，已记录的实际镜像 ID 不能悄悄替换。更新镜像必须登记并部署新 ID 和新摘要。文件原子替换，并同步文件与父目录；损坏、权限漂移或链接替身均失败且不被覆盖。
 
-中断后保留相同身份重新调用：先检查实际引擎，如果上次下载已完成则直接复验，不重复下载；本地仍缺失才开启新的有限时拉取。命令不删除镜像或其他资源，失败可能留下已缓存层。磁盘同步可能受底层存储阻塞，不能因总体时限已到就伪造成功；systemd 的启动与停止时限另提供进程监督。远端认证、仓库不可用、磁盘空间不足或引擎出错时均阻断准备。
+中断后保留相同身份重新调用：先检查实际引擎，如果上次下载已完成则直接复验，不重复下载；本地仍缺失才按清单开启新的有限时离线导入或拉取。命令不删除镜像或其他资源，失败可能留下已缓存层。磁盘同步可能受底层存储阻塞，不能因总体时限已到就伪造成功；systemd 的启动与停止时限另提供进程监督。远端认证、仓库不可用、磁盘空间不足或引擎出错时均阻断准备。
 
 此项不改变数据库结构、历史迁移和电脑镜像内容。服务模板、新二进制、真实发布清单和登记身份须成套部署；回滚前停单排空，保留用户卷、目录与准备记录，恢复配套程序和配置。不能通过删除记录、改摘要、退回浮动标签或跳过镜像检查恢复接单。首次准备不等于完整生产上线，真实镜像发布和独立节点激活仍须联合验收。
 
@@ -65,3 +65,7 @@ TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json \
 `make lint check test` 覆盖固定摘要与平台、镜像契约、输入边界、各阶段故障、取消、未知拉取结果对账、原身份保护、文件损坏和认证范围。`linux && imageintegration` 测试使用专用禁网、只读、无附加 capability 容器，在真实受保护目录和 Unix HTTP 上验证八个并发准备只拉取一次、下载连接取消、错误父目录/链接/权限/平台及记录拒绝。Docker 响应为明确测试替身，不据此声称远程仓库下载已验收。
 
 `make test-image-preparation` 是独立只读验收入口，必须指定 `TOM_TEST_DOCKER_SOCKET` 和 `TOM_TEST_COMPUTER_IMAGE`，后者为本机已有的电脑镜像固定摘要。测试明确禁止拉取，通过实际 Docker API 验证正式镜像元数据和重复准备。当前 arm64 镜像 `tombot-computer@sha256:3d7e6960f34fd1c724ef50b5608887e155a3d5b0ca207e8484b5e4a927899dcb` 已通过此项；没有推送、修改或删除镜像，没有运行生产准备单元。真实远程仓库首次下载、私有仓库认证、Ubuntu systemd 首次部署及完整节点激活仍待联合验收。
+
+离线节点包包含归档与受测宿主软件清单，构建与核验见[发布说明](../deploy/RELEASE.md#节点离线安装包)。本次导入行为没有数据库变更，旧裸凭据和完整首次安装参数已移除；已有运行节点按维护升级流程保留身份，不由新版安装器接管。
+
+`make test-offline-image-import` 在专用测试引擎或尚未导入的测试镜像上验证真实离线导入，须显式设置 `TOM_TEST_DOCKER_SOCKET`、`TOM_TEST_COMPUTER_IMAGE`、`TOM_TEST_IMAGE_PLATFORM`、`TOM_TEST_IMAGE_ARCHIVE` 与 `TOM_TEST_IMAGE_ARCHIVE_SHA256`。测试要求目标摘要当前不存在，核验归档后仅导入一次并进行两次只读准备，不删除镜像、不拉取仓库、不启动业务容器。不要为测试移除正在使用的业务镜像。

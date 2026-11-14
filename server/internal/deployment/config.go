@@ -1,16 +1,12 @@
-// Package deployment 在安装之前核对同一宿主上的配置关系，不发布节点能力或开户许可。
+// Package deployment 在安装之前核对节点或成套部署配置，不发布节点能力或开户许可。
 package deployment
 
 import (
 	"errors"
-	"net"
-	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
-	"io.yueyang/tom/internal/dockerbootstrap"
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/nodeapp"
 	"io.yueyang/tom/internal/serverapp"
@@ -36,8 +32,8 @@ type Report struct {
 	NodeID   string `json:"node_id"`
 	ImageID  string `json:"image_id"`
 	Platform string `json:"platform"`
-	APIUID   uint32 `json:"api_uid"`
-	APIGID   uint32 `json:"api_gid"`
+	APIUID   uint32 `json:"api_uid,omitempty"`
+	APIGID   uint32 `json:"api_gid,omitempty"`
 }
 
 type account struct {
@@ -58,7 +54,7 @@ func (paths Paths) files() []string {
 }
 
 func (value configuration) directories() []string {
-	return []string{value.node.Runtime.StateDirectory, value.node.Runtime.StorageDirectory, value.node.Storage.StateDirectory, value.image.StateDirectory, dockerbootstrap.StateDirectory, dockerbootstrap.RuntimeDirectory, value.server.AdminDirectory}
+	return value.nodeDirectories()
 }
 
 // validateGraph 在各配置自身验证之后检查身份、期限和路径，不推断数据库或 Docker 状态。
@@ -67,20 +63,8 @@ func (value configuration) validateGraph(paths Paths, api account, platform stri
 	if api.uid == 0 || api.gid == 0 {
 		return errors.New("API 系统账户无效")
 	}
-	if server.Node.ID != node.NodeID || node.NodeID != image.NodeID || server.Node.Verification.ImageID != image.ImageID {
-		return errors.New("API、节点与镜像清单身份不一致")
-	}
-	// 跨主机后 API 与节点不再共享 socket 路径：只核对同端口与互相固定的证书指纹。
-	nodePort := nodeAddressPort(server.Node.URL)
-	listenPort := nodeListenPort(node.Listen)
-	if nodePort == 0 || nodePort != listenPort {
-		return errors.New("API 节点地址与节点监听端口不一致")
-	}
-	if node.Runtime.Socket != image.Socket || image.Socket != dockerbootstrap.SocketPath {
-		return errors.New("节点、镜像与 Docker 引导的控制端点不一致")
-	}
-	if image.Platform != platform {
-		return errors.New("镜像平台与当前宿主架构不一致")
+	if err := value.validateNodeIdentity(platform); err != nil {
+		return err
 	}
 	maximumLease := time.Duration(node.Runtime.MaximumLease) * time.Millisecond
 	if maximumLease < server.Provision.LeaseDuration.Value() || maximumLease < server.Node.Verification.LeaseDuration.Value() {
@@ -92,7 +76,11 @@ func (value configuration) validateGraph(paths Paths, api account, platform stri
 	if server.Provision.DesktopConcurrency > node.Agent.MaximumActive {
 		return errors.New("用户桌面额度超过电脑代理的并发容量")
 	}
-	directories := value.directories()
+	return validateFileLayout(append(paths.files(), value.referencePaths()...), value.directories(), image.Socket)
+}
+
+// validateFileLayout 共用目录和引用隔离规则，节点检查与成套检查不能各自放宽权限边界。
+func validateFileLayout(files, directories []string, socket string) error {
 	for index, directory := range directories {
 		if !validPath(directory) {
 			return errors.New("部署目录路径无效")
@@ -103,14 +91,13 @@ func (value configuration) validateGraph(paths Paths, api account, platform stri
 			}
 		}
 		// 控制证书同时属于部署凭据，统一由下方文件清单的重叠检查拒绝，这里只拦 Docker 引导入口。
-		if within(image.Socket, directory) || within(directory, image.Socket) {
+		if within(socket, directory) || within(directory, socket) {
 			return errors.New("控制端点不得放入部署数据或管理静态目录")
 		}
 	}
-	files := append(paths.files(), value.referencePaths()...)
 	seen := make(map[string]bool, len(files))
 	for _, path := range files {
-		if !validPath(path) || seen[path] || path == image.Socket {
+		if !validPath(path) || seen[path] || path == socket {
 			return errors.New("部署文件路径无效、复用或与控制端点冲突")
 		}
 		seen[path] = true
@@ -121,29 +108,4 @@ func (value configuration) validateGraph(paths Paths, api account, platform stri
 		}
 	}
 	return nil
-}
-
-// nodeAddressPort 返回 API 配置中节点 URL 的端口；解析失败返回 0 交给调用方拒绝。
-func nodeAddressPort(value string) int {
-	parsed, err := url.Parse(value)
-	if err != nil {
-		return 0
-	}
-	port, err := strconv.Atoi(parsed.Port())
-	if err != nil {
-		return 0
-	}
-	return port
-}
-
-func nodeListenPort(value string) int {
-	_, port, err := net.SplitHostPort(value)
-	if err != nil {
-		return 0
-	}
-	number, err := strconv.Atoi(port)
-	if err != nil {
-		return 0
-	}
-	return number
 }

@@ -1,3 +1,4 @@
+import { Select } from '../components/Select'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Users } from 'lucide-react'
 import { AdminClient, ApiError } from '../api/client'
@@ -211,6 +212,7 @@ function CreateUser({
       if (!(
         cause instanceof ApiError &&
         [
+          'VERIFICATION_CANCELED',
           'INPUT_INVALID',
           'CREATE_CONFLICT',
           'CAPACITY_UNAVAILABLE',
@@ -246,21 +248,20 @@ function CreateUser({
             <input name="display_name" required maxLength={120} />
           </Field>
           <Field label="电脑节点">
-            <select name="node_id" required defaultValue="">
-              <option value="" disabled>
-                选择可用节点
-              </option>
-              {nodes.value?.nodes.map((node) => (
-                <option
-                  key={node.id}
-                  value={node.id}
-                  disabled={node.status !== 'ready' || node.reserved >= node.capacity}
-                >
-                  {node.name} · {node.reserved}/{node.capacity}
-                  {node.status !== 'ready' ? ' · 未就绪' : ''}
-                </option>
-              ))}
-            </select>
+            <Select
+              name="node_id"
+              label="电脑节点"
+              required
+              placeholder="选择可用节点"
+              disabled={busy || uncertain}
+              options={
+                nodes.value?.nodes.map((node) => ({
+                  value: node.id,
+                  label: `${node.name} · ${node.reserved}/${node.capacity}${node.status !== 'ready' ? ' · 未就绪' : ''}`,
+                  disabled: node.status !== 'ready' || node.reserved >= node.capacity,
+                })) ?? []
+              }
+            />
           </Field>
           {nodes.value && (
             <Pagination
@@ -271,16 +272,20 @@ function CreateUser({
             />
           )}
           <Field label="电脑镜像">
-            <select name="image_id" required defaultValue="">
-              <option value="" disabled>
-                选择已启用镜像
-              </option>
-              {images.value?.images.map((image) => (
-                <option key={image.id} value={image.id} disabled={!image.is_enabled}>
-                  {image.reference}
-                </option>
-              ))}
-            </select>
+            <Select
+              name="image_id"
+              label="电脑镜像"
+              required
+              placeholder="选择已启用镜像"
+              disabled={busy || uncertain}
+              options={
+                images.value?.images.map((image) => ({
+                  value: image.id,
+                  label: image.reference,
+                  disabled: !image.is_enabled,
+                })) ?? []
+              }
+            />
           </Field>
           {images.value && (
             <Pagination

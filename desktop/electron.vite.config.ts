@@ -12,6 +12,7 @@ export default defineConfig(({ command }) => {
       build: { rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } } },
     },
     renderer: {
+      resolve: { dedupe: ['react', 'react-dom', 'lucide-react'] },
       build: { minify: true },
       html: isDevelopment ? { cspNonce: nonce } : undefined,
       plugins: [

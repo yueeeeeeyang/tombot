@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,8 @@ func NewClient(options ClientOptions) (*Client, error) {
 	if !validNode(options.NodeID) || !validTimeout(options.CallTimeout) || options.TLS == nil || len(options.TLS.Certificates) == 0 || options.TLS.MinVersion < tls.VersionTLS13 {
 		return nil, errors.New("节点客户端配置无效")
 	}
-	endpoint, err := url.Parse(options.URL)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawQuery != "" || endpoint.Fragment != "" {
-		return nil, errors.New("节点客户端地址必须是明确的 HTTPS 来源")
+	if err := ValidateURL(options.URL); err != nil {
+		return nil, err
 	}
 	transport := &http.Transport{
 		TLSClientConfig:     options.TLS,
@@ -47,7 +47,7 @@ func NewClient(options ClientOptions) (*Client, error) {
 		MaxIdleConnsPerHost: 32,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	return &Client{options: options, http: &http.Client{Transport: transport, Timeout: options.CallTimeout}}, nil
+	return &Client{options: options, http: &http.Client{Transport: transport, Timeout: options.CallTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 
 // CloseIdle 释放空闲连接；不等待仍在进行的调用。
@@ -129,4 +129,19 @@ func deadlineOf(ctx context.Context) time.Time {
 func validID(value string) bool {
 	id, err := ulid.ParseStrict(value)
 	return err == nil && id.String() == value
+}
+
+// ValidateURL 限定可登记和连接的 HTTPS 来源，防止路径、认证信息及非法端口进入连接目录。
+func ValidateURL(value string) error {
+	endpoint, err := url.Parse(value)
+	if err != nil || len(value) > 512 || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Path != "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" || strings.ContainsAny(value, "\r\n\t ") || strings.HasSuffix(endpoint.Host, ":") {
+		return errors.New("节点地址必须是完整 HTTPS 来源")
+	}
+	if endpoint.Port() != "" {
+		port, err := strconv.Atoi(endpoint.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("节点地址端口无效")
+		}
+	}
+	return nil
 }

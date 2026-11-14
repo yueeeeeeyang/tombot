@@ -5,6 +5,8 @@ z.config({ jitless: true })
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/)
 export const principalSchema = z.object({
+  username: z.string().min(1).max(64),
+  display_name: z.string().min(1).max(120),
   user_id: id,
   session_id: id,
   device_id: id,
@@ -14,8 +16,8 @@ export const principalSchema = z.object({
 export const sessionSchema = z.object({
   principal: principalSchema,
   csrf_token: z.string().min(1).max(128),
-  access_expires_at: z.iso.datetime({ offset: true }).optional(),
-  expires_at: z.iso.datetime({ offset: true }).optional(),
+  access_expires_at: z.iso.datetime({ offset: true }),
+  expires_at: z.iso.datetime({ offset: true }),
 })
 export type Principal = z.infer<typeof principalSchema>
 export const operationSchema = z.object({
@@ -96,9 +98,25 @@ export const administratorSetupSchema = z.object({
 })
 export type AdministratorSetup = z.infer<typeof administratorSetupSchema>
 export const adminSetupStatusSchema = z.object({ required: z.boolean() })
-export const remoteModelsSchema = z.object({
-  models: z.array(z.object({ model_key: z.string(), display_name: z.string() })),
+export const modelMetadataSchema = z.object({
+  input_modalities: z.array(z.string()).optional(),
+  output_modalities: z.array(z.string()).optional(),
+  effort: z
+    .object({ supported_levels: z.array(z.string()), default_level: z.string().optional() })
+    .optional(),
 })
+export const remoteModelSchema = z.object({
+  model_key: z.string(),
+  display_name: z.string(),
+  context_limit: z.number().int().positive().optional(),
+  output_limit: z.number().int().positive().optional(),
+  supports_tools: z.boolean().optional(),
+  supports_vision: z.boolean().optional(),
+  metadata: modelMetadataSchema,
+})
+export type RemoteModel = z.infer<typeof remoteModelSchema>
+export type ModelMetadata = z.infer<typeof modelMetadataSchema>
+export const remoteModelsSchema = z.object({ models: z.array(remoteModelSchema) })
 export const enrollmentSchema = z.object({
   secret: z.string().regex(/^[A-Z2-7]{32}$/),
   period: z.literal(30),
@@ -109,7 +127,7 @@ export type Enrollment = z.infer<typeof enrollmentSchema>
 export const providerSchema = z.object({
   id,
   name: z.string(),
-  protocol: z.enum(['openai_compat', 'anthropic']),
+  protocol: z.enum(['openai_compat', 'anthropic', 'responses']),
   base_url: z.string(),
   is_enabled: z.boolean(),
   revision: z.number().int().positive(),
@@ -125,6 +143,8 @@ export const modelSchema = z.object({
   output_limit: z.number(),
   supports_tools: z.boolean(),
   supports_vision: z.boolean(),
+  metadata: modelMetadataSchema,
+  reasoning_effort: z.string().optional(),
   is_enabled: z.boolean(),
   revision: z.number(),
 })
@@ -146,14 +166,13 @@ export const policySchema = z.object({
   current_version: z.number().nullable(),
 })
 export type Policy = z.infer<typeof policySchema>
-export const versionSchema = z.object({
-  policy_id: id,
-  version: z.number(),
+export const candidateSchema = z.object({
+  position: z.number().int(),
   provider_id: id,
   model_id: id,
   credential_id: id.nullable(),
-  status: z.enum(['draft', 'published', 'revoked']),
-  published_at: z.string().nullable(),
+  priority: z.number().int(),
+  weight: z.number().int(),
   configuration: z.object({
     model_key: z.string(),
     protocol: z.string(),
@@ -162,8 +181,17 @@ export const versionSchema = z.object({
     output_limit: z.number(),
     supports_tools: z.boolean(),
     supports_vision: z.boolean(),
+    reasoning_effort: z.string().optional(),
     prices: z.object({}).passthrough(),
   }),
+})
+export const versionSchema = z.object({
+  policy_id: id,
+  version: z.number(),
+  routing_mode: z.enum(['priority', 'weighted', 'round_robin']),
+  candidates: z.array(candidateSchema).min(1).max(16),
+  is_enabled: z.boolean(),
+  verified_at: z.string().nullable(),
 })
 export type Version = z.infer<typeof versionSchema>
 export const providersSchema = z.object({

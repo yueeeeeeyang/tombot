@@ -8,7 +8,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 )
 
-// SetDefault 串行替换平台默认策略；仅接受已发布且当前可用的版本。
+// SetDefault 串行替换平台默认策略；仅接受已验证且当前启用可用的版本。
 func (service *Service) SetDefault(ctx context.Context, actor identity.Principal, requestID, policyID string, expectedRevision int64) error {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return err
@@ -38,7 +38,7 @@ func (service *Service) SetDefault(ctx context.Context, actor identity.Principal
 		if err != nil {
 			return err
 		}
-		if !state.isAvailable || state.version.Status != "published" {
+		if !state.isAvailable || state.version.VerifiedAt == nil || !hasAvailableCandidate(state) {
 			return ErrUnavailable
 		}
 		if _, err = transaction.ExecContext(ctx, `UPDATE tombot.model_policies SET is_default=false,revision=revision+1 WHERE is_default AND id<>$1`, policyID); err != nil {
@@ -104,7 +104,7 @@ func (service *Service) Assign(ctx context.Context, actor identity.Principal, re
 			if err != nil {
 				return err
 			}
-			if !state.isAvailable || state.version.Status != "published" {
+			if !state.isAvailable || state.version.VerifiedAt == nil || !hasAvailableCandidate(state) {
 				return ErrUnavailable
 			}
 			if botID == "" {
@@ -172,7 +172,7 @@ func (service *Service) Resolve(ctx context.Context, userID, botID string) (Sele
 		if err != nil {
 			return err
 		}
-		if !state.isAvailable || state.version.Status != "published" {
+		if !state.isAvailable || state.version.VerifiedAt == nil || !hasAvailableCandidate(state) {
 			return ErrUnavailable
 		}
 		selection.Version = *number
@@ -187,7 +187,7 @@ func (service *Service) Resolve(ctx context.Context, userID, botID string) (Sele
 // Use 仅供受信执行器使用运行记录中固定的选择；每次调用重新检查用户、配置和凭据撤销。
 // 回调在事务外执行，返回后凭据清零；不得把回调或 Selection 暴露为客户端任意模型代理。
 func (service *Service) Use(ctx context.Context, selection Selection, execute func(context.Context, Configuration, []byte) error) error {
-	if !validID(selection.UserID) || !validID(selection.BotID) || !validID(selection.PolicyID) || selection.Version < 1 || execute == nil {
+	if !validID(selection.UserID) || !validID(selection.BotID) || !validID(selection.PolicyID) || selection.Version < 1 || !validID(selection.ModelID) || execute == nil {
 		return ErrInvalidInput
 	}
 	if _, err := service.tenantPolicy(ctx, selection.UserID, selection.BotID, true); err != nil {
@@ -201,12 +201,17 @@ func (service *Service) Use(ctx context.Context, selection Selection, execute fu
 		if err != nil {
 			return err
 		}
-		if !state.isAvailable || state.version.Status != "published" {
+		if !state.isAvailable || state.version.VerifiedAt == nil || !hasAvailableCandidate(state) {
 			return ErrUnavailable
 		}
-		configuration = state.version.Configuration
-		plaintext, err = service.decrypt(ctx, transaction, state.version)
-		return err
+		for _, c := range state.candidates {
+			if c.candidate.ModelID == selection.ModelID && c.available {
+				configuration = c.candidate.Configuration
+				plaintext, err = service.decrypt(ctx, transaction, c.candidate)
+				return err
+			}
+		}
+		return ErrNoCandidate
 	}); err != nil {
 		return err
 	}

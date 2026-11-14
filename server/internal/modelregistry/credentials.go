@@ -101,7 +101,7 @@ func (service *Service) AddCredential(ctx context.Context, actor identity.Princi
 	return credential, nil
 }
 
-// RevokeCredential 幂等撤销单个版本，后续发布和使用均拒绝该版本，不自动切换到其他凭据。
+// RevokeCredential 幂等撤销单个版本，后续启用和使用均拒绝该版本，不自动切换到其他凭据。
 func (service *Service) RevokeCredential(ctx context.Context, actor identity.Principal, requestID, credentialID string) error {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
 		return err
@@ -128,7 +128,7 @@ func (service *Service) RevokeCredential(ctx context.Context, actor identity.Pri
 	})
 }
 
-// DestroyCredential 仅销毁已撤销且所有策略引用都已撤销的密文；历史标识和版本仍保留。
+// DestroyCredential 仅销毁已撤销且没有启用版本引用的密文；历史标识和版本仍保留。
 // 该动作不可由应用回滚撤销，历史备份中的材料需按部署保留政策另外处理。
 func (service *Service) DestroyCredential(ctx context.Context, actor identity.Principal, requestID, credentialID string) error {
 	if err := service.authorize(ctx, actor, requestID); err != nil {
@@ -153,7 +153,7 @@ func (service *Service) DestroyCredential(ctx context.Context, actor identity.Pr
 			return ErrConflict
 		}
 		var referenced bool
-		if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.model_policy_versions WHERE credential_id=$1 AND status<>'revoked')`, credentialID).Scan(&referenced); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.model_policy_candidates c JOIN tombot.model_policies p ON p.id=c.policy_id AND p.current_version=c.version WHERE credential_id=$1)`, credentialID).Scan(&referenced); err != nil {
 			return err
 		}
 		if referenced {
@@ -166,7 +166,7 @@ func (service *Service) DestroyCredential(ctx context.Context, actor identity.Pr
 	})
 }
 
-func (service *Service) decrypt(ctx context.Context, transaction *sql.Tx, version Version) ([]byte, error) {
+func (service *Service) decrypt(ctx context.Context, transaction *sql.Tx, version Candidate) ([]byte, error) {
 	if version.CredentialID == nil {
 		return nil, nil
 	}

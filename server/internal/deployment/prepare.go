@@ -16,36 +16,39 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/nodeapp"
 	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/serverapp"
 	"io.yueyang/tom/internal/store/postgres"
 )
 
 // preparation 只保存部署参数与文件引用，不生成或读取凭据，不登记外部资源。
 type preparation struct {
-	Version  int             `json:"version"`
-	NodeID   string          `json:"node_id"`
-	Name     string          `json:"node_name"`
-	Capacity int             `json:"computer_capacity"`
-	ImageID  string          `json:"image_id"`
-	Image    imageSettings   `json:"image"`
-	Docker   json.RawMessage `json:"docker"`
-	Server   json.RawMessage `json:"server"`
-	Node     json.RawMessage `json:"node,omitempty"`
-	Control  controlSettings `json:"control"`
+	Enrollment *nodeInstallServer `json:"enrollment,omitempty"`
+	Version    int                `json:"version"`
+	NodeID     string             `json:"node_id"`
+	Name       string             `json:"node_name"`
+	Capacity   int                `json:"computer_capacity"`
+	ImageID    string             `json:"image_id"`
+	Image      imageSettings      `json:"image"`
+	Docker     json.RawMessage    `json:"docker"`
+	Server     json.RawMessage    `json:"server"`
+	Node       json.RawMessage    `json:"node,omitempty"`
+	Control    controlSettings    `json:"control"`
 }
 
-// controlSettings 由部署提供两侧证书指纹。生成器不读取凭据文件，
+// controlSettings 由部署提供 API 客户端证书指纹。生成器不读取凭据文件，
 // 因此指纹必须显式传入；写错只会在首次握手被拒绝，不会降低信任。
 // allow_public_listen 表示是否允许监听非私网地址。默认 true：云主机常以公网或运营商
 // 私有地址承载控制端口，私网限制容易被误判为可用；显式 false 时由节点自行拒绝公开地址。
 type controlSettings struct {
-	NodeFingerprint   string `json:"node_certificate_fingerprint"`
 	ClientFingerprint string `json:"api_certificate_fingerprint"`
 	Listen            string `json:"listen"`
 	AllowPublic       *bool  `json:"allow_public_listen,omitempty"`
 }
 
 type imageSettings struct {
+	ArchiveFile        string `json:"archive_file,omitempty"`
+	ArchiveSHA256      string `json:"archive_sha256,omitempty"`
 	Reference          string `json:"reference"`
 	AuthenticationFile string `json:"authentication_file,omitempty"`
 	CallTimeoutSeconds int    `json:"call_timeout_seconds"`
@@ -53,12 +56,14 @@ type imageSettings struct {
 }
 
 type configurationFile struct {
+	source  string
+	digest  string
 	name    string
 	content []byte
 	mode    os.FileMode
 }
 
-// Prepare 在 Linux root 下读取一份参数，在全新目录原子交付五份配置；不覆盖旧目录或启动服务。
+// Prepare 在 Linux root 下读取一份参数，在全新目录原子交付配置及单文件节点安装参数；不覆盖旧目录或启动服务。
 func Prepare(ctx context.Context, source, destination string) (Report, error) {
 	if err := ctx.Err(); err != nil {
 		return Report{}, err
@@ -119,16 +124,13 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 		return nil, Report{}, errors.New("节点配置覆盖参数无效")
 	}
 	server := serverapp.DefaultConfig()
-	server.AdminDirectory = "/opt/tombot/admin"
 	server.TLSCertificateFile, server.TLSPrivateKeyFile = "/etc/tombot/tls/certificate.pem", "/etc/tombot/private/tls.key"
 	server.IdentityKeyFile, server.CSRFKeyFile = "/etc/tombot/private/identity.key", "/etc/tombot/private/csrf.key"
 	server.ActiveModelKey, server.ModelKeyFiles = "current", map[string]string{"current": "/etc/tombot/private/model.key"}
+	server.Database.MigrationDSNFile = "/etc/tombot/private/migration.connection"
 	server.Database.DSNFiles = map[postgres.Role]string{postgres.IdentityRole: "/etc/tombot/private/identity.connection", postgres.ControlRole: "/etc/tombot/private/control.connection", postgres.TenantRole: "/etc/tombot/private/tenant.connection", postgres.DispatchRole: "/etc/tombot/private/dispatch.connection"}
-	server.Node.ID, server.Node.Verification.ImageID = request.NodeID, request.ImageID
-	server.Node.URL = "https://" + node.Listen
 	server.Node.CertificateFile = "/etc/tombot/tls/api-certificate.pem"
 	server.Node.PrivateKeyFile = "/etc/tombot/private/api.key"
-	server.Node.ServerFingerprints = []string{request.Control.NodeFingerprint}
 	// 显式提供映射时整体替换，不能让空映射静默继承旧密钥或连接引用。
 	var overrides map[string]json.RawMessage
 	if json.Unmarshal(request.Server, &overrides) != nil {
@@ -149,7 +151,7 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	if decodePreparation(request.Server, &server) != nil {
 		return nil, Report{}, errors.New("API 配置参数无效")
 	}
-	image := dockernode.ImageManifest{Version: 1, NodeID: request.NodeID, ImageID: request.ImageID, Reference: request.Image.Reference, Platform: platform, Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", AuthenticationFile: request.Image.AuthenticationFile, CallTimeoutSeconds: request.Image.CallTimeoutSeconds, TimeoutSeconds: request.Image.TimeoutSeconds}
+	image := dockernode.ImageManifest{ArchiveFile: request.Image.ArchiveFile, ArchiveSHA256: request.Image.ArchiveSHA256, Version: 1, NodeID: request.NodeID, ImageID: request.ImageID, Reference: request.Image.Reference, Platform: platform, Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", AuthenticationFile: request.Image.AuthenticationFile, CallTimeoutSeconds: request.Image.CallTimeoutSeconds, TimeoutSeconds: request.Image.TimeoutSeconds}
 	docker, err := dockerbootstrap.ParseManifest(request.Docker)
 	if err != nil || validatePreparationJSON(request.Docker, &dockerbootstrap.Manifest{}) != nil {
 		return nil, Report{}, errors.New("Docker 与宿主软件清单无效")
@@ -160,6 +162,9 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	}
 	if request.Capacity >= node.Runtime.MaximumEgressComputers {
 		return nil, Report{}, errors.New("节点出网电脑容量必须覆盖业务电脑并为独立验收保留一个名额")
+	}
+	if request.Enrollment != nil {
+		node.Enrollment = &nodeenrollment.Config{Server: request.Enrollment.runtime(), Registration: registration}
 	}
 	var value configuration
 	files := []configurationFile{}
@@ -173,7 +178,6 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 		{"node.json", node, 0600, func(body []byte) (err error) { value.node, err = nodeapp.ParseConfig(body); return err }},
 		{"computer-image.json", image, 0600, func(body []byte) (err error) { value.image, err = dockernode.ParseImageManifest(body); return err }},
 		{"docker-install.json", docker, 0600, nil},
-		{"node-registration.json", serverapp.CatalogRequest{Action: "register", Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, ImageReference: image.Reference}, 0644, nil},
 	} {
 		content, err := json.MarshalIndent(item.body, "", "  ")
 		if err != nil || item.parse != nil && item.parse(content) != nil {
@@ -185,9 +189,16 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	if err := value.validateGraph(paths, api, platform); err != nil {
 		return nil, Report{}, err
 	}
+	installRequest, err := generatedNodeInstallRequest(value)
+	if err != nil {
+		return nil, Report{}, err
+	}
+	files = append(files, configurationFile{name: "node-install.json", content: installRequest, mode: 0600})
 	for _, path := range append(value.referencePaths(), value.directories()...) {
-		if within("/etc/tombot/node-registration.json", path) || within(path, "/etc/tombot/node-registration.json") {
-			return nil, Report{}, errors.New("节点登记文件与配置引用或目录冲突")
+		for _, name := range []string{"node-install.json"} {
+			if within("/etc/tombot/"+name, path) || within(path, "/etc/tombot/"+name) {
+				return nil, Report{}, errors.New("节点部署输出与配置引用或目录冲突")
+			}
 		}
 	}
 	return files, Report{Scope: "deployment_configuration_files", NodeID: request.NodeID, ImageID: request.ImageID, Platform: platform, APIUID: api.uid, APIGID: api.gid}, nil
@@ -229,7 +240,7 @@ func publishConfiguration(ctx context.Context, fs filesystem, destination string
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := publishDirectory(stage, fs.resolve(destination)); err != nil {
+	if err := publishPath(stage, fs.resolve(destination)); err != nil {
 		return errors.New("配置目录发布失败，目标可能已存在，禁止覆盖或自动重放")
 	}
 	published = true

@@ -13,19 +13,30 @@ import (
 // Authenticate 每次查询账户、设备与会话状态；访问凭据过期、轮换或权限版本改变立即失效。
 // 桌面作用域只查用户表，管理作用域只查管理员表，两类身份不会有交叉。
 func (service *Service) Authenticate(ctx context.Context, token, scope string) (Principal, error) {
+	return service.authenticateToken(ctx, token, scope, "access")
+}
+
+// ValidateRefresh 只读检查续期凭据及账户状态，供浏览器恢复 CSRF；不会轮换或触发重放撤销。
+// 先确认凭据尚未消费，避免客户端在续期响应丢失后盲目重发旧值。
+func (service *Service) ValidateRefresh(ctx context.Context, token, scope string) error {
+	_, err := service.authenticateToken(ctx, token, scope, "refresh")
+	return err
+}
+
+func (service *Service) authenticateToken(ctx context.Context, token, scope, kind string) (Principal, error) {
 	subject, ok := subjectForScope(scope)
 	if !validToken(token) || !ok {
 		return Principal{}, ErrInvalidSession
 	}
 	var principal Principal
 	err := service.transaction(ctx, func(transaction *sql.Tx) error {
-		err := transaction.QueryRowContext(ctx, subject.render(`SELECT s.{owner},s.id,s.device_id,s.scope,s.auth_version,s.verified_at
+		err := transaction.QueryRowContext(ctx, subject.render(`SELECT s.{owner},s.id,s.device_id,s.scope,s.auth_version,s.verified_at,t.expires_at,s.expires_at,a.username,a.display_name
 			FROM {tokens} t JOIN {sessions} s ON (s.{owner},s.id)=(t.{owner},t.session_id)
 			JOIN {accounts} a ON a.id=s.{owner} JOIN {devices} d ON (d.{owner},d.id)=(s.{owner},s.device_id)
-			WHERE t.token_digest=$1 AND t.kind='access' AND t.consumed_at IS NULL AND t.expires_at>transaction_timestamp()
+			WHERE t.token_digest=$1 AND t.kind=$3 AND t.consumed_at IS NULL AND t.expires_at>transaction_timestamp()
 			AND s.scope=$2 AND s.revoked_at IS NULL AND s.expires_at>transaction_timestamp() AND d.revoked_at IS NULL
-			AND a.status='active' AND a.auth_version=s.auth_version`), digest(token), scope).
-			Scan(&principal.UserID, &principal.SessionID, &principal.DeviceID, &principal.Scope, &principal.AuthVersion, &principal.VerifiedAt)
+			AND a.status='active' AND a.auth_version=s.auth_version`), digest(token), scope, kind).
+			Scan(&principal.UserID, &principal.SessionID, &principal.DeviceID, &principal.Scope, &principal.AuthVersion, &principal.VerifiedAt, &principal.AccessExpiresAt, &principal.ExpiresAt, &principal.Username, &principal.DisplayName)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrInvalidSession
 		}

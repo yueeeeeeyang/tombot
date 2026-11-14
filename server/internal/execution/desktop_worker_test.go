@@ -73,15 +73,15 @@ func (fixture fixture) visionModel(t *testing.T) {
 	if err := fixture.pool.QueryRow(`SELECT provider_id FROM tombot.models WHERE id=$1`, fixture.modelID).Scan(&providerID); err != nil {
 		t.Fatal(err)
 	}
-	model, err := fixture.registry.CreateModel(ctx, fixture.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "execution-vision", DisplayName: "视觉工具模型", ContextLimit: 4096, OutputLimit: 1024, SupportsTools: true, SupportsVision: true})
+	model, err := fixture.registry.CreateModel(ctx, fixture.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "execution-vision", DisplayName: "视觉工具模型", ContextLimit: 32768, OutputLimit: 1024, SupportsTools: true, SupportsVision: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err := fixture.registry.CreateDraft(ctx, fixture.actor, ids.New(), modelregistry.DraftRequest{PolicyID: fixture.policyID, ModelID: model.ID, OutputLimit: 256})
+	version, err := fixture.registry.CreateVersion(ctx, fixture.actor, ids.New(), modelregistry.VersionRequest{PolicyID: fixture.policyID, RoutingMode: "priority", Candidates: []modelregistry.CandidateRequest{{ModelID: model.ID, OutputLimit: routingInt(256), Priority: 1, Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.registry.Publish(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
+	if _, err := fixture.registry.EnableVersion(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
 		t.Fatal(err)
 	}
 }

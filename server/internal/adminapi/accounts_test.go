@@ -17,7 +17,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
-	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 )
 
 type identityStub struct {
@@ -109,23 +109,16 @@ func (stub *administratorsStub) CreateAdministrator(_ context.Context, principal
 	return stub.setup, stub.err
 }
 
-// nodesStub 记录节点目录请求，便于断言只接受登记字段而不接受连接地址。
+// nodesStub 记录签发请求，验证授权身份完整传递且不接收节点地址。
 type nodesStub struct {
-	catalog      nodecatalog.Catalog
-	err          error
-	registration nodecatalog.Registration
-	principal    identity.Principal
-	target       string
+	grant     nodeenrollment.Grant
+	err       error
+	principal identity.Principal
 }
 
-func (stub *nodesStub) Register(_ context.Context, principal identity.Principal, registration nodecatalog.Registration, _ string) (nodecatalog.Catalog, error) {
-	stub.principal, stub.registration = principal, registration
-	return stub.catalog, stub.err
-}
-
-func (stub *nodesStub) Get(_ context.Context, principal identity.Principal, imageID string) (nodecatalog.Catalog, error) {
-	stub.principal, stub.target = principal, imageID
-	return stub.catalog, stub.err
+func (stub *nodesStub) Issue(_ context.Context, principal identity.Principal, _ string) (nodeenrollment.Grant, error) {
+	stub.principal = principal
+	return stub.grant, stub.err
 }
 
 type fixture struct {
@@ -182,7 +175,7 @@ func newFixture(t *testing.T) fixture {
 	models := &modelsStub{}
 	admin := &administratorsStub{setup: identity.AdministratorSetup{AdministratorID: ids.New(), Username: "second-admin", DisplayName: "第二管理员",
 		Secret: identity.Credential("JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"), Period: 30, Digits: 6, Algorithm: "SHA1"}}
-	nodes := &nodesStub{catalog: nodecatalog.Catalog{Node: nodecatalog.Node{ID: ids.New(), Name: "正式节点", Status: "bootstrapping", Capacity: 10}, Image: nodecatalog.Image{ID: ids.New(), Reference: "registry.example.test/computer@sha256:" + strings.Repeat("a", 64), IsEnabled: true}}}
+	nodes := &nodesStub{grant: nodeenrollment.Grant{ID: ids.New(), Token: randomValue(t), ExpiresAt: time.Now().Add(time.Hour)}}
 	handler, err := New(service, admin, nodes, models, gate, logger)
 	if err != nil {
 		t.Fatal(err)
@@ -301,35 +294,33 @@ func TestAdministratorProtocol(t *testing.T) {
 	requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/administrators", `{"username":"third-admin","display_name":"第三管理员","password":"`+strings.Repeat("a", 16)+`","role":"user"}`)), 400)
 }
 
-// TestNodeCatalogProtocol 覆盖率域登记读取与错误映射；节点地址与就绪状态都不能由页面设置。
-func TestNodeCatalogProtocol(t *testing.T) {
+func TestNodeEnrollmentGrantProtocol(t *testing.T) {
 	fixture := newFixture(t)
-	body := `{"name":"正式节点","capacity":10,"image_id":"` + fixture.nodes.catalog.Image.ID + `","image_reference":"` + fixture.nodes.catalog.Image.Reference + `"}`
-	response := fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", body))
+	path := "/api/v2/admin/computer-nodes/enrollment-tokens"
+	response := fixture.run(fixture.request("POST", path, `{}`))
 	requireStatus(t, response, 201)
-	if fixture.nodes.registration.Name != "正式节点" || fixture.nodes.registration.Capacity != 10 || fixture.nodes.principal.UserID != fixture.identity.session.Principal.UserID {
-		t.Fatal("节点登记未透传字段或身份")
+	if fixture.nodes.principal.UserID != fixture.identity.session.Principal.UserID || !strings.Contains(response.Body.String(), fixture.nodes.grant.Token) {
+		t.Fatal("签发响应或管理员身份缺失")
 	}
-	if !strings.Contains(response.Body.String(), `"bootstrapping"`) {
-		t.Fatal("登记响应缺少节点状态")
-	}
-	response = fixture.run(fixture.request("GET", "/api/v2/admin/computer-nodes/"+fixture.nodes.catalog.Image.ID, ""))
-	requireStatus(t, response, 200)
-	if fixture.nodes.target != fixture.nodes.catalog.Image.ID {
-		t.Fatal("目录读取未指定镜像")
+	if strings.Contains(fixture.log.String(), fixture.nodes.grant.Token) {
+		t.Fatal("凭据进入日志")
 	}
 	for _, test := range []struct {
 		err    error
 		status int
-	}{
-		{nodecatalog.ErrConflict, 409}, {nodecatalog.ErrNotFound, 404}, {nodecatalog.ErrInvalidInput, 400}, {identity.ErrForbidden, 403}, {errors.New("内部失败"), 503},
-	} {
+	}{{identity.ErrInvalidSession, 401}, {identity.ErrVerificationRequired, 403}, {identity.ErrForbidden, 403}, {errors.New("内部失败"), 503}} {
 		fixture.nodes.err = test.err
-		requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", body)), test.status)
+		requireStatus(t, fixture.run(fixture.request("POST", path, `{}`)), test.status)
 	}
-	// 连接地址不属于登记字段：提交即被严格解码拒绝，避免页面把节点指向任意主机。
 	fixture.nodes.err = nil
-	requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", `{"name":"正式节点","capacity":10,"image_id":"`+fixture.nodes.catalog.Image.ID+`","image_reference":"`+fixture.nodes.catalog.Image.Reference+`","url":"https://evil.example.test"}`)), 400)
+	requireStatus(t, fixture.run(fixture.request("POST", path, `{"url":"https://evil.example.test"}`)), 400)
+	requireStatus(t, fixture.run(fixture.request("POST", "/api/v2/admin/computer-nodes", `{}`)), 405)
+	requireStatus(t, fixture.run(fixture.request("GET", "/api/v2/admin/computer-nodes/"+ids.New(), "")), 404)
+	for _, header := range []string{"Cookie", "X-CSRF-Token"} {
+		request := fixture.request("POST", path, `{}`)
+		request.Header.Del(header)
+		requireStatus(t, fixture.run(request), 403)
+	}
 }
 
 func TestManagementBoundariesAndFailureRedaction(t *testing.T) {

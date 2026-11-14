@@ -3,29 +3,32 @@ package modelgateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"unicode"
 
 	"io.yueyang/tom/internal/modelregistry"
+	"io.yueyang/tom/internal/provider"
 )
 
-// DiscoveredModel 是供应商模型列表接口返回的一项；规格由上游声明，可能与实际能力不符。
-type DiscoveredModel struct {
-	ModelKey    string `json:"model_key"`
-	DisplayName string `json:"display_name"`
-}
+var (
+	ErrDiscoveryAuthentication = errors.New("供应商拒绝了模型列表凭据")
+	ErrDiscoveryRateLimited    = errors.New("供应商模型列表请求受到限流")
+	ErrDiscoveryUnsupported    = errors.New("供应商地址不支持模型列表接口")
+)
 
 const (
 	maxDiscoveredModels = 200
 	maxDiscoveryBytes   = 1 << 20
 )
 
-// Discover 通过同一套出口策略读取供应商模型列表；只允许已配置来源，不跟随跳转，不保留凭据。
-// 上游列表通常不含上下文与输出上限，因此这里不推断规格，登记时由管理员显式填写。
-func (gateway *Gateway) Discover(parent context.Context, protocol, baseURL string, credential []byte) ([]modelregistry.DiscoveredModel, error) {
-	if protocol != "openai_compat" && protocol != "anthropic" {
+// Discover 通过同一套出口策略读取供应商模型列表；校验目标地址，不跟随跳转，不保留凭据。
+// 保留上游明确提供的规格，缺失字段不填默认值，也不按模型名称猜测能力。
+func (gateway *Gateway) Discover(parent context.Context, protocol, baseURL string, credential []byte) (models []modelregistry.DiscoveredModel, failure error) {
+	if provider.GenerationPath(protocol) == "" || len(credential) == 0 || len(credential) > 8192 {
 		return nil, ErrInvalidInput
 	}
 	for _, value := range credential {
@@ -68,8 +71,20 @@ func (gateway *Gateway) Discover(parent context.Context, protocol, baseURL strin
 		}
 		return nil, ErrUnavailable
 	}
-	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK {
+	defer func() {
+		if err := response.Body.Close(); err != nil && failure == nil {
+			models, failure = nil, ErrUnavailable
+		}
+	}()
+	switch response.StatusCode {
+	case http.StatusOK:
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return nil, ErrDiscoveryAuthentication
+	case http.StatusTooManyRequests:
+		return nil, ErrDiscoveryRateLimited
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		return nil, ErrDiscoveryUnsupported
+	default:
 		return nil, ErrUnavailable
 	}
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, maxDiscoveryBytes+1))
@@ -77,28 +92,47 @@ func (gateway *Gateway) Discover(parent context.Context, protocol, baseURL strin
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
+		if guard.failure != nil {
+			return nil, guard.failure
+		}
 		return nil, ErrProtocol
 	}
 	if len(encoded) > maxDiscoveryBytes {
 		return nil, ErrResponseTooLarge
 	}
-	return parseDiscovered(encoded)
+	return parseDiscovered(protocol, encoded)
 }
 
-// parseDiscovered 只接受 {object:"list",data:[{id}]} 结构；无法识别的响应整体拒绝，不做猜测。
-func parseDiscovered(encoded []byte) ([]modelregistry.DiscoveredModel, error) {
+// parseDiscovered 解析受支持协议的列表结构，并将明确返回的规格规范化；未知能力不推断。
+func parseDiscovered(protocol string, encoded []byte) ([]modelregistry.DiscoveredModel, error) {
 	var payload struct {
 		Object string `json:"object"`
 		Data   []struct {
-			ID   string `json:"id"`
-			Name string `json:"display_name"`
+			ID               string                     `json:"id"`
+			Name             string                     `json:"name"`
+			DisplayName      string                     `json:"display_name"`
+			ContextWindow    *int                       `json:"context_window"`
+			MaxInputTokens   *int                       `json:"max_input_tokens"`
+			MaxOutputTokens  *int                       `json:"max_output_tokens"`
+			MaxTokens        *int                       `json:"max_tokens"`
+			InputModalities  []string                   `json:"input_modalities"`
+			OutputModalities []string                   `json:"output_modalities"`
+			Effort           *modelregistry.ModelEffort `json:"effort"`
+			SupportsTools    *bool                      `json:"supports_tools"`
+			SupportsVision   *bool                      `json:"supports_vision"`
+			Capabilities     struct {
+				ImageInput *struct {
+					Supported bool `json:"supported"`
+				} `json:"image_input"`
+				Effort map[string]json.RawMessage `json:"effort"`
+			} `json:"capabilities"`
 		} `json:"data"`
 	}
 	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	if decoder.Decode(&payload) != nil || payload.Object != "list" || len(payload.Data) == 0 || len(payload.Data) > maxDiscoveredModels {
+	if decoder.Decode(&payload) != nil || decoder.Decode(new(any)) != io.EOF || payload.Object != "list" && !(protocol == "anthropic" && payload.Object == "") || payload.Data == nil || len(payload.Data) > maxDiscoveredModels {
 		return nil, ErrProtocol
 	}
-	seen := make(map[string]struct{}, len(payload.Data))
+	seen := map[string]struct{}{}
 	models := make([]modelregistry.DiscoveredModel, 0, len(payload.Data))
 	for _, item := range payload.Data {
 		key := strings.TrimSpace(item.ID)
@@ -109,11 +143,64 @@ func parseDiscovered(encoded []byte) ([]modelregistry.DiscoveredModel, error) {
 			continue
 		}
 		seen[key] = struct{}{}
-		name := strings.TrimSpace(item.Name)
+		name := strings.TrimSpace(item.DisplayName)
+		if name == "" {
+			name = strings.TrimSpace(item.Name)
+		}
 		if name == "" || len(name) > 120 || strings.ContainsFunc(name, unicode.IsControl) {
 			name = key
 		}
-		models = append(models, modelregistry.DiscoveredModel{ModelKey: key, DisplayName: name})
+		model := modelregistry.DiscoveredModel{ModelKey: key, DisplayName: name, ContextLimit: item.ContextWindow, OutputLimit: item.MaxOutputTokens, SupportsTools: item.SupportsTools, SupportsVision: item.SupportsVision, Metadata: modelregistry.ModelMetadata{InputModalities: item.InputModalities, OutputModalities: item.OutputModalities, Effort: item.Effort}}
+		if protocol == "anthropic" {
+			if model.ContextLimit == nil {
+				model.ContextLimit = item.MaxInputTokens
+			}
+			if model.OutputLimit == nil {
+				model.OutputLimit = item.MaxTokens
+			}
+			if model.SupportsVision == nil && item.Capabilities.ImageInput != nil {
+				model.SupportsVision = &item.Capabilities.ImageInput.Supported
+			}
+			if model.Metadata.Effort == nil && item.Capabilities.Effort != nil {
+				var supported bool
+				if raw, exists := item.Capabilities.Effort["supported"]; exists && json.Unmarshal(raw, &supported) != nil {
+					return nil, ErrProtocol
+				}
+				if supported {
+					levels := []string{}
+					for _, level := range []string{"low", "medium", "high", "xhigh", "max"} {
+						if raw, exists := item.Capabilities.Effort[level]; exists {
+							var capability struct {
+								Supported bool `json:"supported"`
+							}
+							if json.Unmarshal(raw, &capability) != nil {
+								return nil, ErrProtocol
+							}
+							if capability.Supported {
+								levels = append(levels, level)
+							}
+						}
+					}
+					if len(levels) > 0 {
+						model.Metadata.Effort = &modelregistry.ModelEffort{SupportedLevels: levels}
+					}
+				}
+			}
+		}
+		if model.Metadata.Validate() != nil {
+			return nil, ErrProtocol
+		}
+		if model.ContextLimit != nil && (*model.ContextLimit < 1 || *model.ContextLimit > 100_000_000) || model.OutputLimit != nil && (*model.OutputLimit < 1 || *model.OutputLimit > 100_000_000) || model.ContextLimit != nil && model.OutputLimit != nil && *model.OutputLimit > *model.ContextLimit {
+			return nil, ErrProtocol
+		}
+		if model.Metadata.InputModalities != nil {
+			hasImage := slices.Contains(model.Metadata.InputModalities, "image")
+			if model.SupportsVision != nil && *model.SupportsVision != hasImage {
+				return nil, ErrProtocol
+			}
+			model.SupportsVision = &hasImage
+		}
+		models = append(models, model)
 	}
 	return models, nil
 }

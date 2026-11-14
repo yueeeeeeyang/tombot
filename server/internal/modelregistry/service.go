@@ -1,4 +1,4 @@
-// Package modelregistry 管理平台唯一模型目录、凭据版本与已发布策略。
+// Package modelregistry 管理平台唯一模型目录、凭据版本与已启用策略。
 package modelregistry
 
 import (
@@ -21,12 +21,17 @@ import (
 )
 
 var (
-	ErrInvalidInput = errors.New("模型配置参数无效")
-	ErrNotFound     = errors.New("模型配置不存在")
-	ErrConflict     = errors.New("模型配置已变更，请重新读取")
-	ErrUnavailable  = errors.New("管理员尚未配置可用模型，或所选策略已停用")
-	ErrCredential   = errors.New("模型凭据不可用")
-	ErrVerification = errors.New("模型连通性或声明能力验证失败")
+	ErrModelEnabled          = errors.New("模型启用中，请先停用再编辑或删除")
+	ErrModelReferenced       = errors.New("模型仍被策略版本引用，不能删除；可以保持停用")
+	ErrProviderEnabled       = errors.New("供应商启用中，请先停用再编辑")
+	ErrNewCredentialRequired = errors.New("更换供应商主机或端口时必须填写新凭据")
+	ErrInvalidInput          = errors.New("模型配置参数无效")
+	ErrNotFound              = errors.New("模型配置不存在")
+	ErrConflict              = errors.New("模型配置已变更，请重新读取")
+	ErrNoCandidate           = errors.New("没有满足能力和上下文要求的可用候选模型")
+	ErrUnavailable           = errors.New("管理员尚未配置可用模型，或所选策略已停用")
+	ErrCredential            = errors.New("模型凭据不可用")
+	ErrVerification          = errors.New("模型连通性或声明能力验证失败")
 )
 
 // Authorizer 复用身份服务的当前管理员和近期二次校验，禁止依赖请求自报角色。
@@ -38,9 +43,11 @@ type Authorizer interface {
 // 调用不持有数据库事务，不执行用户工具，不保留凭据；失败不得回传上游响应正文。
 type Verifier interface {
 	Verify(context.Context, Configuration, []byte) error
+	// Probe 单独验证连通性或工具能力，失败必须返回错误且不保留凭据。
+	Probe(context.Context, Configuration, []byte, string) error
 }
 
-// Options 指定管理员验证调用上限；同一发布请求不会自动重试上游调用。
+// Options 指定管理员验证调用上限；同一启用请求不会自动重试上游调用。
 type Options struct{ VerificationTimeout time.Duration }
 
 // Service 将控制目录与租户所属权检查分离，不能用管理连接读取聊天内容。
@@ -100,7 +107,7 @@ func (service *Service) authorize(ctx context.Context, actor identity.Principal,
 
 func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) error) error {
 	err := service.control.Platform(ctx, apply)
-	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrUnavailable, ErrCredential, ErrVerification, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrModelEnabled, ErrModelReferenced, ErrProviderEnabled, ErrNewCredentialRequired, ErrInvalidInput, ErrNotFound, ErrConflict, ErrNoCandidate, ErrUnavailable, ErrCredential, ErrVerification, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}
@@ -122,12 +129,17 @@ func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) err
 }
 
 func audit(ctx context.Context, transaction *sql.Tx, actor identity.Principal, requestID, action, target string, changes any) error {
+	return auditOutcome(ctx, transaction, actor, requestID, action, target, "succeeded", changes)
+}
+
+// auditOutcome 保留动作结果与固定诊断分类，失败探测不能记录为通过。
+func auditOutcome(ctx context.Context, transaction *sql.Tx, actor identity.Principal, requestID, action, target, outcome string, changes any) error {
 	encoded, err := json.Marshal(changes)
 	if err != nil {
 		return err
 	}
 	_, err = transaction.ExecContext(ctx, `INSERT INTO tombot.admin_audit_events(id,actor_id,action,target_kind,target_id,request_id,result,changes)
-		VALUES($1,$2,$3,'model_configuration',$4,$5,'succeeded',$6)`, ids.New(), actor.UserID, action, target, requestID, encoded)
+		VALUES($1,$2,$3,'model_configuration',$4,$5,$6,$7)`, ids.New(), actor.UserID, action, target, requestID, outcome, encoded)
 	return err
 }
 

@@ -15,6 +15,7 @@ UMask=0077
 WorkingDirectory=/opt/tombot
 Environment=TOM_SERVER_CONFIG=/etc/tombot/server.json
 ExecStart=/usr/local/bin/tomd
+# 启动时先读取独立迁移连接文件并执行 SQL，成功关闭连接后才监听 API；迁移失败退出。
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure

@@ -1,16 +1,16 @@
 # Docker 启动引导
 
-`tomdocker-bootstrap` 是受保护的 Linux 部署命令，负责 Docker、宿主磁盘工具自动安装、启动和基础能力复验。它不提供 HTTP 接口，不接受远程命令、软件源或宿主路径。首个安装适配器限定 Ubuntu 24.04 LTS、systemd、cgroup v2，支持 amd64 和 arm64；其他环境明确拒绝。用户电脑镜像仍是 Debian 13，镜像工具不能替代宿主依赖。
+`tomnode bootstrap` 是受保护的 Linux 部署命令，负责 Docker、宿主磁盘工具自动安装、启动和基础能力复验。它不提供 HTTP 接口，不接受远程命令、软件源或宿主路径。首个安装适配器限定 Ubuntu 24.04 LTS、systemd、cgroup v2，支持 amd64 和 arm64；其他环境明确拒绝。用户电脑镜像仍是 Debian 13，镜像工具不能替代宿主依赖。
 
 当前命令及两种 Linux 架构构建已完成；安装流程通过隔离文件系统和命令边界测试。尚未在 Ubuntu 实机上完成新安装验收，也尚未交付经该验收的版本清单。Docker Desktop 的只读引擎检查仅证明当地引擎能力，不证明 Linux 自动安装、电脑镜像或用户隔离已完成。
 
 ## 发布与启动
 
-发布包把固定命令安装到 `/usr/lib/tombot/tomdocker-bootstrap`，把经验证的清单安装到 `/etc/tombot/docker-install.json`。清单格式见 [JSON Schema](../../deploy/docker-install.schema.json)，包含准确的引擎、CLI、containerd、`e2fsprogs`、`util-linux`、`mount` 软件包版本、兼容引擎版本集合、官方签名指纹、总超时和磁盘余量。三个宿主版本字段为 `e2fsprogs_package_version`、`util_linux_package_version`、`mount_package_version`，均为必填，不读取浮动的候选版本填充。
+正常部署由 `tomnode install` 安装程序并从单份参数自动生成 `/etc/tombot/node/docker-install.json`，启动链直接调用本模块。`bootstrap` 子命令保留用于单独诊断。清单格式见 [JSON Schema](../../deploy/docker-install.schema.json)，包含准确的引擎、CLI、containerd、`e2fsprogs`、`util-linux`、`mount` 软件包版本、兼容引擎版本集合、官方签名指纹、总超时和磁盘余量。三个宿主版本字段为 `e2fsprogs_package_version`、`util_linux_package_version`、`mount_package_version`，均为必填，不读取浮动的候选版本填充。
 
 这些值必须来自实际发布验收，不得复制单元测试夹具作为生产清单。测试中的软件包版本和签名数据仅用于验证控制流程。生产清单由 root 所有，文件及所有父目录不可被普通用户写入，不允许路径中的符号链接。
 
-[systemd 前置单元](../../deploy/systemd/tombot-docker-bootstrap.service)以 root 运行固定命令，使用 `TOM_DOCKER_INSTALL_MANIFEST` 指定受保护清单。[节点单元](../../deploy/systemd/tombot-node.service)通过 `Requires` 和 `After` 依赖引导及镜像准备；[tomd 单元](../../deploy/tomd.service)通过 `Wants` 和 `After` 拉起节点，节点维护不会连带停止 API 登录与历史查询。节点程序已接通，受测清单发布及完整部署仍待验收，仅安装模板不会自动完成这些步骤。
+[节点单元](../../deploy/systemd/tombot-node.service)以 root 调用 `tomnode start`，配置检查成功后直接运行本模块；也可以单独执行 `tomnode bootstrap`，使用 `TOM_DOCKER_INSTALL_MANIFEST` 指定受保护清单。API 独立启动，不依赖本机节点单元。安装逻辑、固定版本及失败语义保持不变；受测清单发布及完整 Ubuntu 首次部署仍待验收。
 
 API 和 Worker 不以 root 运行，不加入 Docker 用户组，也不持有 Docker socket。Docker 官方说明守护进程的管理权限具有重要的宿主权限影响，因此安装和运行控制应留在受信部署及节点组件中。[Docker 安全文档](https://docs.docker.com/engine/security/)
 

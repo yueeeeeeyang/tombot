@@ -24,6 +24,7 @@ func reported(input, output int) *provider.ReportedUsage {
 func (fixture fixture) prepareModel(t *testing.T, lease Lease) {
 	t.Helper()
 	fixture.start(t, lease)
+	fixture.routeBound(t, lease)
 	if _, err := fixture.service.BindModel(context.Background(), lease); err != nil {
 		t.Fatal(err)
 	}
@@ -63,6 +64,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		var wait sync.WaitGroup
 		for _, lease := range []Lease{first, second} {
 			wait.Go(func() {
+				fixture.routeBound(t, lease)
 				operation, _, err := fixture.service.BeginOperation(ctx, lease, operationRequest("model.1"))
 				results <- result{lease, operation, err}
 			})
@@ -143,6 +145,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		fixture.prepareModel(t, lease)
 		request := operationRequest("model.1")
 		request.Model.Lifetime = time.Second
+		fixture.routeBound(t, lease)
 		operation, _, err := fixture.service.BeginOperation(ctx, lease, request)
 		if err != nil {
 			t.Fatal(err)
@@ -204,6 +207,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		if known, held := fixture.totals(t, lease.UserID); known != 0 || held != 0 {
 			t.Fatal("配置失败留下额度占用")
 		}
+		fixture.routeBound(t, lease)
 		operation, _, err := fixture.service.BeginOperation(ctx, lease, operationRequest("model.1"))
 		if err != nil {
 			t.Fatal(err)
@@ -251,11 +255,11 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 	t.Run("缺失缓存拆分的费用可以由一致证据补齐", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
 		prices := modelregistry.Prices{Input: rate(1_000_000), Output: rate(2_000_000), CacheRead: rate(500_000)}
-		version, err := fixture.registry.CreateDraft(ctx, fixture.actor, ids.New(), modelregistry.DraftRequest{PolicyID: fixture.policyID, ModelID: fixture.modelID, OutputLimit: 256, Prices: prices})
+		version, err := fixture.registry.CreateVersion(ctx, fixture.actor, ids.New(), modelregistry.VersionRequest{PolicyID: fixture.policyID, RoutingMode: "priority", Candidates: []modelregistry.CandidateRequest{{ModelID: fixture.modelID, OutputLimit: routingInt(256), Prices: prices, Priority: 1, Weight: 1}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = fixture.registry.Publish(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
+		if _, err = fixture.registry.EnableVersion(ctx, fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t)); err != nil {
 			t.Fatal(err)
 		}
 		fixture.send(t, fixture.a, fixture.first)
@@ -263,6 +267,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		fixture.prepareModel(t, lease)
 		request := operationRequest("model.1")
 		request.Model.Configuration.Prices = prices
+		fixture.routeBound(t, lease)
 		operation, _, err := fixture.service.BeginOperation(ctx, lease, request)
 		if err != nil {
 			t.Fatal(err)
@@ -294,6 +299,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		fixture.send(t, fixture.a, fixture.first)
 		lease := fixture.claim(t)
 		fixture.prepareModel(t, lease)
+		fixture.routeBound(t, lease)
 		operation, _, err := fixture.service.BeginOperation(ctx, lease, operationRequest("model.1"))
 		if err != nil {
 			t.Fatal(err)
@@ -322,4 +328,27 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			t.Fatal("真实计数被预留上限截断", known, held)
 		}
 	})
+}
+
+func TestResponsesUsageBinding(t *testing.T) {
+	cluster := pgtest.Start(t)
+	fixture := newFixtureWithProtocol(t, cluster, "responses")
+	fixture.send(t, fixture.a, fixture.first)
+	lease := fixture.claim(t)
+	fixture.prepareModel(t, lease)
+	operation, created, err := fixture.service.BeginOperation(context.Background(), lease, operationRequest("model.1"))
+	if err != nil || !created {
+		t.Fatal("Responses 用量预留失败", err)
+	}
+	usage := reported(10, 5)
+	usage.CacheReadTokens = counter(4)
+	fixture.recordMeasured(t, lease, operation, usage)
+	known, held := fixture.totals(t, fixture.a.UserID)
+	if known != 15 || held != 0 {
+		t.Fatal("Responses 缓存输入被重复计量", known, held)
+	}
+	var includesCache bool
+	if err := fixture.pool.QueryRow(`SELECT input_includes_cache FROM tombot.usage_reservations WHERE id=$1`, operation.ID).Scan(&includesCache); err != nil || !includesCache {
+		t.Fatal("Responses 预留未绑定缓存语义", err)
+	}
 }

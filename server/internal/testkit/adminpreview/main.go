@@ -13,25 +13,24 @@ import (
 	"syscall"
 	"time"
 
-	adminweb "io.yueyang/tom/web/admin"
+	"io.yueyang/tom/web/admin/bundle"
 )
 
 func main() {
-	assets := flag.String("assets", "", "管理前端构建目录")
 	address := flag.String("address", "127.0.0.1:4177", "仅限本机的测试监听地址")
 	flag.Parse()
-	if err := run(*assets, *address); err != nil {
+	if err := run(*address); err != nil {
 		slog.Error("管理前端测试服务失败", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(assets, address string) error {
+func run(address string) error {
 	host, _, err := net.SplitHostPort(address)
-	if err != nil || host != "127.0.0.1" || assets == "" {
+	if err != nil || host != "127.0.0.1" {
 		return errors.New("管理前端测试服务参数无效")
 	}
-	handler, err := adminweb.New(os.DirFS(assets))
+	handler, err := bundle.New()
 	if err != nil {
 		return err
 	}

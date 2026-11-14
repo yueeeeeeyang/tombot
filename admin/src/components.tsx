@@ -7,13 +7,14 @@ import {
   useState,
   type ReactElement,
   type ReactNode,
+  type RefObject,
 } from 'react'
 import { X } from 'lucide-react'
 import type { z } from 'zod'
-import { AdminClient, ApiError, errorMessage } from './api/client'
+import { AdminClient, ApiError, errorMessage, isVerificationCanceled } from './api/client'
 
 export function Alert({ error }: { error: unknown }) {
-  if (!error) return null
+  if (!error || isVerificationCanceled(error)) return null
   return (
     <div className="form-error" role="alert">
       {errorMessage(error)}
@@ -44,27 +45,31 @@ export function Dialog({
   onClose,
   children,
   busy = false,
+  className = '',
+  returnFocusRef,
 }: {
   title: string
   onClose: () => void
   children: ReactNode
   busy?: boolean
+  className?: string
+  returnFocusRef?: RefObject<HTMLElement | null>
 }) {
   const ref = useRef<HTMLDialogElement>(null)
   useLayoutEffect(() => {
     const element = ref.current
-    const trigger = document.activeElement
+    const trigger = returnFocusRef?.current ?? document.activeElement
     element?.showModal()
     return () => {
       element?.close()
       if (trigger instanceof HTMLElement && trigger.isConnected)
         trigger.focus({ preventScroll: true })
     }
-  }, [])
+  }, [returnFocusRef])
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={`dialog ${className}`}
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault()
@@ -128,6 +133,7 @@ export function LoadState({ error, onRetry }: { error: unknown; onRetry: () => v
 
 export const statusNames: Record<string, string> = {
   active: '正常',
+  enabled: '已启用',
   disabled: '已停用',
   provisioning: '正在创建电脑',
   provision_failed: '创建失败',
@@ -149,9 +155,6 @@ export const statusNames: Record<string, string> = {
   stopped: '已停止',
   starting: '启动中',
   stopping: '停止中',
-  draft: '草稿',
-  published: '已发布',
-  revoked: '已撤销',
 }
 export function Status({ value }: { value: string | null }) {
   return (
@@ -173,9 +176,10 @@ export function Pagination({
   last: string | undefined
   count: number
 }) {
+  if (count === 0 && !before) return null
   return (
-    <div className="pagination">
-      <span>本页 {count} 条</span>
+    <div className={`pagination${count === 0 ? ' pagination--empty' : ''}`}>
+      {count > 0 && <span>本页 {count} 条</span>}
       {before && (
         <button type="button" className="secondary-button" onClick={() => onBefore('')}>
           返回首页

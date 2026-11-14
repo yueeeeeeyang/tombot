@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Server } from 'lucide-react'
 import { AdminClient } from '../api/client'
 import { nodesSchema } from '../api/schemas'
@@ -14,35 +14,22 @@ import {
   useQuery,
 } from '../components'
 
-// 登记响应与目录查询共用同一结构；节点地址只来自部署配置，页面不提供该字段。
-const catalogSchema = z.object({
-  node: z.object({
-    id: z.string(),
-    name: z.string(),
-    status: z.string(),
-    capacity: z.number().int(),
-    reserved: z.number().int(),
-    generation: z.number().int(),
-    last_seen_at: z.string().nullable().optional(),
-    verified_image_id: z.string().nullable().optional(),
-    capability_expires_at: z.string().nullable().optional(),
-    verification_status: z.string().optional(),
-    verification_error: z.string().nullable().optional(),
-  }),
-  image: z.object({ id: z.string(), reference: z.string(), is_enabled: z.boolean() }),
+const grantSchema = z.object({
+  id: z.string(),
+  token: z.string().min(1).max(2048),
+  expires_at: z.string(),
 })
 
 export function NodesPage({ client }: { client: AdminClient }) {
   const [before, setBefore] = useState('')
   const nodes = useQuery(client, pagePath('/computer-nodes', before), nodesSchema)
   const [registering, setRegistering] = useState(false)
-  const [catalog, setCatalog] = useState<z.infer<typeof catalogSchema> | null>(null)
   return (
     <>
       <header className="page-heading">
         <div>
           <h1>电脑节点</h1>
-          <p>登记本机部署节点与电脑镜像；登记不代表节点已就绪，就绪取决于心跳与能力验收。</p>
+          <p>节点启动后自动接入；通过心跳和能力验收后可用于创建电脑。</p>
         </div>
         <div className="actions">
           <button className="icon-button" aria-label="刷新节点" onClick={nodes.reload}>
@@ -50,7 +37,7 @@ export function NodesPage({ client }: { client: AdminClient }) {
           </button>
           <button className="primary-button" onClick={() => setRegistering(true)}>
             <Plus size={16} />
-            登记节点与镜像
+            生成接入凭据
           </button>
         </div>
       </header>
@@ -60,7 +47,7 @@ export function NodesPage({ client }: { client: AdminClient }) {
         <div className="empty-state">
           <Server size={28} />
           <h2>暂无节点</h2>
-          <p>先在部署机完成 Docker 引导，再从这里登记节点与固定镜像。</p>
+          <p>生成接入凭据并配置到节点安装文件，启动后会自动出现在这里。</p>
         </div>
       ) : (
         <div className="table-card">
@@ -99,116 +86,134 @@ export function NodesPage({ client }: { client: AdminClient }) {
           />
         </div>
       )}
-      {catalog && (
-        <Dialog title="节点目录" onClose={() => setCatalog(null)}>
-          <dl className="detail-list">
-            <dt>节点</dt>
-            <dd>
-              <code>{catalog.node.name}</code>
-            </dd>
-            <dt>状态</dt>
-            <dd>
-              <Status value={catalog.node.status} />
-            </dd>
-            <dt>镜像</dt>
-            <dd>
-              <code>{catalog.image.reference}</code>
-            </dd>
-          </dl>
-          <div className="form-actions">
-            <button type="button" className="primary-button" onClick={() => setCatalog(null)}>
-              关闭
-            </button>
-          </div>
-        </Dialog>
-      )}
-      {registering && (
-        <RegisterNode
-          client={client}
-          onClose={() => setRegistering(false)}
-          onRegistered={(value) => {
-            setRegistering(false)
-            setCatalog(value)
-            nodes.reload()
-          }}
-        />
-      )}
+      {registering && <EnrollmentToken client={client} onClose={() => setRegistering(false)} />}
     </>
   )
 }
 
-function RegisterNode({
-  client,
-  onClose,
-  onRegistered,
-}: {
-  client: AdminClient
-  onClose: () => void
-  onRegistered: (value: z.infer<typeof catalogSchema>) => void
-}) {
+function EnrollmentToken({ client, onClose }: { client: AdminClient; onClose: () => void }) {
   const [error, setError] = useState<unknown>()
   const [busy, setBusy] = useState(false)
-  const form = useRef<HTMLFormElement>(null)
-  async function submit() {
-    if (busy || !form.current?.reportValidity()) return
-    const fields = new FormData(form.current)
+  const [grant, setGrant] = useState<z.infer<typeof grantSchema> | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
+  const resources = useRef<{ controller?: AbortController; isDisposed: boolean }>({
+    isDisposed: false,
+  })
+  useEffect(() => {
+    const current = resources.current
+    current.isDisposed = false
+    const clear = () => {
+      current.controller?.abort()
+      setGrant(null)
+      setCopied(false)
+      setCopyFailed(false)
+      setBusy(false)
+      setCopying(false)
+    }
+    window.addEventListener('pagehide', clear)
+    return () => {
+      current.controller?.abort()
+      current.isDisposed = true
+      window.removeEventListener('pagehide', clear)
+    }
+  }, [])
+  async function issue() {
+    if (busy) return
+    const controller = new AbortController()
+    resources.current.controller = controller
     setBusy(true)
     setError(undefined)
     try {
-      onRegistered(
-        await client.request('/computer-nodes', catalogSchema, {
-          method: 'POST',
-          body: {
-            name: String(fields.get('name')).trim(),
-            capacity: Number(fields.get('capacity')),
-            image_id: String(fields.get('image_id')).trim(),
-            image_reference: String(fields.get('image_reference')).trim(),
-          },
-          timeout: 15_000,
-        }),
-      )
+      const value = await client.request('/computer-nodes/enrollment-tokens', grantSchema, {
+        method: 'POST',
+        body: {},
+        signal: controller.signal,
+        timeout: 15_000,
+      })
+      if (controller.signal.aborted) return
+      setGrant(value)
     } catch (cause) {
-      setError(cause)
+      if (!controller.signal.aborted) setError(cause)
     } finally {
-      setBusy(false)
+      if (!controller.signal.aborted) setBusy(false)
+    }
+  }
+  async function copy() {
+    if (!grant || copying) return
+    const controller = resources.current.controller
+    setCopying(true)
+    setCopied(false)
+    setCopyFailed(false)
+    try {
+      await navigator.clipboard.writeText(grant.token)
+      if (!resources.current.isDisposed && !controller?.signal.aborted) setCopied(true)
+    } catch {
+      if (!resources.current.isDisposed && !controller?.signal.aborted) setCopyFailed(true)
+    } finally {
+      if (!resources.current.isDisposed) setCopying(false)
     }
   }
   return (
-    <Dialog title="登记节点与镜像" onClose={onClose} busy={busy}>
+    <Dialog title="生成接入凭据" onClose={onClose} busy={busy}>
       <p className="description">
-        节点标识与连接地址取自服务部署配置；镜像摘要必须与节点实际固定的一致。
+        每台新节点使用一份凭据，24
+        小时内有效，首次接入后自动绑定节点身份。已接入节点重启无需重新生成。
       </p>
       <Alert error={error} />
-      <form
-        ref={form}
-        onSubmit={(event) => {
-          event.preventDefault()
-          void submit()
-        }}
-      >
-        <fieldset disabled={busy} className="form-grid">
-          <Field label="节点名称">
-            <input name="name" required maxLength={120} autoComplete="off" />
+      {copyFailed && (
+        <p className="form-error" role="alert">
+          复制失败，请选中凭据码手动复制。
+        </p>
+      )}
+      {grant && (
+        <>
+          <Field label="接入凭据码">
+            <textarea
+              className="enrollment-token"
+              value={grant.token}
+              readOnly
+              rows={4}
+              spellCheck={false}
+              autoComplete="off"
+              onFocus={(event) => event.currentTarget.select()}
+            />
           </Field>
-          <Field label="容量" hint="允许同时运行的电脑数量上限">
-            <input name="capacity" type="number" required min={1} max={10000} defaultValue={10} />
-          </Field>
-          <Field label="镜像标识" hint="部署登记的镜像 ULID">
-            <input name="image_id" required pattern="[0-9A-HJKMNP-TV-Z]{26}" maxLength={26} />
-          </Field>
-          <Field label="镜像引用" hint="包含固定摘要的镜像地址">
-            <input name="image_reference" required maxLength={512} />
-          </Field>
-          <div className="form-actions">
-            <button type="button" className="secondary-button" onClick={onClose}>
-              取消
-            </button>
-            <button type="submit" className="primary-button" disabled={busy}>
-              登记
-            </button>
-          </div>
-        </fieldset>
-      </form>
+          <p className="description">
+            有效期至：{new Date(grant.expires_at).toLocaleString()}
+            。请复制保存，关闭后无法再次查看。
+          </p>
+          <p className="description">
+            完整解压离线安装包，运行 sudo ./tomnode install
+            并粘贴接入码。无需填写服务地址、证书指纹或镜像参数。
+          </p>
+        </>
+      )}
+      <div className="dialog-actions">
+        <button type="button" className="secondary-button" onClick={onClose} disabled={busy}>
+          关闭
+        </button>
+        {grant ? (
+          <button
+            type="button"
+            className="primary-button"
+            disabled={copying}
+            onClick={() => void copy()}
+          >
+            {copying ? '正在复制…' : copied ? '已复制' : '复制凭据码'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="primary-button"
+            disabled={busy}
+            onClick={() => void issue()}
+          >
+            {busy ? '正在生成…' : '生成凭据'}
+          </button>
+        )}
+      </div>
     </Dialog>
   )
 }

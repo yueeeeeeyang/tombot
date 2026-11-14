@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"path"
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/oklog/ulid/v2"
 )
 
 type asset struct {
@@ -88,7 +91,7 @@ func readAsset(root fs.FS, name string, maximum int) (content []byte, result err
 	return content, nil
 }
 
-// ServeHTTP 只服务明确的入口与构建资源；未知路径不回退 HTML，不提供目录列表或任意文件读取。
+// ServeHTTP 只服务明确的页面路由与构建资源；未知路径不回退 HTML，不提供目录列表或任意文件读取。
 func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -105,10 +108,34 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, ok := handler.assets[r.URL.Path]
+	if !ok && isPagePath(r.URL.Path) {
+		value, ok = handler.assets["/admin/"]
+	}
 	if !ok || r.URL.RawPath != "" {
 		http.NotFound(w, r)
 		return
 	}
 	w.Header().Set("Content-Type", value.typeName)
 	http.ServeContent(w, r, path.Base(r.URL.Path), time.Time{}, bytes.NewReader(value.content))
+}
+
+// isPagePath 限定可直接打开的管理页面，防止静态资源、接口或拼错路径被入口 HTML 掩盖。
+func isPagePath(value string) bool {
+	parts := strings.Split(strings.TrimPrefix(value, "/admin/"), "/")
+	if !strings.HasPrefix(value, "/admin/") {
+		return false
+	}
+	if len(parts) == 1 {
+		switch parts[0] {
+		case "users", "administrators", "computer-nodes", "model-providers", "model-policies":
+			return true
+		}
+	}
+	if len(parts) != 2 && len(parts) != 3 {
+		return false
+	}
+	if _, err := ulid.ParseStrict(parts[1]); err != nil {
+		return false
+	}
+	return len(parts) == 2 && parts[0] == "model-providers" || len(parts) == 3 && parts[0] == "model-policies" && parts[2] == "versions"
 }

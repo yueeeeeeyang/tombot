@@ -29,6 +29,7 @@ func (value configuration) references() []fileRule {
 		{path: server.TLSPrivateKeyFile, maximum: 64 << 10, private: true, api: true},
 		{path: server.IdentityKeyFile, maximum: 32, exact: 32, private: true, api: true},
 		{path: server.CSRFKeyFile, maximum: 32, exact: 32, private: true, api: true},
+		{path: server.Database.MigrationDSNFile, maximum: 16 << 10, private: true, api: true},
 	}
 	for _, path := range server.ModelKeyFiles {
 		files = append(files, fileRule{path: path, maximum: 32, exact: 32, private: true, api: true})
@@ -43,13 +44,8 @@ func (value configuration) references() []fileRule {
 	files = append(files,
 		fileRule{path: server.Node.CertificateFile, maximum: 1 << 20, api: true},
 		fileRule{path: server.Node.PrivateKeyFile, maximum: 64 << 10, private: true, api: true},
-		fileRule{path: value.node.Control.CertificateFile, maximum: 1 << 20},
-		fileRule{path: value.node.Control.PrivateKeyFile, maximum: 64 << 10, private: true},
 	)
-	if value.image.AuthenticationFile != "" {
-		files = append(files, fileRule{path: value.image.AuthenticationFile, maximum: 16 << 10, private: true})
-	}
-	return files
+	return append(files, value.nodeReferences()...)
 }
 
 func (value configuration) referencePaths() []string {
@@ -151,6 +147,11 @@ func (fs filesystem) readConfig(rule fileRule, api account) (encoded []byte, res
 	if owner.Uid != fs.owner {
 		return nil, errors.New("部署配置必须属于 root")
 	}
+	return fs.readInspectedFile(rule, before)
+}
+
+// readInspectedFile 固定已检查的文件身份和读取上限，拒绝读取过程中替换或改写的文件。
+func (fs filesystem) readInspectedFile(rule fileRule, before os.FileInfo) (encoded []byte, result error) {
 	file, err := os.OpenFile(fs.resolve(rule.path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, errors.New("部署配置无法打开")

@@ -1,6 +1,17 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
-import { afterEach, vi } from 'vitest'
+import { afterEach, beforeEach, vi } from 'vitest'
+
+beforeEach(() => {
+  window.history.replaceState(null, '', '/admin/')
+  Object.defineProperty(navigator, 'locks', {
+    configurable: true,
+    value: {
+      request: async (_name: string, _options: LockOptions, callback: () => Promise<unknown>) =>
+        callback(),
+    },
+  })
+})
 
 afterEach(() => {
   cleanup()
@@ -24,3 +35,12 @@ window.matchMedia = vi.fn((media: string) => ({
   removeListener: vi.fn(),
   dispatchEvent: vi.fn(),
 }))
+
+// jsdom 不实现弹出层布局，遮挡和滚动定位由真实浏览器验证。
+Element.prototype.scrollIntoView = vi.fn()
+HTMLElement.prototype.showPopover = function () {
+  this.style.display = 'block'
+}
+HTMLElement.prototype.hidePopover = function () {
+  this.style.display = 'none'
+}

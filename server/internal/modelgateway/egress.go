@@ -21,7 +21,7 @@ import (
 
 var (
 	ErrInvalidInput     = errors.New("模型调用参数无效")
-	ErrAddressDenied    = errors.New("模型地址不在部署允许范围内")
+	ErrAddressDenied    = errors.New("模型地址不满足 HTTPS 出口要求或命中禁止地址")
 	ErrUnavailable      = errors.New("模型请求失败，结果可能未知")
 	ErrRequestTooLarge  = errors.New("模型请求超过大小上限")
 	ErrResponseTooLarge = errors.New("模型响应超过大小上限")
@@ -29,16 +29,8 @@ var (
 	ErrVerification     = errors.New("模型未通过声明能力验证")
 )
 
-// Origin 由部署配置允许的精确 HTTPS 来源。Networks 非空时将解析地址限制在指定网段内。
-// 空 Networks 只允许公网地址；私有模型必须显式指定范围，禁止环回、链路本地及部署拒绝网段。
-type Origin struct {
-	URL      string
-	Networks []netip.Prefix
-}
-
 // Options 的网络边界、证书和时限只能由部署注入，管理模型接口不能修改这些限制。
 type Options struct {
-	Origins               []Origin
 	DeniedNetworks        []netip.Prefix
 	RootCAs               *x509.CertPool
 	ConnectTimeout        time.Duration
@@ -52,9 +44,8 @@ type Options struct {
 	MaxConcurrentRequests int
 }
 
-type rule struct {
+type destination struct {
 	host, port string
-	networks   []netip.Prefix
 }
 type resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
@@ -66,15 +57,14 @@ type dialer interface {
 // Gateway 共享有界调用槽位；每个调用建立独立连接，避免跨来源复用和过期 DNS 决策。
 type Gateway struct {
 	options  Options
-	rules    map[string]rule
 	resolver resolver
 	dialer   dialer
 	slots    chan struct{}
 }
 
-// New 校验并复制部署策略；不读取环境代理、不允许关闭 TLS 验证或放宽到所有来源。
+// New 校验并复制部署策略；HTTPS 地址无需逐域名授权，仍拦截禁止地址和 TLS 绕过。
 func New(options Options) (*Gateway, error) {
-	if len(options.Origins) < 1 || len(options.Origins) > 128 || len(options.DeniedNetworks) > 256 || options.MaxConcurrentRequests < 1 || options.MaxConcurrentRequests > 128 ||
+	if len(options.DeniedNetworks) > 256 || options.MaxConcurrentRequests < 1 || options.MaxConcurrentRequests > 128 ||
 		options.MaxRequestBytes < 1024 || options.MaxRequestBytes > 64<<20 || options.MaxResponseBytes < 1024 || options.MaxResponseBytes > 64<<20 {
 		return nil, ErrInvalidInput
 	}
@@ -88,34 +78,16 @@ func New(options Options) (*Gateway, error) {
 			return nil, ErrInvalidInput
 		}
 	}
-	rules := make(map[string]rule, len(options.Origins))
-	for _, origin := range options.Origins {
-		parsed, err := parseEndpoint(origin.URL)
-		if err != nil || parsed.Path != "" && parsed.Path != "/" || len(origin.Networks) > 64 {
-			return nil, ErrInvalidInput
-		}
-		key := originKey(parsed)
-		if _, exists := rules[key]; exists {
-			return nil, ErrInvalidInput
-		}
-		for _, prefix := range origin.Networks {
-			if !validPrefix(prefix) {
-				return nil, ErrInvalidInput
-			}
-		}
-		rules[key] = rule{host: strings.ToLower(parsed.Hostname()), port: port(parsed), networks: append([]netip.Prefix(nil), origin.Networks...)}
-	}
 	for _, prefix := range options.DeniedNetworks {
 		if !validPrefix(prefix) {
 			return nil, ErrInvalidInput
 		}
 	}
 	options.DeniedNetworks = append([]netip.Prefix(nil), options.DeniedNetworks...)
-	options.Origins = nil
 	if options.RootCAs != nil {
 		options.RootCAs = options.RootCAs.Clone()
 	}
-	return &Gateway{options: options, rules: rules, resolver: net.DefaultResolver, dialer: &net.Dialer{Timeout: options.ConnectTimeout, KeepAlive: -1}, slots: make(chan struct{}, options.MaxConcurrentRequests)}, nil
+	return &Gateway{options: options, resolver: net.DefaultResolver, dialer: &net.Dialer{Timeout: options.ConnectTimeout, KeepAlive: -1}, slots: make(chan struct{}, options.MaxConcurrentRequests)}, nil
 }
 
 func validPrefix(prefix netip.Prefix) bool {
@@ -126,9 +98,6 @@ func port(address *url.URL) string {
 		return "443"
 	}
 	return address.Port()
-}
-func originKey(address *url.URL) string {
-	return "https://" + net.JoinHostPort(strings.ToLower(address.Hostname()), port(address))
 }
 func parseEndpoint(value string) (*url.URL, error) {
 	if len(value) > 2048 || strings.ContainsAny(value, "\\\r\n\t?#") || strings.TrimSpace(value) != value {
@@ -159,18 +128,15 @@ func contains(prefixes []netip.Prefix, address netip.Addr) bool {
 	return false
 }
 
-func (gateway *Gateway) allowed(target rule, address netip.Addr) bool {
+func (gateway *Gateway) allowed(address netip.Addr) bool {
 	address = address.Unmap()
 	if networkpolicy.Prohibited(address) || contains(gateway.options.DeniedNetworks, address) {
 		return false
 	}
-	if len(target.networks) > 0 {
-		return contains(target.networks, address)
-	}
-	return networkpolicy.IsPublic(address)
+	return true
 }
 
-func (gateway *Gateway) connect(target rule) func(context.Context, string, string) (net.Conn, error) {
+func (gateway *Gateway) connect(target destination) func(context.Context, string, string) (net.Conn, error) {
 	return func(parent context.Context, network, address string) (net.Conn, error) {
 		host, destinationPort, err := net.SplitHostPort(address)
 		if err != nil || network != "tcp" || !strings.EqualFold(host, target.host) || destinationPort != target.port {
@@ -192,7 +158,7 @@ func (gateway *Gateway) connect(target rule) func(context.Context, string, strin
 			return nil, ErrAddressDenied
 		}
 		for _, resolved := range addresses {
-			if !gateway.allowed(target, resolved) {
+			if !gateway.allowed(resolved) {
 				return nil, ErrAddressDenied
 			}
 		}
@@ -253,6 +219,9 @@ func (transport *guardedTransport) RoundTrip(request *http.Request) (*http.Respo
 	if err != nil {
 		if errors.Is(err, ErrAddressDenied) {
 			transport.failure = ErrAddressDenied
+		} else if isNetworkTimeout(err) {
+			// 连接或响应头时限可能先于总时限触发，仍须保留超时分类。
+			transport.failure = context.DeadlineExceeded
 		}
 		return nil, err
 	}
@@ -281,6 +250,9 @@ func (body *limitedBody) Read(buffer []byte) (int, error) {
 		buffer = buffer[:body.remaining+1]
 	}
 	n, err := body.ReadCloser.Read(buffer)
+	if isNetworkTimeout(err) {
+		body.transport.failure = context.DeadlineExceeded
+	}
 	body.remaining -= int64(n)
 	if body.remaining < 0 {
 		body.transport.failure = ErrResponseTooLarge
@@ -289,16 +261,18 @@ func (body *limitedBody) Read(buffer []byte) (int, error) {
 	return n, err
 }
 
+func isNetworkTimeout(err error) bool {
+	var failure net.Error
+	return errors.As(err, &failure) && failure.Timeout()
+}
+
 // client 构造受出口策略约束的 HTTP 客户端；方法与成功响应类型由调用方固定，不接受请求内覆盖。
 func (gateway *Gateway) client(endpoint, method, contentType string) (*http.Client, *guardedTransport, error) {
 	parsed, err := parseEndpoint(endpoint)
 	if err != nil {
 		return nil, nil, err
 	}
-	target, exists := gateway.rules[originKey(parsed)]
-	if !exists {
-		return nil, nil, ErrAddressDenied
-	}
+	target := destination{host: strings.ToLower(parsed.Hostname()), port: port(parsed)}
 	// HTTP/1.1 独立连接使读写时限不影响其他请求，且每次请求都重新验证 DNS 和策略。
 	transport := &http.Transport{Proxy: nil, DialContext: gateway.connect(target), TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: gateway.options.RootCAs, NextProtos: []string{"http/1.1"}},
 		TLSHandshakeTimeout: gateway.options.TLSHandshakeTimeout, ResponseHeaderTimeout: gateway.options.ResponseHeaderTimeout, DisableKeepAlives: true, DisableCompression: true, MaxResponseHeaderBytes: 64 << 10, ForceAttemptHTTP2: false, TLSNextProto: map[string]func(string, *tls.Conn) http.RoundTripper{}}

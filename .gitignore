@@ -13,3 +13,5 @@ admin/playwright-report/
 .env
 .env.*
 !.env.example
+
+server/web/admin/bundle/dist/

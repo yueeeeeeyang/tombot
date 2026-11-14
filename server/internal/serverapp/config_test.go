@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/store/postgres"
 )
 
@@ -34,7 +33,6 @@ func testConfig(t *testing.T) Config {
 	configuration := DefaultConfig()
 	configuration.Address = "127.0.0.1:8443"
 	configuration.AdminOrigin = "https://127.0.0.1:8443"
-	configuration.AdminDirectory = filepath.Join(directory, "admin")
 	configuration.TLSCertificateFile = filepath.Join(directory, "certificate.pem")
 	configuration.TLSPrivateKeyFile = filepath.Join(directory, "private.pem")
 	configuration.IdentityKeyFile = filepath.Join(directory, "identity.key")
@@ -42,16 +40,12 @@ func testConfig(t *testing.T) Config {
 	configuration.ActiveModelKey = "current"
 	configuration.ModelKeyFiles = map[string]string{"current": filepath.Join(directory, "model.key")}
 	configuration.Database.DSNFiles = map[postgres.Role]string{}
+	configuration.Database.MigrationDSNFile = filepath.Join(directory, "migration.connection")
 	for _, role := range []postgres.Role{postgres.IdentityRole, postgres.ControlRole, postgres.TenantRole, postgres.DispatchRole} {
 		configuration.Database.DSNFiles[role] = filepath.Join(directory, string(role)+".connection")
 	}
-	configuration.Node.ID = ids.New()
-	configuration.Node.Verification.ImageID = ids.New()
-	configuration.Node.URL = "https://node.example.test:9443"
 	configuration.Node.CertificateFile = filepath.Join(directory, "api-certificate.pem")
 	configuration.Node.PrivateKeyFile = filepath.Join(directory, "api.key")
-	configuration.Node.ServerFingerprints = []string{strings.Repeat("b", 64)}
-	configuration.Models.Origins = []Origin{{URL: "https://model.example.test"}}
 	return configuration
 }
 
@@ -92,13 +86,14 @@ func TestLoadConfig(t *testing.T) {
 	}
 	writeTestFile(t, path, encoded)
 	loaded, err := LoadConfig(path)
-	if err != nil || loaded.Node.ID != configuration.Node.ID || loaded.Runs.AgentTimeout.Value() != 5*time.Second {
+	if err != nil || loaded.Node.MaximumNodes != configuration.Node.MaximumNodes || loaded.Runs.AgentTimeout.Value() != 5*time.Second || loaded.Database.MigrationDSNFile != configuration.Database.MigrationDSNFile {
 		t.Fatalf("配置未正确载入: %v", err)
 	}
 	for _, fixture := range []struct {
 		name    string
 		content []byte
 	}{
+		{"过时模型白名单", bytes.Replace(encoded, []byte(`"models":{`), []byte(`"models":{"origins":[],`), 1)},
 		{"未知字段", append([]byte(`{"unknown":true,`), encoded[1:]...)},
 		{"尾随对象", append(bytes.Clone(encoded), []byte(` {}`)...)},
 		{"整数时限", bytes.Replace(encoded, []byte(`"agent_timeout":"5s"`), []byte(`"agent_timeout":5`), 1)},
@@ -120,7 +115,7 @@ func TestLoadConfig(t *testing.T) {
 		{"明文来源", func(c *Config) { c.AdminOrigin = "http://127.0.0.1" }},
 		{"心跳间隔缺失", func(c *Config) { c.Node.HeartbeatInterval = 0 }},
 		{"心跳期限预算不足", func(c *Config) { c.Node.ControlLifetime = Duration(time.Second) }},
-		{"缺少验收镜像", func(c *Config) { c.Node.Verification.ImageID = "" }},
+		{"节点数量无效", func(c *Config) { c.Node.MaximumNodes = 0 }},
 		{"验收租约预算不足", func(c *Config) { c.Node.Verification.LeaseDuration = Duration(time.Second) }},
 		{"验收证据时限不足", func(c *Config) { c.Node.Verification.Lifetime = Duration(time.Minute) }},
 		{"验收重试无界", func(c *Config) { c.Node.Verification.MaxAttempts = 0 }},
@@ -136,6 +131,8 @@ func TestLoadConfig(t *testing.T) {
 		{"视觉请求容量不足", func(c *Config) { c.Models.MaxRequestBytes = 2 << 20 }},
 		{"桌面启动无界", func(c *Config) { c.Computer.DesktopStartTimeout = Duration(2 * time.Minute) }},
 		{"缺少数据库用途", func(c *Config) { delete(c.Database.DSNFiles, postgres.DispatchRole) }},
+		{"缺少迁移连接文件", func(c *Config) { c.Database.MigrationDSNFile = "" }},
+		{"迁移连接路径非规范", func(c *Config) { c.Database.MigrationDSNFile = "/etc/tombot/../migration.connection" }},
 		{"缺少当前加密文件", func(c *Config) { c.ActiveModelKey = "missing" }},
 		{"HTTP 写入早于响应时限", func(c *Config) { c.HTTP.WriteTimeout = c.HTTP.RequestTimeout - 1 }},
 		{"开户等待超出 HTTP", func(c *Config) { c.Provision.RequestWait = c.HTTP.RequestTimeout }},
@@ -256,5 +253,24 @@ func TestTLSConfiguration(t *testing.T) {
 	writeTestFile(t, configuration.TLSPrivateKeyFile, []byte("无效文件"))
 	if _, err := loadTLS(configuration); err == nil {
 		t.Fatal("证书损坏时降级监听")
+	}
+}
+
+func TestExternalAdminDirectoryIsRejected(t *testing.T) {
+	encoded, err := json.Marshal(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	fields["admin_directory"] = json.RawMessage(`"/opt/tombot/admin"`)
+	encoded, err = json.Marshal(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseConfig(encoded); err == nil {
+		t.Fatal("旧外部前端目录配置仍被接受")
 	}
 }

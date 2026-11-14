@@ -74,10 +74,10 @@ func Reserve(ctx context.Context, transaction *sql.Tx, reference Reference, conf
 	if err := lockAccount(ctx, transaction, reference.UserID); err != nil {
 		return err
 	}
-	var botID, policyID string
+	var botID, policyID, modelID string
 	var version int64
-	err := transaction.QueryRowContext(ctx, `SELECT r.bot_id,r.model_policy_id,r.model_version FROM tombot.runs r JOIN tombot.run_operations o ON o.user_id=r.user_id AND o.run_id=r.id
-		WHERE r.user_id=$1 AND r.id=$2 AND o.id=$3 AND o.fencing_token=$4 AND o.attempt=$5 AND o.kind='model' AND o.status='started' AND r.status='running'`, reference.UserID, reference.RunID, reference.OperationID, reference.FencingToken, reference.Attempt).Scan(&botID, &policyID, &version)
+	err := transaction.QueryRowContext(ctx, `SELECT r.bot_id,r.model_policy_id,r.model_version,m.model_id FROM tombot.runs r JOIN tombot.model_routes m ON m.user_id=r.user_id AND m.run_id=r.id JOIN tombot.run_operations o ON o.user_id=r.user_id AND o.run_id=r.id
+		WHERE r.user_id=$1 AND r.id=$2 AND o.id=$3 AND o.fencing_token=$4 AND o.attempt=$5 AND o.kind='model' AND o.status='started' AND r.status='running'`, reference.UserID, reference.RunID, reference.OperationID, reference.FencingToken, reference.Attempt).Scan(&botID, &policyID, &version, &modelID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -111,8 +111,8 @@ func Reserve(ctx context.Context, transaction *sql.Tx, reference Reference, conf
 	if err != nil {
 		return err
 	}
-	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.usage_reservations(user_id,id,run_id,bot_id,policy_id,model_version,period,fencing_token,attempt,reserved_tokens,held_tokens,prices,input_includes_cache,state,slot_expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7::date,$8,$9,$10,$10,$11,$12,'active',clock_timestamp()+$13::bigint*interval '1 millisecond')`, reference.UserID, reference.OperationID, reference.RunID, botID, policyID, version, period, reference.FencingToken, reference.Attempt, reserved, prices, configuration.Protocol == "openai_compat", lifetime.Milliseconds()); err != nil {
+	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.usage_reservations(user_id,id,run_id,bot_id,policy_id,model_version,model_id,period,fencing_token,attempt,reserved_tokens,held_tokens,prices,input_includes_cache,state,slot_expires_at)
+		VALUES($1,$2,$3,$4,$5,$6,$14,$7::date,$8,$9,$10,$10,$11,$12,'active',clock_timestamp()+$13::bigint*interval '1 millisecond')`, reference.UserID, reference.OperationID, reference.RunID, botID, policyID, version, period, reference.FencingToken, reference.Attempt, reserved, prices, configuration.Protocol == "openai_compat" || configuration.Protocol == "responses", lifetime.Milliseconds(), modelID); err != nil {
 		return err
 	}
 	_, err = transaction.ExecContext(ctx, `UPDATE tombot.usage_periods SET held_tokens=held_tokens+$3 WHERE user_id=$1 AND period=$2::date`, reference.UserID, period, reserved)

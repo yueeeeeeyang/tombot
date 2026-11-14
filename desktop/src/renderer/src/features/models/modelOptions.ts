@@ -1,4 +1,4 @@
-import type { SelectOption } from '../../components/Select'
+import type { SelectOption } from '../../../../../../ui/Select'
 import type { SettingsDraft } from '../settings/settings'
 
 /** 仅将模型设置中填写的名称列为招聘选项，不补充内置模型或发起供应商请求。 */

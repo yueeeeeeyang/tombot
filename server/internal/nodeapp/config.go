@@ -16,6 +16,7 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/egressproxy"
 	"io.yueyang/tom/internal/nodeapi"
+	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/processgroup"
 )
 
@@ -30,6 +31,7 @@ func (value Milliseconds) duration() time.Duration {
 }
 
 type Config struct {
+	Enrollment      *nodeenrollment.Config       `json:"enrollment,omitempty"`
 	Version         int                          `json:"version"`
 	NodeID          string                       `json:"node_id"`
 	Listen          string                       `json:"listen"`
@@ -147,6 +149,14 @@ func (configuration Config) runtimeOptions() dockernode.Options {
 
 // Validate 复用各领域的权威参数校验，并检查组件之间的时限和目录关系。
 func (configuration Config) Validate() error {
+	if configuration.Enrollment != nil {
+		if err := configuration.Enrollment.Validate(); err != nil {
+			return err
+		}
+		if configuration.Enrollment.Registration.Capacity >= configuration.Runtime.MaximumEgressComputers {
+			return errors.New("节点容量必须为独立验收保留一个出网名额")
+		}
+	}
 	if configuration.Version != 2 {
 		return errors.New("节点配置版本无效")
 	}

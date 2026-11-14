@@ -33,6 +33,9 @@ func (testAuthorizer) RequireAdmin(_ context.Context, principal identity.Princip
 type testVerifier struct{}
 
 func (testVerifier) Verify(context.Context, modelregistry.Configuration, []byte) error { return nil }
+func (testVerifier) Probe(context.Context, modelregistry.Configuration, []byte, string) error {
+	return nil
+}
 func (testVerifier) Discover(context.Context, string, string, []byte) ([]modelregistry.DiscoveredModel, error) {
 	return []modelregistry.DiscoveredModel{}, nil
 }
@@ -56,6 +59,10 @@ func execute(t *testing.T, pool *sql.DB, statement string, arguments ...any) {
 	}
 }
 func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
+	t.Helper()
+	return newFixtureWithProtocol(t, cluster, "openai_compat")
+}
+func newFixtureWithProtocol(t *testing.T, cluster *pgtest.Cluster, protocol string) fixture {
 	t.Helper()
 	ctx := context.Background()
 	pool, name := cluster.Database(t)
@@ -92,7 +99,7 @@ func newFixture(t *testing.T, cluster *pgtest.Cluster) fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	provider, err := registry.CreateProvider(ctx, actor, ids.New(), "运行模型供应商", "openai_compat", "https://model.example.test/v1", []byte("execution-credential"))
+	provider, err := registry.CreateProvider(ctx, actor, ids.New(), "运行模型供应商", protocol, "https://model.example.test/v1", []byte("execution-credential"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,11 +157,11 @@ func (fixture fixture) revision(t *testing.T) int64 {
 }
 func (fixture fixture) publish(t *testing.T) modelregistry.Version {
 	t.Helper()
-	version, err := fixture.registry.CreateDraft(context.Background(), fixture.actor, ids.New(), modelregistry.DraftRequest{PolicyID: fixture.policyID, ModelID: fixture.modelID, OutputLimit: 256})
+	version, err := fixture.registry.CreateVersion(context.Background(), fixture.actor, ids.New(), modelregistry.VersionRequest{PolicyID: fixture.policyID, RoutingMode: "priority", Candidates: []modelregistry.CandidateRequest{{ModelID: fixture.modelID, OutputLimit: routingInt(256), Priority: 1, Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	version, err = fixture.registry.Publish(context.Background(), fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t))
+	version, err = fixture.registry.EnableVersion(context.Background(), fixture.actor, ids.New(), fixture.policyID, version.Number, fixture.revision(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,6 +207,7 @@ func (fixture fixture) completeModel(t *testing.T, lease Lease) Operation {
 	if _, err := fixture.service.BindModel(ctx, lease); err != nil {
 		t.Fatal(err)
 	}
+	fixture.routeBound(t, lease)
 	operation, created, err := fixture.service.BeginOperation(ctx, lease, operationRequest("model.1"))
 	if err != nil || !created {
 		t.Fatal("模型操作开始失败", err)
@@ -328,6 +336,7 @@ func TestDurableExecution(t *testing.T) {
 			t.Fatal("运行配置快照改变")
 		}
 		request := operationRequest("model.1")
+		fixture.routeBound(t, lease)
 		operation, created, err := fixture.service.BeginOperation(ctx, lease, request)
 		if err != nil || !created {
 			t.Fatal(err)
@@ -399,6 +408,7 @@ func TestDurableExecution(t *testing.T) {
 		if _, err = fixture.service.BindModel(ctx, next); err != nil {
 			t.Fatal(err)
 		}
+		fixture.routeBound(t, next)
 		operation, _, err := fixture.service.BeginOperation(ctx, next, operationRequest("model.1"))
 		if err != nil {
 			t.Fatal(err)
@@ -439,6 +449,7 @@ func TestDurableExecution(t *testing.T) {
 		if _, err = fixture.service.BindModel(ctx, lease); err != nil {
 			t.Fatal(err)
 		}
+		fixture.routeBound(t, lease)
 		operation, _, err := fixture.service.BeginOperation(ctx, lease, operationRequest("model.1"))
 		if err != nil {
 			t.Fatal(err)

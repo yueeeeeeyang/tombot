@@ -19,7 +19,6 @@ import (
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelgateway"
-	"io.yueyang/tom/internal/nodeapi"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userevents"
@@ -46,7 +45,6 @@ func (value *Duration) UnmarshalJSON(encoded []byte) error {
 type Config struct {
 	Address            string            `json:"address"`
 	AdminOrigin        string            `json:"admin_origin"`
-	AdminDirectory     string            `json:"admin_directory"`
 	TLSCertificateFile string            `json:"tls_certificate_file"`
 	TLSPrivateKeyFile  string            `json:"tls_private_key_file"`
 	TrustedProxies     []netip.Prefix    `json:"trusted_proxies"`
@@ -67,6 +65,7 @@ type Config struct {
 	MaxGroups          int               `json:"max_groups"`
 }
 type DatabaseConfig struct {
+	MigrationDSNFile   string                   `json:"migration_dsn_file"`
 	DSNFiles           map[postgres.Role]string `json:"dsn_files"`
 	MaxConnections     int                      `json:"max_connections"`
 	ConnectTimeout     Duration                 `json:"connect_timeout"`
@@ -76,19 +75,16 @@ type DatabaseConfig struct {
 	ConnectionLifetime Duration                 `json:"connection_lifetime"`
 }
 type NodeConfig struct {
-	ID                 string             `json:"id"`
-	URL                string             `json:"url"`
-	CertificateFile    string             `json:"certificate_file"`
-	PrivateKeyFile     string             `json:"private_key_file"`
-	ServerFingerprints []string           `json:"server_fingerprints"`
-	CallTimeout        Duration           `json:"call_timeout"`
-	HeartbeatInterval  Duration           `json:"heartbeat_interval"`
-	ControlLifetime    Duration           `json:"control_lifetime"`
-	Verification       VerificationConfig `json:"verification"`
+	MaximumNodes      int                `json:"maximum_nodes"`
+	CertificateFile   string             `json:"certificate_file"`
+	PrivateKeyFile    string             `json:"private_key_file"`
+	CallTimeout       Duration           `json:"call_timeout"`
+	HeartbeatInterval Duration           `json:"heartbeat_interval"`
+	ControlLifetime   Duration           `json:"control_lifetime"`
+	Verification      VerificationConfig `json:"verification"`
 }
 
 type VerificationConfig struct {
-	ImageID       string             `json:"image_id"`
 	Resources     computer.Resources `json:"resources"`
 	LeaseDuration Duration           `json:"lease_duration"`
 	Interval      Duration           `json:"interval"`
@@ -99,7 +95,7 @@ type VerificationConfig struct {
 
 func (configuration NodeConfig) verificationOptions() nodecatalog.VerificationOptions {
 	value := configuration.Verification
-	return nodecatalog.VerificationOptions{ImageID: value.ImageID, Resources: value.Resources, CallTimeout: configuration.CallTimeout.Value(), LeaseDuration: value.LeaseDuration.Value(), Interval: value.Interval.Value(), Lifetime: value.Lifetime.Value(), RetryDelay: value.RetryDelay.Value(), MaxAttempts: value.MaxAttempts}
+	return nodecatalog.VerificationOptions{Resources: value.Resources, CallTimeout: configuration.CallTimeout.Value(), LeaseDuration: value.LeaseDuration.Value(), Interval: value.Interval.Value(), Lifetime: value.Lifetime.Value(), RetryDelay: value.RetryDelay.Value(), MaxAttempts: value.MaxAttempts}
 }
 
 func (configuration NodeConfig) observerOptions() nodecatalog.ObserverOptions {
@@ -124,12 +120,7 @@ type IdentityConfig struct {
 	PasswordWorkers      int      `json:"password_workers"`
 	DeviceLimit          int      `json:"device_limit"`
 }
-type Origin struct {
-	URL      string         `json:"url"`
-	Networks []netip.Prefix `json:"networks"`
-}
 type ModelConfig struct {
-	Origins               []Origin       `json:"origins"`
 	DeniedNetworks        []netip.Prefix `json:"denied_networks"`
 	RootCAFile            string         `json:"root_ca_file"`
 	ConnectTimeout        Duration       `json:"connect_timeout"`
@@ -212,13 +203,13 @@ func (configuration EventsConfig) retentionOptions() userevents.RetentionOptions
 	return userevents.RetentionOptions{Retention: configuration.Retention, BatchSize: configuration.BatchSize, Interval: configuration.Interval.Value(), Timeout: configuration.Timeout.Value(), WorkerID: ids.New()}
 }
 
-// DefaultConfig 仅提供可覆盖的有界运行参数；地址、数据库、密钥、模型来源和节点身份必须由部署提供。
+// DefaultConfig 仅提供可覆盖的有界运行参数；地址、数据库、密钥和节点身份必须由部署提供。
 func DefaultConfig() Config {
 	second, minute, hour := Duration(time.Second), Duration(time.Minute), Duration(time.Hour)
 	return Config{
 		MaxBots: 100, MaxGroups: 100,
 		Database:  DatabaseConfig{MaxConnections: 16, ConnectTimeout: 5 * second, StatementTimeout: 10 * second, LockTimeout: 3 * second, TransactionTimeout: 20 * second, ConnectionLifetime: 30 * minute},
-		Node:      NodeConfig{CallTimeout: 30 * second, HeartbeatInterval: 10 * second, ControlLifetime: 2 * minute, Verification: VerificationConfig{Resources: computer.Resources{CPUMillis: 1000, MemoryBytes: 2 << 30, DiskBytes: 1 << 30, ProcessLimit: 512}, LeaseDuration: 3 * minute, Interval: 5 * minute, Lifetime: 15 * minute, RetryDelay: 5 * second, MaxAttempts: 5}},
+		Node:      NodeConfig{MaximumNodes: 128, CallTimeout: 30 * second, HeartbeatInterval: 10 * second, ControlLifetime: 2 * minute, Verification: VerificationConfig{Resources: computer.Resources{CPUMillis: 1000, MemoryBytes: 2 << 30, DiskBytes: 1 << 30, ProcessLimit: 512}, LeaseDuration: 3 * minute, Interval: 5 * minute, Lifetime: 15 * minute, RetryDelay: 5 * second, MaxAttempts: 5}},
 		HTTP:      HTTPConfig{ReadHeaderTimeout: 5 * second, ReadTimeout: 30 * second, WriteTimeout: minute, IdleTimeout: minute, RequestTimeout: minute, ShutdownTimeout: minute},
 		Identity:  IdentityConfig{AccessLifetime: 15 * minute, SessionLifetime: 30 * 24 * hour, VerificationLifetime: 15 * minute, RateWindow: 10 * minute, AccountAttempts: 10, SourceAttempts: 100, PasswordWorkers: 2, DeviceLimit: 20},
 		Models:    ModelConfig{ConnectTimeout: 5 * second, TLSHandshakeTimeout: 5 * second, ResponseHeaderTimeout: 30 * second, IdleReadTimeout: 30 * second, WriteTimeout: 10 * second, RequestTimeout: 2 * minute, VerificationTimeout: 45 * second, MaxRequestBytes: 16 << 20, MaxResponseBytes: 8 << 20, Concurrency: 16},
@@ -257,9 +248,9 @@ func ParseConfig(encoded []byte) (Config, error) {
 
 func (configuration Config) validate() error {
 	if _, err := modelgateway.New(configuration.Models.gatewayOptions(nil)); err != nil {
-		return errors.New("模型来源、网络范围或请求预算无效")
+		return errors.New("模型网络范围或请求预算无效")
 	}
-	if err := configuration.Node.verificationOptions().Validate(); err != nil {
+	if err := configuration.Node.verificationOptions().ValidateBudgets(); err != nil {
 		return err
 	}
 	if err := configuration.Node.observerOptions().Validate(); err != nil {
@@ -285,14 +276,10 @@ func (configuration Config) validate() error {
 	if err != nil || origin.Scheme != "https" || origin.Host == "" || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" {
 		return errors.New("管理平台来源必须是明确的 HTTPS 来源")
 	}
-	nodeURL, err := url.Parse(configuration.Node.URL)
-	if err != nil || nodeURL.Scheme != "https" || nodeURL.Host == "" || nodeURL.User != nil || nodeURL.Path != "" || nodeURL.RawQuery != "" || nodeURL.Fragment != "" {
-		return errors.New("节点来源必须是明确的 HTTPS 来源")
+	if configuration.Node.MaximumNodes < 1 || configuration.Node.MaximumNodes > 1000 {
+		return errors.New("节点数量上限必须介于 1 与 1000")
 	}
-	if _, err := nodeapi.ParseFingerprints(configuration.Node.ServerFingerprints); err != nil {
-		return err
-	}
-	paths := []string{configuration.AdminDirectory, configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.CertificateFile, configuration.Node.PrivateKeyFile}
+	paths := []string{configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.CertificateFile, configuration.Node.PrivateKeyFile, configuration.Database.MigrationDSNFile}
 	if configuration.Models.RootCAFile != "" {
 		paths = append(paths, configuration.Models.RootCAFile)
 	}

@@ -136,3 +136,35 @@ func TestCloseUnservedApplication(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEnrollmentPrecedesReadinessAndFailureStopsNode(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "登记成功", true: "登记失败"}[failure], func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			enrolled, ready, cleaned := false, false, false
+			app := &Application{nodeID: testConfig().NodeID, logger: testLogger(), shutdown: time.Second,
+				services: []service{{"服务", func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}},
+				cleanup:  []cleanupStep{{"清理", func(context.Context) error { cleaned = true; return nil }}},
+				enroll: func(context.Context) error {
+					enrolled = true
+					if failure {
+						return errors.New("接入失败")
+					}
+					return nil
+				},
+			}
+			err := app.Serve(ctx, func(context.Context) error {
+				if !enrolled {
+					t.Error("登记之前就绪")
+				}
+				ready = true
+				cancel()
+				return nil
+			})
+			if (err != nil) != failure || ready == failure || !cleaned {
+				t.Fatal("接入与就绪或清理顺序错误", err)
+			}
+		})
+	}
+}

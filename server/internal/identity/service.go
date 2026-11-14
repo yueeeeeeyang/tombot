@@ -51,13 +51,17 @@ type Service struct {
 
 // Principal 只由有效会话解析；HTTP 请求体不能覆盖其中的身份字段。
 type Principal struct {
-	UserID      string     `json:"user_id"`
-	SessionID   string     `json:"session_id"`
-	DeviceID    string     `json:"device_id"`
-	Role        string     `json:"role"`
-	Scope       string     `json:"scope"`
-	AuthVersion int64      `json:"-"`
-	VerifiedAt  *time.Time `json:"-"`
+	Username        string     `json:"username"`
+	DisplayName     string     `json:"display_name"`
+	UserID          string     `json:"user_id"`
+	SessionID       string     `json:"session_id"`
+	DeviceID        string     `json:"device_id"`
+	Role            string     `json:"role"`
+	Scope           string     `json:"scope"`
+	AuthVersion     int64      `json:"-"`
+	VerifiedAt      *time.Time `json:"-"`
+	AccessExpiresAt time.Time  `json:"-"`
+	ExpiresAt       time.Time  `json:"-"`
 }
 
 // Session 返回一次性凭据响应，持久层仅保存摘要。

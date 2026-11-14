@@ -35,6 +35,7 @@ type Identity interface {
 	Login(context.Context, identity.LoginRequest, identity.Attempt) (identity.Session, error)
 	Refresh(context.Context, string, string, identity.Attempt) (identity.Session, error)
 	Authenticate(context.Context, string, string) (identity.Principal, error)
+	ValidateRefresh(context.Context, string, string) error
 	Logout(context.Context, identity.Principal, string) error
 	ChangePassword(context.Context, identity.Principal, string, string, string, identity.Attempt) error
 	Reauthenticate(context.Context, identity.Principal, string, string, identity.Attempt) error
@@ -95,6 +96,7 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 	router.Post("/api/v2/auth/admin-setup", handler.createFirstAdministrator)
 	router.Post("/api/v2/auth/browser/start", handler.browserStart)
 	router.Post("/api/v2/auth/browser/exchange", handler.browserExchange)
+	router.Get("/api/v2/admin/auth/refresh-context", handler.refreshContext)
 	// 授权页由系统浏览器直接访问，来源是服务自身而非管理站点；表单提交走同一路径。
 	router.Get("/login", handler.loginPage)
 	router.Post("/api/v2/auth/browser/approve", handler.browserApprove)

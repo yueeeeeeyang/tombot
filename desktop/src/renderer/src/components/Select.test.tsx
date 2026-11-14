@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { Select } from './Select'
+import { Select } from '../../../../../ui/Select'
 
 const options = [
   { value: 'system', label: '跟随系统' },

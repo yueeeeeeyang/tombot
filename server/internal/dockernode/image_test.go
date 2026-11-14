@@ -379,3 +379,91 @@ func TestImagePullRejectsUnboundedProgress(t *testing.T) {
 		t.Fatal("读取进度流超过总量限制", reader.read)
 	}
 }
+
+type imageArchiveReader struct {
+	io.Reader
+	closed bool
+}
+
+func (reader *imageArchiveReader) Close() error { reader.closed = true; return nil }
+
+func TestOfflineImageManifestAndImportResponse(t *testing.T) {
+	manifest := imageManifestFixture()
+	manifest.ArchiveFile = "/etc/tombot/node/computer-image.tar"
+	manifest.ArchiveSHA256 = strings.Repeat("a", 64)
+	encoded, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, err := ParseImageManifest(encoded)
+	if err != nil || actual != manifest {
+		t.Fatal("离线清单无法解析", err)
+	}
+	for _, kind := range []string{"缺少摘要", "缺少文件", "摘要格式", "相对路径", "混入仓库认证"} {
+		changed := manifest
+		switch kind {
+		case "缺少摘要":
+			changed.ArchiveSHA256 = ""
+		case "缺少文件":
+			changed.ArchiveFile = ""
+		case "摘要格式":
+			changed.ArchiveSHA256 = strings.Repeat("x", 64)
+		case "相对路径":
+			changed.ArchiveFile = "image.tar"
+		case "混入仓库认证":
+			changed.AuthenticationFile = "/private/auth.json"
+		}
+		if changed.validate() == nil {
+			t.Fatal("接受无效离线清单", kind)
+		}
+	}
+	for _, kind := range []string{"正常", "引擎报错", "畸形响应", "HTTP失败", "无截止时间"} {
+		t.Run(kind, func(t *testing.T) {
+			calls := 0
+			engine := &dockerEngine{client: &http.Client{Transport: roundTrip(func(request *http.Request) (*http.Response, error) {
+				calls++
+				if request.Method != "POST" || request.URL.Path != "/v1.47/images/load" || request.Header.Get("X-Registry-Auth") != "" {
+					t.Fatal("归档导入接口或认证边界错误")
+				}
+				if request.Body != nil {
+					defer func() {
+						if err := request.Body.Close(); err != nil {
+							t.Error(err)
+						}
+					}()
+				}
+				content, err := io.ReadAll(request.Body)
+				if err != nil || string(content) != "archive" {
+					t.Fatal("归档流内容错误", err)
+				}
+				body := `{"stream":"Loaded image"}`
+				status := 200
+				switch kind {
+				case "引擎报错":
+					body = `{"error":"failed"}`
+				case "畸形响应":
+					body = `{}`
+				case "HTTP失败":
+					status = 500
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if kind == "无截止时间" {
+				ctx = context.Background()
+			}
+			archive := &imageArchiveReader{Reader: strings.NewReader("archive")}
+			err := engine.loadImage(ctx, archive)
+			if archive.closed {
+				t.Fatal("HTTP 传输提前关闭了调用方持有的归档描述符")
+			}
+			if (err == nil) != (kind == "正常") {
+				t.Fatal("导入错误被忽略", kind, err)
+			}
+			if kind == "无截止时间" && calls != 0 {
+				t.Fatal("无截止时间仍请求")
+			}
+		})
+	}
+}

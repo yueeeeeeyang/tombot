@@ -86,7 +86,7 @@ func newFixture(t *testing.T, handler http.HandlerFunc, change func(*Options)) f
 	root := x509.NewCertPool()
 	root.AddCert(server.Certificate())
 	origin := "https://example.com:" + address.Port()
-	options := Options{Origins: []Origin{{URL: origin}}, RootCAs: root, ConnectTimeout: time.Second, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second, IdleReadTimeout: time.Second, WriteTimeout: time.Second, RequestTimeout: 3 * time.Second, MaxRequestBytes: 1 << 20, MaxResponseBytes: 1 << 20, MaxConcurrentRequests: 2}
+	options := Options{RootCAs: root, ConnectTimeout: time.Second, TLSHandshakeTimeout: time.Second, ResponseHeaderTimeout: time.Second, IdleReadTimeout: time.Second, WriteTimeout: time.Second, RequestTimeout: 3 * time.Second, MaxRequestBytes: 1 << 20, MaxResponseBytes: 1 << 20, MaxConcurrentRequests: 2}
 	if change != nil {
 		change(&options)
 	}
@@ -168,7 +168,7 @@ func TestGatewayTLSStreamingAndUsage(t *testing.T) {
 
 func TestGatewayAddressBoundaries(t *testing.T) {
 	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { textFrames(t, w, "ok", true) }, nil)
-	for _, addresses := range [][]string{{"127.0.0.1"}, {"10.0.0.2"}, {"169.254.169.254"}, {"fd00:ec2::254"}, {"168.63.129.16"}, {"::ffff:127.0.0.1"}, {"::1"}, {"fe80::1"}, {"100.64.0.1"}, {"192.0.2.1"}, {"93.184.216.34", "10.0.0.1"}} {
+	for _, addresses := range [][]string{{"127.0.0.1"}, {"169.254.169.254"}, {"fd00:ec2::254"}, {"168.63.129.16"}, {"::ffff:127.0.0.1"}, {"::1"}, {"fe80::1"}, {"93.184.216.34", "127.0.0.1"}} {
 		fixture.resolver.set(addresses...)
 		_, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
 		if !errors.Is(err, ErrAddressDenied) {
@@ -182,54 +182,48 @@ func TestGatewayAddressBoundaries(t *testing.T) {
 	if _, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	fixture.resolver.set("10.0.0.1")
+	fixture.resolver.set("127.0.0.1")
 	_, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
 	if !errors.Is(err, ErrAddressDenied) || fixture.dialer.calls.Load() != 1 {
 		t.Fatal("新调用复用了旧 DNS 决策", err)
 	}
-	fixture.configuration.BaseURL = "https://unapproved.example.test/v1"
-	_, err = fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
-	if !errors.Is(err, ErrAddressDenied) {
-		t.Fatal("未授权来源未拒绝", err)
-	}
-	private := newFixture(t, func(w http.ResponseWriter, r *http.Request) { textFrames(t, w, "ok", true) }, func(options *Options) {
-		options.Origins[0].Networks = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/24")}
-		options.DeniedNetworks = []netip.Prefix{netip.MustParsePrefix("10.0.0.1/32")}
+	denied := newFixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("拒绝地址不应收到请求") }, func(options *Options) {
+		options.DeniedNetworks = []netip.Prefix{netip.MustParsePrefix("93.184.216.34/32")}
 	})
-	private.resolver.set("10.0.0.2")
-	if _, err = private.gateway.Call(context.Background(), private.configuration, nil, basicInput(), func(provider.Event) error { return nil }); err != nil {
-		t.Fatal("显式内网模型被拒绝", err)
-	}
-	private.resolver.set("10.0.0.1")
-	_, err = private.gateway.Call(context.Background(), private.configuration, nil, basicInput(), func(provider.Event) error { return nil })
-	if !errors.Is(err, ErrAddressDenied) {
-		t.Fatal("拒绝范围未覆盖允许范围", err)
+	_, err = denied.gateway.Call(context.Background(), denied.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+	if !errors.Is(err, ErrAddressDenied) || denied.dialer.calls.Load() != 0 {
+		t.Fatal("部署拒绝范围未阻止公网地址", err)
 	}
 }
 
-func TestGatewayOriginHostCase(t *testing.T) {
-	for _, uppercaseRule := range []bool{true, false} {
-		t.Run(fmt.Sprint(uppercaseRule), func(t *testing.T) {
-			fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { textFrames(t, w, "ok", true) }, func(options *Options) {
-				if uppercaseRule {
-					options.Origins[0].URL = strings.Replace(options.Origins[0].URL, "example.com", "EXAMPLE.COM", 1)
-				}
-			})
-			if !uppercaseRule {
-				fixture.configuration.BaseURL = strings.Replace(fixture.configuration.BaseURL, "example.com", "EXAMPLE.COM", 1)
-			}
-			result, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
-			if err != nil || !result.IsComplete || fixture.dialer.calls.Load() != 1 {
-				t.Fatal("相同来源因域名大小写而被拒绝", err)
-			}
-		})
+func TestGatewayPublicDestinationWithoutAllowlist(t *testing.T) {
+	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { textFrames(t, w, "ok", true) }, nil)
+	for _, hostname := range []string{"example.com", "EXAMPLE.COM"} {
+		configuration := fixture.configuration
+		configuration.BaseURL = strings.Replace(configuration.BaseURL, "example.com", hostname, 1)
+		result, err := fixture.gateway.Call(context.Background(), configuration, nil, basicInput(), func(provider.Event) error { return nil })
+		if err != nil || !result.IsComplete {
+			t.Fatal("公网供应商仍依赖域名白名单", err)
+		}
+	}
+	for _, address := range []string{"10.0.0.2", "192.168.1.2", "fd00::2", "100.64.0.1", "198.18.0.50", "::ffff:10.0.0.2"} {
+		fixture.resolver.set(address)
+		result, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+		if err != nil || !result.IsComplete {
+			t.Fatal("内网或代理地址仍被公网白名单拒绝", address, err)
+		}
+	}
+	for _, endpoint := range []string{"https://another.example.test/v1/models", "https://other.example.test:8443/api/models"} {
+		_, guard, err := fixture.gateway.client(endpoint, http.MethodGet, "application/json")
+		if err != nil {
+			t.Fatal("新供应商仍被域名或端口白名单拒绝", err)
+		}
+		guard.transport.CloseIdleConnections()
 	}
 }
 
-func TestGatewayRejectsTranslationEvenInsideAllowedNetwork(t *testing.T) {
-	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("转换地址不应到达供应商") }, func(options *Options) {
-		options.Origins[0].Networks = []netip.Prefix{netip.MustParsePrefix("64:ff9b::/96"), netip.MustParsePrefix("64:ff9b:1::/48"), netip.MustParsePrefix("2000::/3")}
-	})
+func TestGatewayRejectsTranslationAddresses(t *testing.T) {
+	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { t.Error("转换地址不应到达供应商") }, nil)
 	for _, address := range []string{"64:ff9b::a9fe:a9fe", "64:ff9b:1::a9fe:a9fe", "2002:7f00:1::1", "2001::1"} {
 		fixture.resolver.set(address)
 		_, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
@@ -303,7 +297,7 @@ func TestGatewayLimitsCancellationAndQueue(t *testing.T) {
 			})
 			started := time.Now()
 			result, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
-			if err == nil || result.IsComplete || time.Since(started) > 800*time.Millisecond {
+			if !errors.Is(err, context.DeadlineExceeded) || result.IsComplete || time.Since(started) > 800*time.Millisecond {
 				t.Fatal("响应头或流空闲超时未生效", err)
 			}
 		})
@@ -368,6 +362,35 @@ func TestGatewayRejectsResponseProtocol(t *testing.T) {
 }
 
 func readProbe(t *testing.T, r *http.Request) (string, string, bool) {
+	if strings.HasSuffix(r.URL.Path, "/responses") {
+		var request struct {
+			Input []struct {
+				Content []struct {
+					Type, Text string
+					ImageURL   string `json:"image_url"`
+				}
+			}
+			Tools      []json.RawMessage
+			ToolChoice string `json:"tool_choice"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil || len(request.Input) != 1 {
+			t.Fatal("Responses 探测请求无效")
+		}
+		var prompt, pixels string
+		for _, part := range request.Input[0].Content {
+			if part.Type == "input_text" && prompt == "" {
+				prompt = part.Text
+			}
+			if part.Type == "input_image" {
+				pixels = strings.TrimPrefix(part.ImageURL, "data:image/png;base64,")
+			}
+		}
+		if len(request.Tools) > 0 && request.ToolChoice != "auto" {
+			t.Error("Responses 思考模型探测必须使用自动选择")
+		}
+		return prompt, pixels, len(request.Tools) > 0
+	}
+
 	t.Helper()
 	var request struct {
 		Messages []struct {
@@ -447,14 +470,27 @@ func probeReply(t *testing.T, prompt, pixels string, tool bool) string {
 }
 
 func TestGatewayVerifiesCapabilitiesOverTLS(t *testing.T) {
-	for _, protocol := range []string{"openai_compat", "anthropic"} {
+	for _, protocol := range []string{"openai_compat", "anthropic", "responses"} {
 		t.Run(protocol, func(t *testing.T) {
 			var calls atomic.Int64
 			fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
 				prompt, pixels, tool := readProbe(t, r)
 				reply := probeReply(t, prompt, pixels, tool)
-				if protocol == "openai_compat" {
+				if protocol == "responses" {
+					if r.URL.Path != "/v1/responses" {
+						t.Error("Responses 网关端点错误")
+					}
+					events := []string{`{"type":"response.created","sequence_number":0,"response":{"id":"probe","status":"in_progress"}}`}
+					if tool {
+						arguments := fmt.Sprintf(`{"nonce":%q}`, reply)
+						events = append(events, `{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"item","type":"function_call","call_id":"call","name":"verify_capability"}}`, fmt.Sprintf(`{"type":"response.function_call_arguments.delta","sequence_number":2,"output_index":0,"item_id":"item","delta":%q}`, arguments), fmt.Sprintf(`{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"item","type":"function_call","call_id":"call","name":"verify_capability","arguments":%q}}`, arguments))
+					} else {
+						events = append(events, `{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"item","type":"message"}}`, fmt.Sprintf(`{"type":"response.output_text.delta","sequence_number":2,"output_index":0,"item_id":"item","delta":%q}`, reply), `{"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"item","type":"message"}}`)
+					}
+					events = append(events, `{"type":"response.completed","sequence_number":4,"response":{"id":"probe","status":"completed","usage":{"input_tokens":10,"output_tokens":5}}}`)
+					frames(t, w, events...)
+				} else if protocol == "openai_compat" {
 					if tool {
 						arguments := fmt.Sprintf(`{"nonce":%q}`, reply)
 						frames(t, w, fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"probe-call","function":{"name":"verify_capability","arguments":%q}}]},"finish_reason":"tool_calls"}]}`, arguments), `[DONE]`)
@@ -480,10 +516,123 @@ func TestGatewayVerifiesCapabilitiesOverTLS(t *testing.T) {
 			if calls.Load() != 3 {
 				t.Fatal("声明能力未全部探测")
 			}
+
+			for _, kind := range []string{"connectivity", "tools"} {
+				if err := fixture.gateway.Probe(context.Background(), fixture.configuration, nil, kind); err != nil {
+					t.Fatal("单项模型测试失败", kind, err)
+				}
+			}
+			if calls.Load() != 5 {
+				t.Fatal("单项测试重复调用或测试了未请求的能力")
+			}
 		})
 	}
 	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) { textFrames(t, w, "incorrect", true) }, nil)
 	if err := fixture.gateway.Verify(context.Background(), fixture.configuration, nil); !errors.Is(err, ErrVerification) {
 		t.Fatal("无关回答通过能力验证", err)
 	}
+}
+
+func TestToolProbeRejectsInvalidResults(t *testing.T) {
+	for _, kind := range []string{"missing", "wrong_name", "wrong_nonce", "extra_argument", "duplicate", "incomplete", "unknown_probe"} {
+		t.Run(kind, func(t *testing.T) {
+			var calls atomic.Int64
+			fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				prompt, pixels, tool := readProbe(t, r)
+				nonce := probeReply(t, prompt, pixels, tool)
+				if kind == "missing" {
+					textFrames(t, w, nonce, true)
+					return
+				}
+				name := "verify_capability"
+				if kind == "wrong_name" {
+					name = "unexpected_tool"
+				}
+				if kind == "wrong_nonce" {
+					nonce = "incorrect"
+				}
+				arguments := fmt.Sprintf(`{"nonce":%q}`, nonce)
+				if kind == "extra_argument" {
+					arguments = fmt.Sprintf(`{"nonce":%q,"extra":true}`, nonce)
+				}
+				call := func(index int) string {
+					return fmt.Sprintf(`{"index":%d,"id":"call-%d","function":{"name":%q,"arguments":%q}}`, index, index, name, arguments)
+				}
+				toolCalls := call(0)
+				if kind == "duplicate" {
+					toolCalls += "," + call(1)
+				}
+				payload := fmt.Sprintf(`{"choices":[{"index":0,"delta":{"tool_calls":[%s]},"finish_reason":"tool_calls"}]}`, toolCalls)
+				if kind == "incomplete" {
+					frames(t, w, payload)
+				} else {
+					frames(t, w, payload, `[DONE]`)
+				}
+			}, nil)
+			fixture.configuration.SupportsTools = true
+			probe := "tools"
+			if kind == "unknown_probe" {
+				probe = "unknown"
+			}
+			if err := fixture.gateway.Probe(context.Background(), fixture.configuration, nil, probe); err == nil {
+				t.Fatal("无效工具响应通过测试")
+			}
+			expected := int64(1)
+			if kind == "unknown_probe" {
+				expected = 0
+			}
+			if calls.Load() != expected {
+				t.Fatal("探测失败自动重放")
+			}
+		})
+	}
+}
+
+func TestGatewayPassesReasoningEffort(t *testing.T) {
+	fixture := newFixture(t, func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Effort string `json:"reasoning_effort"`
+		}
+		if json.NewDecoder(r.Body).Decode(&request) != nil || request.Effort != "high" {
+			t.Error("网关丢失固定思考级别")
+		}
+		textFrames(t, w, "ok", true)
+	}, nil)
+	fixture.configuration.ReasoningEffort = "high"
+	result, err := fixture.gateway.Call(context.Background(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+	if err != nil || !result.IsComplete {
+		t.Fatal("思考级别调用失败", err)
+	}
+}
+
+func TestFailoverClassification(t *testing.T) {
+	for _, status := range []int{400, 401, 403, 429, 500, 503, 529} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			fixture := newFixture(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) }, nil)
+			result, err := fixture.gateway.Call(t.Context(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+			want := status == 429 || status == 500 || status == 503 || status == 529
+			if err == nil || result.CanFailover != want || result.Usage != nil || result.IsComplete {
+				t.Fatal("失败分类或未知计量错误", status, result, err)
+			}
+		})
+	}
+	t.Run("收到输出后中断不可切换", func(t *testing.T) {
+		fixture := newFixture(t, func(w http.ResponseWriter, _ *http.Request) {
+			frames(t, w, `{"choices":[{"index":0,"delta":{"content":"partial"}}]}`)
+		}, nil)
+		result, err := fixture.gateway.Call(t.Context(), fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+		if err == nil || result.CanFailover {
+			t.Fatal("部分输出被允许重放", err)
+		}
+	})
+	t.Run("用户取消不可切换", func(t *testing.T) {
+		fixture := newFixture(t, func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(503) }, nil)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		result, err := fixture.gateway.Call(ctx, fixture.configuration, nil, basicInput(), func(provider.Event) error { return nil })
+		if err == nil || result.CanFailover {
+			t.Fatal("取消后仍允许切换", err)
+		}
+	})
 }

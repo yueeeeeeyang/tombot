@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/nodeapi"
+	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/processgroup"
 )
 
@@ -26,6 +28,7 @@ type cleanupStep struct {
 }
 
 type Application struct {
+	enroll   func(context.Context) error
 	nodeID   string
 	logger   *slog.Logger
 	shutdown time.Duration
@@ -89,10 +92,28 @@ func New(parent context.Context, configuration Config, logger *slog.Logger) (app
 	if err != nil {
 		return nil, err
 	}
-	// 控制端点最后释放，避免旧资源仍在收尾时另一节点入口重新接单。
-	steps = append(steps, cleanupStep{"控制端点", func(context.Context) error { return listener.Close() }})
+	// HTTP 服务已负责关闭监听；统一收尾还须覆盖未进入 Serve 的路径，已关闭端点按幂等处理。
+	steps = append(steps, cleanupStep{"控制端点", func(context.Context) error { return closeControlListener(listener) }})
 	application = &Application{nodeID: configuration.NodeID, logger: logger, shutdown: configuration.ShutdownTimeout.duration(), cleanup: steps, services: []service{{"节点 API", func(ctx context.Context) error { return server.Serve(ctx, listener) }}, {"执行监督", sessions.Serve}, {"出网监督", node.Serve}}}
+	if configuration.Enrollment != nil {
+		application.enroll = func(ctx context.Context) error {
+			err := nodeenrollment.Register(ctx, configuration.NodeID, *configuration.Enrollment, controlTLS.Certificates[0], func(path string) ([]byte, error) { return readProtectedFile(path, 128, true) })
+			if err == nil {
+				logger.InfoContext(ctx, "节点自动接入已确认", "node_id", configuration.NodeID)
+			}
+			return err
+		}
+	}
+
 	return application, nil
+}
+
+func closeControlListener(listener net.Listener) error {
+	err := listener.Close()
+	if errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 // finish 在任何释放失败或超时后停止后续释放；未知活动资源不能被当作已停止。
@@ -155,7 +176,10 @@ func (application *Application) Serve(parent context.Context, ready func(context
 	for _, component := range application.services {
 		go func() { results <- outcome{component.name, component.run(ctx)} }()
 	}
-	if ready != nil && ctx.Err() == nil {
+	if application.enroll != nil {
+		failure = application.enroll(ctx)
+	}
+	if failure == nil && ready != nil && ctx.Err() == nil {
 		failure = ready(ctx)
 	}
 	if failure == nil && ctx.Err() == nil {

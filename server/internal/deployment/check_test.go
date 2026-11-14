@@ -14,6 +14,8 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/nodeapp"
+	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/serverapp"
 	"io.yueyang/tom/internal/store/postgres"
 )
@@ -30,21 +32,18 @@ func fixtureConfiguration(t *testing.T) (configuration, Paths, account) {
 	}
 	server := serverapp.DefaultConfig()
 	server.Address, server.AdminOrigin = "127.0.0.1:8443", "https://127.0.0.1:8443"
-	server.AdminDirectory = "/opt/tombot/admin"
 	server.TLSCertificateFile, server.TLSPrivateKeyFile = "/etc/tombot/certificate.pem", "/etc/tombot/private/tls.pem"
 	server.IdentityKeyFile, server.CSRFKeyFile = "/etc/tombot/private/identity.key", "/etc/tombot/private/csrf.key"
 	server.ActiveModelKey = "current"
 	server.ModelKeyFiles = map[string]string{"current": "/etc/tombot/private/model.key"}
 	server.Database.DSNFiles = make(map[postgres.Role]string)
+	server.Database.MigrationDSNFile = "/etc/tombot/private/migration.connection"
 	for _, role := range []postgres.Role{postgres.IdentityRole, postgres.ControlRole, postgres.TenantRole, postgres.DispatchRole} {
 		server.Database.DSNFiles[role] = "/etc/tombot/private/" + string(role) + ".connection"
 	}
-	server.Node.ID, server.Node.Verification.ImageID = node.NodeID, ids.New()
-	server.Node.URL = "https://" + node.Listen
+	imageID := ids.New()
 	server.Node.CertificateFile, server.Node.PrivateKeyFile = "/etc/tombot/tls/api-certificate.pem", "/etc/tombot/private/api.key"
-	server.Node.ServerFingerprints = []string{strings.Repeat("b", 64)}
-	server.Models.Origins = []serverapp.Origin{{URL: "https://model.example.test"}}
-	image := dockernode.ImageManifest{Version: 1, NodeID: node.NodeID, ImageID: server.Node.Verification.ImageID, Reference: "example.test/computer@sha256:" + strings.Repeat("a", 64), Platform: "linux/arm64", Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", CallTimeoutSeconds: 30, TimeoutSeconds: 60}
+	image := dockernode.ImageManifest{Version: 1, NodeID: node.NodeID, ImageID: imageID, Reference: "example.test/computer@sha256:" + strings.Repeat("a", 64), Platform: "linux/arm64", Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", CallTimeoutSeconds: 30, TimeoutSeconds: 60}
 	paths := Paths{Server: "/etc/tombot/server.json", Node: "/etc/tombot/node.json", Docker: "/etc/tombot/docker-install.json", Image: "/etc/tombot/computer-image.json"}
 	return configuration{server: server, node: node, image: image}, paths, account{uid: 20001, gid: 20001}
 }
@@ -62,10 +61,13 @@ func TestDeploymentGraph(t *testing.T) {
 			c.server.Provision.LeaseDuration = serverapp.Duration(10 * time.Minute)
 		}, "租约"},
 		{"节点身份", func(c *configuration, _ *Paths, _ *account) { c.node.NodeID = ids.New() }, "身份"},
-		{"镜像身份", func(c *configuration, _ *Paths, _ *account) { c.image.ImageID = ids.New() }, "身份"},
+		{"镜像身份", func(c *configuration, _ *Paths, _ *account) {
+			c.node.Enrollment = &nodeenrollment.Config{Registration: nodecatalog.Registration{ImageID: c.image.ImageID, ImageReference: c.image.Reference}, Server: nodeenrollment.ServerConfig{NodeURL: "https://10.0.0.5:9443"}}
+			c.image.ImageID = ids.New()
+		}, "身份"},
 		{"用户身份", func(_ *configuration, _ *Paths, a *account) { a.uid = 0 }, "账户"},
 		{"root 身份", func(_ *configuration, _ *Paths, a *account) { a.uid = 0 }, "账户"},
-		{"节点端口不一致", func(c *configuration, _ *Paths, _ *account) { c.server.Node.URL = "https://10.0.0.5:9444" }, "端口"},
+
 		{"状态目录包含节点证书", func(c *configuration, _ *Paths, _ *account) {
 			c.node.Runtime.StateDirectory = "/etc/tombot/private"
 		}, "重叠"},
@@ -82,8 +84,10 @@ func TestDeploymentGraph(t *testing.T) {
 		}, "重叠"},
 		{"引导记录被包含", func(c *configuration, _ *Paths, _ *account) { c.image.StateDirectory = "/var/lib/tombot-node" }, "重叠"},
 
-		{"管理端包含私有文件", func(c *configuration, _ *Paths, _ *account) { c.server.AdminDirectory = "/etc/tombot" }, "重叠"},
 		{"私有文件复用", func(c *configuration, _ *Paths, _ *account) { c.server.CSRFKeyFile = c.server.IdentityKeyFile }, "复用"},
+		{"迁移文件与业务文件复用", func(c *configuration, _ *Paths, _ *account) {
+			c.server.Database.MigrationDSNFile = c.server.Database.DSNFiles[postgres.ControlRole]
+		}, "复用"},
 		{"配置与镜像记录重叠", func(c *configuration, p *Paths, _ *account) { p.Image = c.image.StateDirectory + "/config.json" }, "重叠"},
 		{"路径非规范", func(_ *configuration, p *Paths, _ *account) { p.Node = "/etc/tombot/../node.json" }, "路径"},
 	} {
@@ -140,9 +144,6 @@ func materializeFixture(t *testing.T, fs filesystem, value configuration, paths 
 			owner = api.uid
 		}
 		writeFixture(t, fs, rule.path, make([]byte, 32), 0600, owner)
-	}
-	if err := os.MkdirAll(fs.resolve(value.server.AdminDirectory), 0755); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -232,22 +233,23 @@ func TestCheckRejectsInvalidFiles(t *testing.T) {
 	}
 }
 
-func TestDeploymentSystemdOrder(t *testing.T) {
-	for name, required := range map[string][]string{
-		"tombot-docker-bootstrap.service": {"Requires=tombot-deployment-check.service", "After=network-online.target tombot-deployment-check.service"},
-		"tombot-deployment-check.service": {"ExecStart=/usr/lib/tombot/tomdeploy-check", "User=root", "ProtectSystem=strict", "TimeoutStartSec=30s", "Environment=TOM_SERVER_CONFIG=/etc/tombot/server.json", "Environment=TOM_NODE_CONFIG=/etc/tombot/node.json", "Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/docker-install.json", "Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/computer-image.json"},
-	} {
-		encoded, err := os.ReadFile("../../deploy/systemd/" + name)
-		if err != nil {
-			t.Fatal(err)
+func TestNodeSystemdService(t *testing.T) {
+	encoded, err := os.ReadFile("../../deploy/systemd/tombot-node.service")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"ExecStart=/usr/lib/tombot/tomnode start", "User=root", "Type=notify", "NotifyAccess=main", "TimeoutStartSec=140min", "TimeoutStopSec=11min", "NoNewPrivileges=true", "KillMode=control-group", "Environment=TOM_NODE_CONFIG=/etc/tombot/node/node.json", "Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/node/docker-install.json", "Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/node/computer-image.json", "WantedBy=multi-user.target"} {
+		if !strings.Contains(string(encoded), expected+"\n") {
+			t.Fatal("节点服务契约丢失", expected)
 		}
-		for _, expected := range required {
-			if !strings.Contains(string(encoded), expected+"\n") {
-				t.Fatal("部署启动依赖丢失", name, expected)
-			}
+	}
+	for _, forbidden := range []string{"TOM_SERVER_CONFIG", "Requires=", "RemainAfterExit=yes", "PrivateTmp=true", "ProtectSystem=", "ProtectHome="} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatal("节点依赖 API、缓存检查或隔离了挂载传播", forbidden)
 		}
-		if strings.Contains(string(encoded), "RemainAfterExit=yes") {
-			t.Fatal("配置检查结果不应跨引导缓存")
-		}
+	}
+	units, err := os.ReadDir("../../deploy/systemd")
+	if err != nil || len(units) != 1 {
+		t.Fatal("节点必须只发布一个服务单元", err)
 	}
 }

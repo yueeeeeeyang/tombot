@@ -11,6 +11,8 @@ import (
 
 	safelog "io.yueyang/tom/internal/infra/log"
 	"io.yueyang/tom/internal/serverapp"
+	"io.yueyang/tom/internal/servercommand"
+	"io.yueyang/tom/web/admin/bundle"
 )
 
 func main() {
@@ -23,10 +25,10 @@ func main() {
 	}
 }
 
-// run 只启动新 PostgreSQL 服务；部署文件必须显式指定，数据库初始化由 tomdb 执行。
+// run 分派部署子命令；无参数时以非 root 身份运行服务，自动迁移成功后才监听端口。
 func run(ctx context.Context, logger *slog.Logger, arguments []string, configurationPath string) (result error) {
 	if len(arguments) != 0 {
-		return errors.New("服务入口不接受子命令，请使用 TOM_SERVER_CONFIG 指定多用户配置；数据库初始化使用 tomdb")
+		return servercommand.Run(ctx, arguments, os.Stdout, logger)
 	}
 	if err := validateHost(os.Geteuid()); err != nil {
 		return err
@@ -35,7 +37,11 @@ func run(ctx context.Context, logger *slog.Logger, arguments []string, configura
 	if err != nil {
 		return err
 	}
-	application, err := serverapp.Open(ctx, configuration, logger)
+	page, err := bundle.New()
+	if err != nil {
+		return err
+	}
+	application, err := serverapp.Open(ctx, configuration, page, logger)
 	if err != nil {
 		return err
 	}

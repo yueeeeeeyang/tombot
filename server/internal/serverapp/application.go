@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"sync/atomic"
 
 	"io.yueyang/tom/internal/accounts"
@@ -21,7 +20,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/modelregistry"
-	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userapi"
 	"io.yueyang/tom/internal/userevents"
@@ -38,6 +37,7 @@ type nodeRuntime interface {
 }
 
 type Application struct {
+	closeNodes    func() error
 	configuration Config
 	databases     map[postgres.Role]*postgres.Database
 	handler       http.Handler
@@ -68,10 +68,11 @@ func (keys materials) clear() {
 	}
 }
 
-// Open 只组装最终 PostgreSQL 服务；不迁移旧库、不创建示例账户，也不注册宿主执行器。
-func Open(ctx context.Context, configuration Config, logger *slog.Logger) (application *Application, failure error) {
-	if logger == nil {
-		return nil, errors.New("服务日志未配置")
+// Open 先迁移受管理的 PostgreSQL 数据库，再组装业务服务；失败时不开放业务入口。
+// 不转换旧单用户数据库、不创建示例账户，也不注册宿主执行器。
+func Open(ctx context.Context, configuration Config, page *adminweb.Handler, logger *slog.Logger) (application *Application, failure error) {
+	if logger == nil || page == nil {
+		return nil, errors.New("服务日志或内置管理页面未配置")
 	}
 	if err := configuration.validate(); err != nil {
 		return nil, err
@@ -102,6 +103,11 @@ func Open(ctx context.Context, configuration Config, logger *slog.Logger) (appli
 	if err != nil {
 		return nil, err
 	}
+	logger.Info("开始检查并迁移 PostgreSQL 数据库")
+	if err := configuration.Database.initialize(ctx, connections); err != nil {
+		return nil, err
+	}
+	logger.Info("PostgreSQL 数据库迁移完成")
 	databases := map[postgres.Role]*postgres.Database{}
 	defer func() {
 		if application == nil {
@@ -115,31 +121,33 @@ func Open(ctx context.Context, configuration Config, logger *slog.Logger) (appli
 		}
 		databases[role] = database
 	}
-	node, err := newNodeClient(configuration.Node)
-	if err != nil {
-		return nil, err
-	}
-	return assemble(configuration, databases, keys, inbound, node, logger)
+	return assemble(configuration, databases, keys, inbound, nil, page, logger)
 }
 
-func assemble(configuration Config, databases map[postgres.Role]*postgres.Database, keys materials, inbound *tls.Config, node nodeRuntime, logger *slog.Logger) (*Application, error) {
-	if node == nil || inbound == nil || logger == nil {
+func assemble(configuration Config, databases map[postgres.Role]*postgres.Database, keys materials, inbound *tls.Config, node nodeRuntime, page *adminweb.Handler, logger *slog.Logger) (*Application, error) {
+	if inbound == nil || logger == nil || page == nil {
 		return nil, errors.New("多用户服务依赖缺失")
-	}
-	nodes, err := nodecatalog.New(databases[postgres.ControlRole], configuration.Node.ID)
-	if err != nil {
-		return nil, err
-	}
-	observer, err := nodecatalog.NewObserver(nodes, node, configuration.Node.observerOptions(), logger)
-	if err != nil {
-		return nil, err
-	}
-	verifier, err := nodecatalog.NewVerifier(nodes, node, configuration.Node.verificationOptions(), logger)
-	if err != nil {
-		return nil, err
 	}
 	authOptions := configuration.Identity
 	authentication, err := identity.New(databases[postgres.IdentityRole], identity.Options{AccessLifetime: authOptions.AccessLifetime.Value(), SessionLifetime: authOptions.SessionLifetime.Value(), VerificationLifetime: authOptions.VerificationLifetime.Value(), RateWindow: authOptions.RateWindow.Value(), AccountAttempts: authOptions.AccountAttempts, SourceAttempts: authOptions.SourceAttempts, PasswordWorkers: authOptions.PasswordWorkers, DeviceLimit: authOptions.DeviceLimit, EncryptionKey: keys.identity})
+	if err != nil {
+		return nil, err
+	}
+	enrollment, err := nodeenrollment.New(databases[postgres.ControlRole], authentication, configuration.Node.MaximumNodes)
+	if err != nil {
+		return nil, err
+	}
+	if node == nil {
+		node, err = newNodeClient(configuration.Node, enrollment)
+		if err != nil {
+			return nil, err
+		}
+	}
+	fleet, err := nodeenrollment.NewFleet(enrollment, databases[postgres.ControlRole], node, configuration.Node.observerOptions(), configuration.Node.verificationOptions(), configuration.Node.MaximumNodes, logger)
+	if err != nil {
+		return nil, err
+	}
+	enrollmentHTTP, err := nodeenrollment.NewHandler(enrollment, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -194,11 +202,11 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	nodeCatalog, err := nodecatalog.NewAdmin(nodes, authentication)
+	bootstrap, err := newNodeBootstrap(configuration, inbound, enrollment, logger)
 	if err != nil {
 		return nil, err
 	}
-	management, err := adminapi.New(users, authentication, nodeCatalog, models, gate, logger)
+	management, err := adminapi.New(users, authentication, bootstrap, models, gate, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -214,12 +222,13 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	page, err := adminweb.New(os.DirFS(configuration.AdminDirectory))
-	if err != nil {
-		return nil, err
+	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{fleet.Run, users.Run, worker.Serve, eventRetention.Run}}
+	if closer, ok := node.(interface{ CloseIdle() error }); ok {
+		application.closeNodes = closer.CloseIdle
 	}
-	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{observer.Run, verifier.Run, users.Run, worker.Serve, eventRetention.Run}}
 	router := http.NewServeMux()
+	router.Handle(nodeenrollment.Path, enrollmentHTTP)
+	router.Handle(nodeenrollment.BootstrapPath, bootstrap)
 	router.Handle("/api/v2/auth/", gate)
 	router.Handle("/api/v2/admin/auth/", gate)
 	router.Handle("/api/v2/admin/", management)
@@ -261,11 +270,7 @@ func newGateway(configuration ModelConfig) (*modelgateway.Gateway, error) {
 
 // gatewayOptions 让配置生成与实际入口共用模型网络规则，配置校验不读取信任文件或连接网络。
 func (configuration ModelConfig) gatewayOptions(roots *x509.CertPool) modelgateway.Options {
-	origins := make([]modelgateway.Origin, 0, len(configuration.Origins))
-	for _, origin := range configuration.Origins {
-		origins = append(origins, modelgateway.Origin{URL: origin.URL, Networks: origin.Networks})
-	}
-	return modelgateway.Options{Origins: origins, DeniedNetworks: configuration.DeniedNetworks, RootCAs: roots, ConnectTimeout: configuration.ConnectTimeout.Value(), TLSHandshakeTimeout: configuration.TLSHandshakeTimeout.Value(), ResponseHeaderTimeout: configuration.ResponseHeaderTimeout.Value(), IdleReadTimeout: configuration.IdleReadTimeout.Value(), WriteTimeout: configuration.WriteTimeout.Value(), RequestTimeout: configuration.RequestTimeout.Value(), MaxRequestBytes: configuration.MaxRequestBytes, MaxResponseBytes: configuration.MaxResponseBytes, MaxConcurrentRequests: configuration.Concurrency}
+	return modelgateway.Options{DeniedNetworks: configuration.DeniedNetworks, RootCAs: roots, ConnectTimeout: configuration.ConnectTimeout.Value(), TLSHandshakeTimeout: configuration.TLSHandshakeTimeout.Value(), ResponseHeaderTimeout: configuration.ResponseHeaderTimeout.Value(), IdleReadTimeout: configuration.IdleReadTimeout.Value(), WriteTimeout: configuration.WriteTimeout.Value(), RequestTimeout: configuration.RequestTimeout.Value(), MaxRequestBytes: configuration.MaxRequestBytes, MaxResponseBytes: configuration.MaxResponseBytes, MaxConcurrentRequests: configuration.Concurrency}
 }
 
 func (application *Application) ready(w http.ResponseWriter, r *http.Request) {
@@ -309,5 +314,9 @@ func (application *Application) Close() error {
 		}
 		return errors.New("服务仍有在途工作，不能关闭数据库")
 	}
-	return closeDatabases(application.databases)
+	var err error
+	if application.closeNodes != nil {
+		err = application.closeNodes()
+	}
+	return errors.Join(err, closeDatabases(application.databases))
 }

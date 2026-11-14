@@ -22,20 +22,19 @@ from build_computer_image import ENVIRONMENT_FILE, IMAGE_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = ("amd64", "arm64")
-HOST_PROGRAMS = ("tomd", "tomdb", "tomdocker-bootstrap", "tomdeploy-check", "tomdeploy-config", "tomimage-prepare", "tomnode",
-                 "tomnode-register")
+FORMAT_VERSION = 7
+HOST_PROGRAMS = ("tomd", "tomnode")
 COMPUTER_PROGRAMS = ("computer-agent", "computer-task", "computer-probe", "bot-agent")
-DEPLOY_FILES = ("tomd.service", "systemd/tombot-docker-bootstrap.service",
-                "systemd/tombot-deployment-check.service",
-                "systemd/tombot-image-prepare.service", "systemd/tombot-node.service",
-                "node.example.json", "docker-install.schema.json", "computer-image.schema.json", "CONFIGURE.md")
+DEPLOY_FILES = ("tomd.service", "systemd/tombot-node.service", "node.example.json", "node-install.example.json",
+                "docker-install.schema.json", "computer-image.schema.json", "CONFIGURE.md", "NODE.md", "SERVER.md")
 VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py")
 SOURCE_DIRECTORIES = ("server/cmd", "server/internal", "server/web", "server/deploy", "server/scripts", "admin", "ui")
+SHARED_ASSETS = ("desktop/src/renderer/src/assets/cats/frames/bombay.png",)
 SOURCE_SUFFIXES = {".go", ".sql", ".html", ".json", ".py", ".xml", ".service", ".md",
                    ".ts", ".tsx", ".js", ".mjs", ".css", ".png", ".svg", ".ico", ".woff2"}
 SOURCE_NAMES = {"Dockerfile", "Caddyfile", "seccomp.LICENSE", ".prettierignore"}
 EXCLUDED_DIRECTORIES = {"node_modules", "dist", "coverage", "test-results", "playwright-report", "__pycache__"}
-ASSET_NAME = re.compile(r"admin/assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|ico)\Z")
+ASSET_NAME = re.compile(r"assets/[A-Za-z0-9_-]+\.(js|css|woff2|png|svg|ico)\Z")
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:-[a-z0-9][a-z0-9.-]{0,39})?\Z")
 DIGEST = re.compile(r"[a-f0-9]{64}\Z")
 MAX_FILE = 256 << 20
@@ -77,6 +76,11 @@ def file_identity(value):
 
 def source_paths(root):
     paths = [root / "server/go.mod", root / "server/go.sum", root / "server/Makefile"]
+    for relative in SHARED_ASSETS:
+        path = root / relative
+        require(path.is_file() and not any((root / parent).is_symlink() for parent in PurePosixPath(relative).parents),
+                "管理平台共享资源缺失或父目录为链接")
+        paths.append(path)
     for relative in SOURCE_DIRECTORIES:
         base = root / relative
         require(base.is_dir() and not base.is_symlink(), "构建源码目录缺失或为链接")
@@ -138,7 +142,7 @@ def build_environment():
 
 
 def required_paths():
-    paths = {"admin/index.html", "README.md"} | {"deploy/" + name for name in DEPLOY_FILES}
+    paths = {"README.md"} | {"deploy/" + name for name in DEPLOY_FILES}
     paths.update("tools/" + name for name in VERIFICATION_FILES)
     for architecture in ARCHITECTURES:
         prefix = "linux-" + architecture
@@ -178,20 +182,33 @@ def copy_artifact(source, target):
         output.write(content)
 
 
+def read_admin_build(distribution):
+    require(not distribution.is_symlink() and {path.name for path in distribution.iterdir()} == {"index.html", "assets"}, "管理平台包含未知产物")
+    require(not (distribution / "assets").is_symlink(), "管理平台资源目录不能为链接")
+    entries = sorted((distribution / "assets").iterdir())
+    require(0 < len(entries) <= 256, "管理平台资源数量无效")
+    contents = {"index.html": read_source(distribution / "index.html", 64 << 10)}
+    require(b"/admin/assets/" in contents["index.html"], "管理平台入口不是 /admin/ 构建")
+    for entry in entries:
+        name = "assets/" + entry.name
+        require(ASSET_NAME.fullmatch(name), "管理平台资源名称无效")
+        contents[name] = read_source(entry, 8 << 20)
+    require(all(contents.values()) and sum(map(len, contents.values())) <= 16 << 20, "管理平台资源为空或总容量超限")
+    return contents
+
+
+def validate_embedded_admin(binary, assets):
+    # Go embed 将原始资源编入可执行文件；逐项比对，防止编译到了旧产物或遗漏嵌入入口。
+    program = read_source(binary)
+    require(all(content in program for content in assets.values()), "服务端未嵌入本次构建的全部管理资源")
+
+
 def compile_artifacts(source, payload):
     environment = build_environment()
     run_command(["npm", "ci", "--no-audit", "--no-fund"], source / "admin", environment, 600, "安装锁定的管理平台依赖")
     run_command(["npm", "run", "build"], source / "admin", environment, 300, "构建管理平台")
-    distribution = source / "admin/dist"
-    require({path.name for path in distribution.iterdir()} == {"index.html", "assets"}, "管理平台包含未知产物")
-    copy_artifact(distribution / "index.html", payload / "admin/index.html")
-    require(not (distribution / "assets").is_symlink(), "管理平台资源目录不能为链接")
-    assets = sorted((distribution / "assets").iterdir())
-    require(0 < len(assets) <= 256, "管理平台资源数量无效")
-    for asset in assets:
-        name = "admin/assets/" + asset.name
-        require(ASSET_NAME.fullmatch(name), "管理平台资源名称无效")
-        copy_artifact(asset, payload / name)
+    assets = read_admin_build(source / "server/web/admin/bundle/dist")
+    run_command(["go", "test", "./web/admin/bundle"], source / "server", environment, 300, "验证内置管理页面")
     for architecture in ARCHITECTURES:
         environment["GOOS"], environment["GOARCH"] = "linux", architecture
         for name, target_architecture in binary_paths().items():
@@ -201,6 +218,8 @@ def compile_artifacts(source, payload):
             target.parent.mkdir(parents=True, exist_ok=True)
             run_command(["go", "build", "-trimpath", "-o", str(target), "./cmd/" + target.name],
                         source / "server", environment, 300, "编译 " + architecture + " " + target.name)
+            if target.name == "tomd":
+                validate_embedded_admin(target, assets)
         for name in IMAGE_FILES:
             copy_artifact(source / "server/deploy/computer" / name,
                           payload / ("linux-" + architecture) / "computer-image" / name)
@@ -225,7 +244,7 @@ def payload_manifest(payload, version, source_digest):
                 validate_elf(content[:64], binary_paths()[relative])
             files[relative] = {"size": len(content), "sha256": hashlib.sha256(content).hexdigest(),
                                "mode": artifact_mode(relative)}
-    manifest = {"format_version": 3, "version": release_version(version),
+    manifest = {"format_version": FORMAT_VERSION, "version": release_version(version),
                 "platforms": ["linux/" + architecture for architecture in ARCHITECTURES],
                 "source_sha256": source_digest, "files": dict(sorted(files.items()))}
     validate_manifest(manifest)
@@ -234,26 +253,21 @@ def payload_manifest(payload, version, source_digest):
 
 def validate_manifest(manifest):
     require(isinstance(manifest, dict) and set(manifest) == {"format_version", "version", "platforms", "source_sha256", "files"}, "发布清单字段无效")
-    require(type(manifest["format_version"]) is int and manifest["format_version"] == 3, "发布清单版本无效")
+    require(type(manifest["format_version"]) is int and manifest["format_version"] == FORMAT_VERSION, "发布清单版本无效")
     release_version(manifest["version"])
     require(manifest["platforms"] == ["linux/" + value for value in ARCHITECTURES], "发布平台集合不完整")
     require(isinstance(manifest["source_sha256"], str) and DIGEST.fullmatch(manifest["source_sha256"]), "源码摘要无效")
     files = manifest["files"]
     require(isinstance(files, dict) and len(files) <= MAX_FILES and required_paths() <= set(files), "发布清单缺少必要组件或超过上限")
-    total, admin_total, assets = 0, 0, 0
+    total = 0
     for name, entry in files.items():
-        require(name in required_paths() or ASSET_NAME.fullmatch(name), "发布清单含未知文件")
+        require(name in required_paths(), "发布清单含未知文件")
         require(isinstance(entry, dict) and set(entry) == {"size", "sha256", "mode"}, "发布文件清单字段无效")
         require(type(entry["size"]) is int and 0 < entry["size"] <= MAX_FILE, "发布文件大小无效")
         require(type(entry["mode"]) is int and entry["mode"] == artifact_mode(name), "发布文件权限无效")
         require(isinstance(entry["sha256"], str) and DIGEST.fullmatch(entry["sha256"]), "发布文件摘要无效")
         total += entry["size"]
-        if name.startswith("admin/"):
-            limit = 64 << 10 if name == "admin/index.html" else 8 << 20
-            require(entry["size"] <= limit, "管理平台单文件超过上限")
-            admin_total += entry["size"]
-            assets += name != "admin/index.html"
-    require(total <= MAX_CONTENT and admin_total <= 16 << 20 and 0 < assets <= 256, "发布总容量或管理平台数量无效")
+    require(total <= MAX_CONTENT, "发布总容量超过上限")
 
 
 def encode_manifest(manifest):
@@ -320,20 +334,16 @@ def verify_stream(stream):
         else:
             expected = manifest["files"].get(name)
             require(expected is not None and header.size == expected["size"] and header.mode == expected["mode"], "发布文件与清单不符")
-            digest, remaining, prefix, index = hashlib.sha256(), header.size, b"", b""
+            digest, remaining, prefix = hashlib.sha256(), header.size, b""
             while remaining:
                 chunk = read_exact(stream, min(remaining, CHUNK_SIZE))
                 if not prefix:
                     prefix = chunk[:64]
                 digest.update(chunk)
-                if name == "admin/index.html":
-                    index += chunk
                 remaining -= len(chunk)
             require(digest.hexdigest() == expected["sha256"], "发布文件摘要不符")
             if name in binary_paths():
                 validate_elf(prefix, binary_paths()[name])
-            if name == "admin/index.html":
-                require(b"/admin/assets/" in index, "管理平台入口不是 /admin/ 构建")
         padding = (-header.size) % 512
         require(not any(read_exact(stream, padding)), "发布文件填充无效")
         total += header.size + padding
