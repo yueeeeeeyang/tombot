@@ -29,10 +29,17 @@ function loginAssets() {
         source:
           theme +
           '\n@media (prefers-color-scheme: dark) {\n' +
-          systemDark +
+          systemDark.replaceAll(':root', ':root:not([data-theme])') +
           '\n}\n' +
           source('../ui/user-platform.css'),
       })
+      for (const name of ['user-platform', 'user-profile', 'avatar-crop', 'profile-save']) {
+        this.emitFile({
+          type: 'asset',
+          fileName: `assets/${name}.js`,
+          source: source(`../ui/${name}.js`),
+        })
+      }
       this.emitFile({
         type: 'asset',
         fileName: 'assets/login-logo.png',

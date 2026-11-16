@@ -11,7 +11,7 @@ import (
 )
 
 func TestWebFormRejectsCrossSiteAndUnboundRequests(t *testing.T) {
-	for _, path := range []string{"/api/v2/web/auth/login", "/api/v2/web/auth/logout", "/api/v2/auth/browser/approve"} {
+	for _, path := range []string{"/api/v2/web/auth/login", "/api/v2/web/auth/logout", "/api/v2/web/auth/profile", "/api/v2/web/auth/password", "/api/v2/auth/browser/approve"} {
 		for _, origin := range []string{"", "null", "https://outside.example.test"} {
 			handler, stub, _ := fixture(t)
 			r := request("POST", path, "")
@@ -73,7 +73,7 @@ func TestStandaloneUserLoginDoesNotRequireDesktopAuthorization(t *testing.T) {
 }
 
 func TestUserPlatformRequiresOwnSession(t *testing.T) {
-	for _, path := range []string{"/", "/account"} {
+	for _, path := range []string{"/", "/account", "/account/password"} {
 		for _, mode := range []string{"anonymous", "administrator", "expired", "unavailable", "authenticated"} {
 			t.Run(path+"/"+mode, func(t *testing.T) {
 				handler, stub, _ := fixture(t)

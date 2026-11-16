@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2022",
+    "allowJs": true,
+    "checkJs": true,
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
@@ -20,5 +22,5 @@
       "lucide-react": ["./node_modules/lucide-react"]
     }
   },
-  "include": ["src", "tests", "*.ts"]
+  "include": ["src", "tests", "*.ts", "../ui/user-platform.js", "../ui/user-profile.js"]
 }

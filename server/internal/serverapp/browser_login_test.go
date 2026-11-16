@@ -216,6 +216,16 @@ func TestBrowserLoginThroughApplication(t *testing.T) {
 	}
 }
 
+// browserFormForAction 避免多表单页面把其他操作的 CSRF 用于退出登录。
+func browserFormForAction(t *testing.T, content []byte, action string) url.Values {
+	t.Helper()
+	form := regexp.MustCompile(`(?s)<form[^>]*action="` + regexp.QuoteMeta(action) + `"[^>]*>.*?</form>`).Find(content)
+	if form == nil {
+		t.Fatal("页面缺少指定操作的表单")
+	}
+	return browserForm(t, form)
+}
+
 // browserForm 只解析服务端生成的隐藏字段，断言不输出认证材料。
 func browserForm(t *testing.T, content []byte) url.Values {
 	t.Helper()
@@ -288,7 +298,7 @@ func TestUserWebLoginAndDesktopAuthorization(t *testing.T) {
 	if status != 200 || !strings.Contains(string(content), fixture.username) || !strings.Contains(string(content), "个人信息") || strings.Contains(string(content), webToken) {
 		t.Fatal("个人信息不正确", status)
 	}
-	logout := browserForm(t, content)
+	logout := browserFormForAction(t, content, "/api/v2/web/auth/logout")
 	status, _, headers = fixture.call(t, "GET", "/login", nil, "")
 	if status != 303 || headers.Get("Location") != "/" {
 		t.Fatal("已登录仍索要密码")

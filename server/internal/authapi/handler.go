@@ -30,6 +30,8 @@ const maxBodyBytes = 16 << 10
 
 // Identity 限定传输层所需的身份能力；实现不能通过 HTTP 参数选择数据库身份。
 type Identity interface {
+	UpdateProfile(context.Context, identity.Principal, identity.ProfileUpdate, string) (identity.UserProfile, error)
+	UserAvatar(context.Context, identity.Principal) ([]byte, error)
 	Activate(context.Context, string, string, string, identity.Attempt) error
 	AdministratorsExist(context.Context) (bool, error)
 	CreateFirstAdministrator(context.Context, string, string, string, identity.Attempt) (identity.AdministratorSetup, error)
@@ -108,6 +110,10 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 	router.Get("/authorize", handler.authorizationPage)
 	router.Get("/", handler.platformPage)
 	router.Get("/account", handler.platformPage)
+	router.Get("/account/password", handler.platformPage)
+	router.Get("/api/v2/web/auth/avatar", handler.webAvatar)
+	router.Post("/api/v2/web/auth/profile", handler.webProfile)
+	router.Post("/api/v2/web/auth/password", handler.webPassword)
 	router.Post("/api/v2/web/auth/login", handler.webLogin)
 	router.Post("/api/v2/web/auth/logout", handler.webLogout)
 	router.Post("/api/v2/auth/browser/approve", handler.browserApprove)
@@ -159,7 +165,7 @@ func (handler *Handler) transport(next http.Handler) http.Handler {
 		}
 		origin := r.Header.Get("Origin")
 		// 授权页由系统浏览器打开，来源是服务自身；表单提交必须来自同一站点。
-		browserLogin := r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/authorize" || r.URL.Path == "/account" || r.URL.Path == "/api/v2/auth/browser/approve" || strings.HasPrefix(r.URL.Path, "/api/v2/web/auth/")
+		browserLogin := r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/authorize" || r.URL.Path == "/account" || r.URL.Path == "/account/password" || r.URL.Path == "/api/v2/auth/browser/approve" || strings.HasPrefix(r.URL.Path, "/api/v2/web/auth/")
 		sameOrigin := browserLogin && origin != "" && origin == "https://"+r.Host
 		if origin != "" && origin != handler.options.AdminOrigin && !sameOrigin {
 			handler.failure(w, r, 403, "ORIGIN_INVALID", "请求来源不允许")

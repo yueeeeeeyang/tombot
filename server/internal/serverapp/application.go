@@ -245,6 +245,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	router.Handle("/login", gate)
 	router.Handle("/authorize", gate)
 	router.Handle("/account", gate)
+	router.Handle("/account/password", gate)
 	router.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")

@@ -164,6 +164,7 @@ func TestIdentityIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture := identityFixture{pool: pool, service: service}
+	t.Run("用户资料与网页改密", func(t *testing.T) { testUserProfile(t, fixture) })
 
 	t.Run("激活原子性与电脑就绪", func(t *testing.T) {
 		account := fixture.pending(t)

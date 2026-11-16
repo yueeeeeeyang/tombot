@@ -135,7 +135,11 @@ func (handler *Handler) loginPage(w http.ResponseWriter, r *http.Request) {
 	if _, _, err := handler.webPrincipal(r); err == nil {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	} else if errors.Is(err, identity.ErrInvalidSession) {
-		handler.writePasswordPage(w, r, http.StatusOK, "TomBot 用户平台", "登录你的账号，查看个人信息与用量管理。", loginTarget{})
+		message := "登录你的账号，查看个人信息与用量管理。"
+		if r.URL.Query().Get("password") == "changed" {
+			message = "密码修改成功，所有设备已退出登录。请使用新密码重新登录。"
+		}
+		handler.writePasswordPage(w, r, http.StatusOK, "TomBot 用户平台", message, loginTarget{})
 	} else {
 		handler.serviceError(w, r, err)
 	}

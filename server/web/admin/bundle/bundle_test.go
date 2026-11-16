@@ -74,6 +74,10 @@ func TestEmbeddedLoginAssets(t *testing.T) {
 	for _, test := range []struct{ path, contentType, marker string }{
 		{"/admin/assets/login.css", "text/css", "prefers-color-scheme: dark"},
 		{"/admin/assets/user-platform.css", "text/css", ".user-shell"},
+		{"/admin/assets/user-platform.js", "text/javascript", "tombot-user-theme"},
+		{"/admin/assets/user-profile.js", "text/javascript", "cropRectangle"},
+		{"/admin/assets/avatar-crop.js", "text/javascript", "readAvatarDimensions"},
+		{"/admin/assets/profile-save.js", "text/javascript", "saveProfile"},
 		{"/admin/assets/login-logo.png", "image/png", "PNG"},
 	} {
 		response := httptest.NewRecorder()

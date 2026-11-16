@@ -23,6 +23,10 @@ import (
 
 // identityStub 只替换传输边界；身份语义另由真实 PostgreSQL 集成测试覆盖。
 type identityStub struct {
+	displayName        string
+	avatar             []byte
+	profileErr         error
+	passwordErr        error
 	session            identity.Session
 	err                error
 	calls              []string
@@ -95,6 +99,9 @@ func (stub *identityStub) Logout(ctx context.Context, principal identity.Princip
 func (stub *identityStub) ChangePassword(ctx context.Context, principal identity.Principal, _, _, _ string, attempt identity.Attempt) error {
 	stub.record("password", ctx, attempt)
 	stub.principal = principal
+	if stub.passwordErr != nil {
+		return stub.passwordErr
+	}
 	return stub.err
 }
 func (stub *identityStub) Reauthenticate(ctx context.Context, principal identity.Principal, _, _ string, attempt identity.Attempt) error {
@@ -134,6 +141,19 @@ func (stub *identityStub) ExchangeBrowserAuthorization(ctx context.Context, code
 	return stub.session, stub.err
 }
 
+func (stub *identityStub) UpdateProfile(ctx context.Context, principal identity.Principal, update identity.ProfileUpdate, requestID string) (identity.UserProfile, error) {
+	stub.record("profile", ctx, identity.Attempt{RequestID: requestID})
+	stub.principal, stub.avatar = principal, update.Avatar
+	if update.DisplayName != nil {
+		stub.displayName = *update.DisplayName
+	}
+	return identity.UserProfile{DisplayName: stub.displayName}, stub.profileErr
+}
+func (stub *identityStub) UserAvatar(ctx context.Context, principal identity.Principal) ([]byte, error) {
+	stub.record("avatar", ctx, identity.Attempt{})
+	stub.principal = principal
+	return stub.avatar, stub.profileErr
+}
 func randomValue(t *testing.T) string {
 	t.Helper()
 	value, err := secure.Token()
