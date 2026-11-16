@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import { getBackend, type SessionPhase, type SessionSnapshot } from '../desktop/backend'
 
@@ -12,6 +12,7 @@ export function useSession() {
   const [errorCode, setErrorCode] = useState(syncSession?.errorCode ?? '')
   const [certificateNotice, setCertificateNotice] = useState('')
   const [pending, setPending] = useState(false)
+  const signingOut = useRef(false)
   const apply = useCallback((result: SessionSnapshot) => {
     setPhase(result.phase)
     setMessage(result.message ?? '')
@@ -112,16 +113,26 @@ export function useSession() {
     }
   }
 
-  /** 本地退出：服务端会撤销会话，本地凭据随即清除。 */
+  /** 撤销会话后重新确认登录状态；撤销失败也可能已清除本地凭据，不能继续展示工作空间。 */
   async function signOut(): Promise<void> {
-    if (!backend.logout) return
+    if (signingOut.current) return
+    signingOut.current = true
     setPending(true)
+    setMessage('')
+    let failure = ''
     try {
       await backend.logout()
-      apply(await backend.session())
     } catch (error) {
-      setMessage((error as Error).message)
+      failure = error instanceof Error ? error.message : '退出登录失败，请重试。'
+    }
+    try {
+      apply(await backend.session())
+      if (failure) setMessage(failure)
+    } catch (error) {
+      setPhase('offline')
+      setMessage(error instanceof Error ? error.message : '无法确认登录状态，请重新连接。')
     } finally {
+      signingOut.current = false
       setPending(false)
     }
   }

@@ -7,7 +7,7 @@ import { CatSidePanel } from './CatSidePanel'
 const agent = createWorkspace().agents[0]!
 
 describe('猫咪侧栏面板', () => {
-  it('详情展示名称、介绍、分组和模型，另外两个栏目是空状态', async () => {
+  it('详情展示名称、介绍和分组，不再显示模型策略，其他栏目保持可用', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
     render(<CatSidePanel agent={agent} onClose={onClose} onComputerUrl={vi.fn()} />)
@@ -17,7 +17,8 @@ describe('猫咪侧栏面板', () => {
     expect(screen.queryByRole('tab', { name: '记忆' })).toBeNull()
     expect(screen.getAllByRole('tab')).toHaveLength(4)
     expect(screen.getByText('我的助手')).toBeInTheDocument()
-    expect(screen.getByText('由服务端管理')).toBeInTheDocument()
+    expect(screen.queryByText('模型策略')).not.toBeInTheDocument()
+    expect(screen.queryByText('由服务端管理')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '资料库' }))
     expect(screen.getByRole('status')).toHaveTextContent('资料库还是空的')
@@ -26,7 +27,7 @@ describe('猫咪侧栏面板', () => {
     expect(screen.getByRole('status')).toHaveTextContent('未连接')
     expect(screen.getByLabelText('远端电脑地址')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '详情' }))
-    expect(screen.getByText('自动使用管理员分配的模型策略，无需在客户端配置。')).toBeInTheDocument()
+    expect(screen.queryByText(/自动使用管理员分配的模型策略/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '导出草稿' })).not.toBeInTheDocument()
     const close = screen.getByRole('button', { name: '关闭猫咪面板' })
     expect(close).toHaveClass('round-button')

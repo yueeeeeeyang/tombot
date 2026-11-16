@@ -14,6 +14,7 @@ import { Avatar } from '../../components/Avatar'
 import { InlineNameInput } from '../../components/InlineNameInput'
 import type { CatMenuAnchor } from './CatContextMenu'
 import type { Agent, AppWorkspace as Workspace } from './model'
+import { messagePreview } from './messagePreview'
 import { useCollapsedGroups } from './useCollapsedGroups'
 import type { SidebarPreferences } from './sidebarPreferences'
 
@@ -150,38 +151,41 @@ export function Sidebar({
       </div>
       <nav className="agent-groups" aria-label="助手列表">
         {collapseError && <p role="alert">{collapseError}</p>}
-        {groups.map((group) => (
-          <section className="agent-group" key={group}>
-            {editingGroupName === group ? (
-              <InlineNameInput
-                initialName={group}
-                label="分组名称"
-                className="agent-group-name-input"
-                onCommit={(name) => onRenameGroup(group, name)}
-                onCancel={onCancelRenameGroup}
-              />
-            ) : (
-              <h2 aria-label={group}>
-                <button
-                  className="group-toggle"
-                  type="button"
-                  aria-label={`${collapsed.includes(`cats:${group}`) ? '展开' : '收起'}${group}分组`}
-                  aria-expanded={!collapsed.includes(`cats:${group}`)}
-                  onClick={() => toggle(`cats:${group}`)}
-                >
-                  <ChevronRight size={13} />
-                  <span>{group}</span>
-                </button>
-              </h2>
-            )}
-            <div
-              hidden={
-                !isCollapsed && collapsed.includes(`cats:${group}`) && editingGroupName !== group
-              }
-            >
-              {unpinnedAgents
-                .filter((agent) => agent.group === group)
-                .map((agent) => (
+        {groups.map((group) => {
+          const groupAgents = unpinnedAgents.filter((agent) => agent.group === group)
+          const isGroupCollapsed = collapsed.includes(`cats:${group}`)
+          return (
+            <section className="agent-group" key={group}>
+              {editingGroupName === group ? (
+                <InlineNameInput
+                  initialName={group}
+                  label="分组名称"
+                  className="agent-group-name-input"
+                  onCommit={(name) => onRenameGroup(group, name)}
+                  onCancel={onCancelRenameGroup}
+                />
+              ) : (
+                <h2 aria-label={group}>
+                  <button
+                    className="group-toggle"
+                    type="button"
+                    aria-label={`${isGroupCollapsed ? '展开' : '收起'}${group}分组`}
+                    aria-description={isGroupCollapsed ? `${groupAgents.length} 只猫咪` : undefined}
+                    aria-expanded={!isGroupCollapsed}
+                    onClick={() => toggle(`cats:${group}`)}
+                  >
+                    <span className="group-name">{group}</span>
+                    {isGroupCollapsed && (
+                      <span className="group-count" aria-hidden="true">
+                        {groupAgents.length}
+                      </span>
+                    )}
+                    <ChevronRight size={13} aria-hidden="true" />
+                  </button>
+                </h2>
+              )}
+              <div hidden={!isCollapsed && isGroupCollapsed && editingGroupName !== group}>
+                {groupAgents.map((agent) => (
                   <AgentButton
                     key={agent.id}
                     agent={agent}
@@ -195,9 +199,10 @@ export function Sidebar({
                     onCancelRename={onCancelRenameAgent}
                   />
                 ))}
-            </div>
-          </section>
-        ))}
+              </div>
+            </section>
+          )
+        })}
         {chatGroups.length > 0 && (
           <section className="agent-group">
             <h2 aria-label="群聊">
@@ -206,10 +211,18 @@ export function Sidebar({
                 className="group-toggle"
                 aria-label={`${collapsed.includes('conversations') ? '展开' : '收起'}群聊分组`}
                 aria-expanded={!collapsed.includes('conversations')}
+                aria-description={
+                  collapsed.includes('conversations') ? `${chatGroups.length} 个群聊` : undefined
+                }
                 onClick={() => toggle('conversations')}
               >
-                <ChevronRight size={13} />
-                <span>群聊</span>
+                <span className="group-name">群聊</span>
+                {collapsed.includes('conversations') && (
+                  <span className="group-count" aria-hidden="true">
+                    {chatGroups.length}
+                  </span>
+                )}
+                <ChevronRight size={13} aria-hidden="true" />
               </button>
             </h2>
             <div hidden={!isCollapsed && collapsed.includes('conversations')}>
@@ -395,11 +408,9 @@ function AgentButton({
   const lastMessage = agent.messages.at(-1)
   const preview = agent.draft
     ? `草稿：${agent.draft}`
-    : lastMessage?.dmNotice
-      ? lastMessage.content
-      : lastMessage
-        ? `未发送：${lastMessage.content}`
-        : agent.description
+    : lastMessage
+      ? messagePreview(lastMessage)
+      : agent.description
   if (isRenaming) {
     return (
       <div className="agent-button is-editing">

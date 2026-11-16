@@ -49,7 +49,6 @@ import { SearchDialog } from './features/search/SearchDialog'
 import { SettingsDialog } from './features/settings/SettingsDialog'
 import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
-import { type SettingsSection } from './features/settings/settings'
 import { useLanguage } from './features/settings/useLanguage'
 import { useConnectionStatus } from './features/session/useConnectionStatus'
 import { useUserProfile } from './features/session/useUserProfile'
@@ -64,11 +63,12 @@ export default function App() {
   const session = useSession()
   useTheme()
   if (session.phase !== 'ready') return <SessionGate session={session} />
-  return <WorkspaceApp serverUrl={session.serverUrl} />
+  return <WorkspaceApp session={session} />
 }
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
-function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
+function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
+  const { serverUrl } = session
   const { workStates, receiveActivity, clearActivity } = useWorkActivity()
   const {
     workspace,
@@ -142,7 +142,6 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         clearActivity(source)
       })
   }
-  const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
   const agent = workspace.agents.find((candidate) => candidate.id === workspace.activeAgentId)
   const agentIds = workspace.agents.map((item) => item.id)
   const menuAgent = menuAnchor
@@ -217,8 +216,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       }
     })
   }
-  function openSettings(section: SettingsSection = 'general'): void {
-    setSettingsSection(section)
+  function openSettings(): void {
     setOpenDialog('settings')
   }
   async function createAgent(profile: NewAgent, requestId: string): Promise<void> {
@@ -369,8 +367,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       theme={theme}
       onThemeChange={setTheme}
       themeError={themeError}
-      section={settingsSection}
-      onSectionChange={setSettingsSection}
+      userProfile={userProfile}
+      profileError={profileError}
+      isSigningOut={session.pending}
+      signOutError={session.message}
+      onSignOut={session.signOut}
       language={language}
       onLanguageChange={setLanguage}
       languageError={languageError}

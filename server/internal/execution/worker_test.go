@@ -76,7 +76,7 @@ func (fixture fixture) toolsModel(t *testing.T) {
 	if err := fixture.pool.QueryRow(`SELECT provider_id FROM tombot.models WHERE id=$1`, fixture.modelID).Scan(&providerID); err != nil {
 		t.Fatal(err)
 	}
-	model, err := fixture.registry.CreateModel(ctx, fixture.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "execution-tools", DisplayName: "工具模型", ContextLimit: 4096, OutputLimit: 1024, SupportsTools: true})
+	model, err := fixture.registry.CreateModel(ctx, fixture.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "execution-tools", DisplayName: "工具模型", ContextLimit: 16384, OutputLimit: 1024, SupportsTools: true})
 	if err != nil {
 		t.Fatal(err)
 	}

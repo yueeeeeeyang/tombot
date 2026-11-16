@@ -115,16 +115,22 @@
   min-width: 0;
   height: 24px;
   padding: 1px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
   color: var(--text);
   font: inherit;
   font-weight: 600;
   outline: none;
+  transition:
+    border-color 150ms,
+    background 150ms,
+    box-shadow 150ms;
 }
 .inline-name-input:focus {
-  border-color: var(--text-secondary);
+  border-color: var(--border-strong);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--border);
 }
 .agent-button.is-editing,
 .pinned-agent.is-editing {

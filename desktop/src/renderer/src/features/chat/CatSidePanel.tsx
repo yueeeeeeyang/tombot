@@ -115,11 +115,6 @@ export function CatSidePanel({
             <span>分组</span>
             <strong>{agent.group}</strong>
           </section>
-          <section className="cat-panel-card">
-            <span>模型策略</span>
-            <strong>由服务端管理</strong>
-            <small>自动使用管理员分配的模型策略，无需在客户端配置。</small>
-          </section>
         </div>
       )}
       {tab === 'library' && (

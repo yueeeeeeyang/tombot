@@ -217,25 +217,27 @@ button:disabled {
   justify-content: center;
 }
 .agent-groups {
+  --agent-row-gap: 5px;
+  --agent-row-inset: 12px;
   overflow-y: auto;
   min-height: 0;
   flex: 1;
   padding: 0 8px 8px;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: stable both-edges;
 }
 .agent-group + .agent-group {
-  margin-top: 16px;
+  margin-top: var(--agent-row-gap);
 }
 .agent-group h2 {
   font-size: 13px;
   font-weight: 550;
   color: var(--muted);
-  margin: 4px 12px 8px;
+  margin: 0 0 var(--agent-row-gap);
   letter-spacing: 0.3px;
 }
 .agent-button {
   width: 100%;
-  padding: 8px 12px;
+  padding: 8px var(--agent-row-inset);
   display: flex;
   gap: 12px;
   align-items: center;
@@ -246,7 +248,7 @@ button:disabled {
   min-width: 0;
 }
 .agent-button + .agent-button {
-  margin-top: 5px;
+  margin-top: var(--agent-row-gap);
 }
 .agent-button:hover {
   background: var(--border);
@@ -701,9 +703,6 @@ button:disabled {
   .pinned-area {
     padding: 4px 0 14px;
   }
-  .agent-group + .agent-group {
-    margin-top: 12px;
-  }
   .sidebar-footer {
     padding-top: 12px;
     padding-bottom: 12px;
@@ -714,10 +713,11 @@ button:disabled {
     padding-right: 16px;
     gap: 8px;
   }
+  .agent-groups {
+    --agent-row-inset: 8px;
+  }
   .agent-button {
     gap: 10px;
-    padding-left: 8px;
-    padding-right: 8px;
   }
   .conversation {
     padding-left: 14px;

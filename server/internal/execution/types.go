@@ -106,6 +106,8 @@ type Work struct {
 	Operations        []Operation
 	HistoryTruncated  bool
 	ContinuationAfter int64
+	MemoryContext     string
+	HasMemory         bool
 }
 type Operation struct {
 	ID            string          `json:"id"`

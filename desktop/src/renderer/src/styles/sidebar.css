@@ -109,23 +109,46 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 0;
+  padding: 3px var(--agent-row-inset);
   width: 100%;
   border: 0;
+  border-radius: 8px;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
 }
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.group-count {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
 .group-toggle > svg {
   flex-shrink: 0;
-  transition: transform 160ms ease;
+  opacity: 0;
+  transition:
+    transform 160ms ease,
+    opacity 160ms ease;
 }
 .group-toggle[aria-expanded='true'] > svg {
   transform: rotate(90deg);
 }
-.group-toggle:hover {
+.group-toggle:hover,
+.group-toggle:focus-visible {
+  background: var(--hover);
   color: var(--text);
+}
+.group-toggle:hover > svg,
+.group-toggle:focus-visible > svg {
+  opacity: 1;
 }
 .group-list-icon {
   display: grid;

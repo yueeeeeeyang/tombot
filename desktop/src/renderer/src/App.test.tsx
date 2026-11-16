@@ -29,6 +29,53 @@ function openAgentMenu(name: string | RegExp): HTMLElement {
 }
 
 describe('客户端交互', () => {
+  it('分组标题支持键盘折叠与展开，重新打开仍保留状态且不改变当前会话', async () => {
+    const user = userEvent.setup()
+    const view = render(<App />)
+    const heading = screen.getByRole('button', { name: '收起游戏开发分组' })
+    expect(within(heading).queryByText('4')).toBeNull()
+    heading.focus()
+    await user.keyboard('{Enter}')
+    expect(heading).toHaveAttribute('aria-expanded', 'false')
+    expect(within(heading).getByText('4')).toBeInTheDocument()
+    expect(heading).toHaveAccessibleDescription('4 只猫咪')
+    expect(screen.queryByRole('button', { name: /^游戏程序/ })).toBeNull()
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+    view.unmount()
+    render(<App />)
+    const collapsed = screen.getByRole('button', { name: '展开游戏开发分组' })
+    expect(within(collapsed).getByText('4')).toBeInTheDocument()
+    collapsed.focus()
+    await user.keyboard(' ')
+    expect(collapsed).toHaveAttribute('aria-expanded', 'true')
+    expect(within(collapsed).queryByText('4')).toBeNull()
+    expect(screen.getByRole('button', { name: /^游戏程序/ })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+  })
+
+  it('收起分组的数量只统计组内显示的猫咪，取消置顶后即时更新', async () => {
+    localStorage.setItem(
+      SIDEBAR_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        pinnedIds: ['developer'],
+        hiddenIds: ['audio'],
+        unreadIds: [],
+      }),
+    )
+    const user = userEvent.setup()
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '收起游戏开发分组' }))
+    const heading = screen.getByRole('button', { name: '展开游戏开发分组' })
+    expect(within(heading).getByText('2')).toBeInTheDocument()
+    expect(heading).toHaveAccessibleDescription('2 只猫咪')
+    openAgentMenu('游戏程序')
+    await user.click(screen.getByRole('menuitem', { name: '取消置顶' }))
+    expect(within(heading).getByText('3')).toBeInTheDocument()
+    expect(heading).toHaveAccessibleDescription('3 只猫咪')
+    expect(heading).toHaveAttribute('aria-expanded', 'false')
+  })
+
   it('保存未发送草稿不会让猫咪进入工作中', async () => {
     const user = userEvent.setup()
     render(<App />)
@@ -163,7 +210,7 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '查看创作搭档资料' }))
     const catPanel = screen.getByRole('complementary', { name: '创作搭档' })
     expect(catPanel).toHaveTextContent('创作搭档')
-    expect(catPanel).toHaveTextContent('自动使用管理员分配的模型策略')
+    expect(catPanel).not.toHaveTextContent('模型策略')
     expect(within(catPanel).queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     await user.click(within(catPanel).getByRole('button', { name: '关闭猫咪面板' }))
     expect(screen.queryByRole('complementary', { name: '创作搭档' })).not.toBeInTheDocument()
@@ -281,16 +328,16 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '搜索助手和消息' }))
     await user.click(screen.getByRole('combobox', { name: '搜索内容' }))
     await user.keyboard('{ArrowUp}')
-    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('模型策略')
+    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('通用')
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('option', { selected: true })).toHaveTextContent('小黑')
     await user.keyboard('{Control>}2{/Control}')
     expect(screen.getByRole('textbox', { name: '给游戏程序发消息' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '搜索助手和消息' }))
-    await user.type(screen.getByRole('combobox', { name: '搜索内容' }), '模型')
+    await user.type(screen.getByRole('combobox', { name: '搜索内容' }), '账号')
     await user.keyboard('{Enter}')
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
-    expect(screen.getByText('由服务端管理')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '账号' })).toBeInTheDocument()
   })
 
   it('搜索空结果及中文输入法确认不误触发导航', () => {
@@ -308,14 +355,14 @@ describe('客户端交互', () => {
     expect(screen.getByRole('textbox', { name: '给游戏程序发消息' })).toBeInTheDocument()
   })
 
-  it('设置入口显示两项分类，主题即时应用并独立保存，语言预览在关闭重开后保留', async () => {
+  it('设置只保留通用分类，主题即时应用并独立保存，语言预览在关闭重开后保留', async () => {
     const user = userEvent.setup()
     render(<App />)
     expect(screen.queryByText(/草稿仅保存在这台设备/)).not.toBeInTheDocument()
     expect(screen.queryByText('Enter 保存 · Shift + Enter 换行')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     const navigation = screen.getByRole('navigation', { name: '设置分类' })
-    expect(within(navigation).getAllByRole('button')).toHaveLength(2)
+    expect(within(navigation).getAllByRole('button')).toHaveLength(1)
     expect(screen.getByRole('combobox', { name: '主题' })).toHaveTextContent('跟随系统')
     await chooseOption(user, '主题', '深色')
     await chooseOption(user, '语言', '英语')
@@ -341,20 +388,20 @@ describe('客户端交互', () => {
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
   })
 
-  it('模型策略仅展示管理说明，切换设置后也不会出现供应商或密钥编辑入口', async () => {
+  it('设置和搜索均移除模型策略入口，也不提供供应商或密钥编辑', async () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开设置' }))
-    await user.click(screen.getByRole('button', { name: '模型策略' }))
     const dialog = screen.getByRole('dialog', { name: '设置' })
-    expect(dialog).toHaveTextContent('自动使用管理员分配的模型策略，无需在客户端配置。')
+    expect(dialog).not.toHaveTextContent('模型策略')
     expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('API 密钥')).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '通用' }))
-    await user.click(screen.getByRole('button', { name: '模型策略' }))
-    expect(dialog).toHaveTextContent('如需更换模型或策略，请联系管理员。')
     expect(screen.queryByRole('button', { name: '拉取模型' })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '关闭设置' }))
+    await user.click(screen.getByRole('button', { name: '搜索助手和消息' }))
+    await user.type(screen.getByRole('combobox', { name: '搜索内容' }), '模型策略')
+    expect(screen.queryByRole('option')).not.toBeInTheDocument()
+    expect(screen.getByText('还没有找到相关内容')).toBeInTheDocument()
   })
 
   it('存储写入失败保留内存草稿并允许重试', () => {

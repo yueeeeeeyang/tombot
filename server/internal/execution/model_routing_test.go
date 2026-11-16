@@ -259,7 +259,7 @@ func TestFailoverRecoveryDoesNotReplayTools(t *testing.T) {
 	if err := f.registry.SetEnabled(ctx, f.actor, ids.New(), "model", f.modelID, 1, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.registry.UpdateModel(ctx, f.actor, ids.New(), f.modelID, 2, modelregistry.ModelRequest{ModelKey: "execution-fixture", DisplayName: "工具主模型", ContextLimit: 4096, OutputLimit: 1024, SupportsTools: true}); err != nil {
+	if _, err := f.registry.UpdateModel(ctx, f.actor, ids.New(), f.modelID, 2, modelregistry.ModelRequest{ModelKey: "execution-fixture", DisplayName: "工具主模型", ContextLimit: 8192, OutputLimit: 1024, SupportsTools: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.registry.SetEnabled(ctx, f.actor, ids.New(), "model", f.modelID, 3, true); err != nil {

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
+	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/modelusage"
@@ -98,7 +99,7 @@ func translate(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/bots"
 
 	"io.yueyang/tom/internal/infra/ids"
@@ -69,8 +70,16 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 		if err := available(ctx, transaction, lease); err != nil {
 			return err
 		}
-		// 工作摘要是运行时内建的只写状态工具，业务工具仍逐次检查权限。
-		if request.Kind == "computer" || request.Kind == "tool" && request.ToolName != "report_progress" {
+		// 内建记忆逐次核验私人单聊范围，业务工具仍逐次检查权限。
+		if request.Kind == "tool" && botmemory.IsTool(request.ToolName) {
+			allowed, err := memoryPermitted(ctx, transaction, lease)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return ErrUnavailable
+			}
+		} else if request.Kind == "computer" || request.Kind == "tool" && request.ToolName != "report_progress" {
 			var permitted bool
 			if err := transaction.QueryRowContext(ctx, `SELECT tool_permissions ? $3 FROM tombot.bots WHERE user_id=$1 AND id=$2`, lease.UserID, lease.BotID, request.ToolName).Scan(&permitted); err != nil {
 				return err

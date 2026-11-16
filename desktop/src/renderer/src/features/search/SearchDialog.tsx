@@ -1,33 +1,25 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
-import { Search, Settings, SlidersHorizontal, Plus, Users } from 'lucide-react'
+import { Search, Settings, Plus, Users } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { searchAgents, type Agent } from '../workspace/model'
-import type { SettingsSection } from '../settings/settings'
+import { messagePreview } from '../workspace/messagePreview'
 
 interface SearchResult {
   id: string
   name: string
   preview: string
   agent?: Agent
-  action?: 'create' | 'group'
-  section?: SettingsSection
+  action?: 'create' | 'group' | 'settings'
 }
 
 const SETTINGS_RESULTS = [
   {
     id: 'settings-general',
     name: '通用',
-    preview: '外观、主题与语言',
-    section: 'general' as const,
-    keywords: '设置 通用 外观 主题 浅色 深色 语言',
-  },
-  {
-    id: 'settings-models',
-    name: '模型策略',
-    preview: '由管理员统一配置，自动使用分配的策略',
-    section: 'models' as const,
-    keywords: '设置 模型 策略 管理员 服务端',
+    preview: '账号、外观与语言',
+    action: 'settings' as const,
+    keywords: '设置 通用 账号 账户 退出 登录 外观 主题 浅色 深色 语言',
   },
 ]
 
@@ -47,7 +39,7 @@ export function SearchDialog({
   onSelect: (id: string) => void
   onCreate: () => void
   onCreateGroup: () => void
-  onSettings: (section: SettingsSection) => void
+  onSettings: () => void
 }) {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(
@@ -71,11 +63,11 @@ export function SearchDialog({
       name: agent.name,
       agent,
       preview: matchedMessage
-        ? `${matchedMessage.status === 'unsent' ? '未发送：' : ''}${matchedMessage.content}`
+        ? messagePreview(matchedMessage)
         : agent.draft
           ? `草稿：${agent.draft}`
           : agent.messages.length
-            ? `${agent.messages.at(-1)!.status === 'unsent' ? '未发送：' : ''}${agent.messages.at(-1)!.content}`
+            ? messagePreview(agent.messages.at(-1)!)
             : agent.description || agent.group,
     }
   })
@@ -101,7 +93,7 @@ export function SearchDialog({
     if (result.agent) onSelect(result.agent.id)
     else if (result.action === 'create') onCreate()
     else if (result.action === 'group') onCreateGroup()
-    else if (result.section) onSettings(result.section)
+    else if (result.action === 'settings') onSettings()
   }
 
   function handleKeyDown(event: KeyboardEvent): void {
@@ -181,10 +173,8 @@ export function SearchDialog({
                               <Plus size={18} />
                             ) : result.action === 'group' ? (
                               <Users size={18} />
-                            ) : result.section === 'general' ? (
-                              <Settings size={18} />
                             ) : (
-                              <SlidersHorizontal size={18} />
+                              <Settings size={18} />
                             )}
                           </span>
                         )}

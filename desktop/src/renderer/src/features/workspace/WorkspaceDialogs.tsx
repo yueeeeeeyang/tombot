@@ -204,7 +204,7 @@ export function FirstCatPage(props: RecruitCatFormProps) {
   )
 }
 
-/** 展示工作空间概况，和独立的外观及模型策略入口分开。 */
+/** 展示工作空间概况，与通用设置入口分开。 */
 export function WorkspaceDialog({
   workspace,
   hiddenAgents,
@@ -249,7 +249,7 @@ export function WorkspaceDialog({
         <span className={`connection-dot connection-dot--${connectionStatus}`} />
         <div>
           <strong>服务端连接</strong>
-          <p>助手、消息和模型策略由服务管理。</p>
+          <p>助手和消息由服务管理。</p>
         </div>
         <span>{connectionStatus === 'connected' ? '已连接' : '连接异常'}</span>
       </div>

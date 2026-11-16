@@ -1,74 +1,87 @@
-import { Settings, SlidersHorizontal, X } from 'lucide-react'
+import { Settings, X } from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../../../../../ui/Select'
-import { type LanguagePreference, type SettingsSection, type ThemePreference } from './settings'
+import workspaceCat from '../../assets/cats/workspace-cat.png'
+import type { UserProfile } from '../desktop/backend'
+import { type LanguagePreference, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {
   theme: ThemePreference
   themeError: string
   onThemeChange: (theme: ThemePreference) => void
-  section: SettingsSection
   language: LanguagePreference
   languageError: string
-  onSectionChange: (section: SettingsSection) => void
   onLanguageChange: (language: LanguagePreference) => void
+  userProfile?: UserProfile
+  profileError: string
+  isSigningOut: boolean
+  signOutError: string
+  onSignOut: () => Promise<void>
   onClose: () => void
 }
 
-/** 主题即时生效并留在本机。语言保存在本机，模型由管理员统一配置。 */
+/** 账号资料来自当前会话；主题即时生效，外观偏好保存在本机。 */
 export function SettingsDialog({
   theme,
   themeError,
   languageError,
   onThemeChange,
-  section,
   language,
-  onSectionChange,
   onLanguageChange,
+  userProfile,
+  profileError,
+  isSigningOut,
+  signOutError,
+  onSignOut,
   onClose,
 }: SettingsDialogProps) {
   return (
     <Dialog title="设置" variant="settings" onClose={onClose}>
       <div className="settings-layout">
         <nav className="settings-navigation" aria-label="设置分类">
-          <button
-            className={section === 'general' ? 'is-active' : ''}
-            aria-current={section === 'general' ? 'page' : undefined}
-            onClick={() => onSectionChange('general')}
-          >
+          <button type="button" className="is-active" aria-current="page">
             <Settings size={17} strokeWidth={1.7} />
             通用
           </button>
-          <button
-            className={section === 'models' ? 'is-active' : ''}
-            aria-current={section === 'models' ? 'page' : undefined}
-            onClick={() => onSectionChange('models')}
-          >
-            <SlidersHorizontal size={17} strokeWidth={1.7} />
-            模型策略
-          </button>
         </nav>
         <section className="settings-pane" aria-labelledby="settings-section-title">
-          <h2 id="settings-section-title">{section === 'general' ? '通用' : '模型策略'}</h2>
-          {section === 'general' ? (
-            <GeneralSettings
-              language={language}
-              onLanguageChange={onLanguageChange}
-              theme={theme}
-              onThemeChange={onThemeChange}
-            />
-          ) : (
-            <div className="settings-section">
-              <h3>由服务端管理</h3>
-              <p className="settings-preview-note">
-                自动使用管理员分配的模型策略，无需在客户端配置。
-              </p>
+          <h2 id="settings-section-title">通用</h2>
+          <section className="settings-section" aria-labelledby="settings-account-title">
+            <h3 id="settings-account-title">账号</h3>
+            <div className="settings-card settings-account">
+              <div className="settings-account-identity">
+                <img src={userProfile?.avatar || workspaceCat} alt="" draggable={false} />
+                <div className="settings-account-copy">
+                  <strong>{userProfile?.displayName || userProfile?.username || '账号信息'}</strong>
+                  <span>
+                    {userProfile?.username ||
+                      (profileError ? '暂时无法读取账号信息' : '正在读取账号信息…')}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="settings-sign-out"
+                disabled={isSigningOut}
+                onClick={() => void onSignOut()}
+              >
+                {isSigningOut ? '正在退出…' : '退出登录'}
+              </button>
             </div>
-          )}
+            {(profileError || signOutError) && (
+              <p className="form-error" role="alert">
+                {signOutError || profileError}
+              </p>
+            )}
+          </section>
+          <GeneralSettings
+            language={language}
+            onLanguageChange={onLanguageChange}
+            theme={theme}
+            onThemeChange={onThemeChange}
+          />
           <p className="settings-preview-note">
-            {section === 'general'
-              ? '主题即时生效。语言选择保存在本机，界面仍使用简体中文'
-              : '如需更换模型或策略，请联系管理员。'}
+            主题即时生效。语言选择保存在本机，界面仍使用简体中文
           </p>
           {(themeError || languageError) && (
             <p className="form-error" role="alert">

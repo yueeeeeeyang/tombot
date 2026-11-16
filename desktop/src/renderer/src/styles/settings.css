@@ -85,6 +85,62 @@
   background: var(--surface);
   padding: 3px 0;
 }
+.settings-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 20px 16px;
+}
+.settings-account-identity {
+  display: flex;
+  flex: 1 1 180px;
+  min-width: 0;
+  align-items: center;
+  gap: 14px;
+}
+.settings-account-identity img {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
+  object-fit: cover;
+}
+.settings-account-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+  font-size: 14px;
+}
+.settings-account-copy strong {
+  font-weight: 550;
+}
+.settings-account-copy span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.settings-account-copy > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-sign-out {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+.settings-sign-out:hover:not(:disabled) {
+  background: var(--hover);
+}
 .setting-row {
   display: flex;
   align-items: center;

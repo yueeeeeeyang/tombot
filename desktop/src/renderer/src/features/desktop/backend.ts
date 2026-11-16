@@ -105,7 +105,7 @@ export interface DesktopBackend {
   browserLogin: () => Promise<SessionSnapshot>
   /** 核对管理员提供的公共证书指纹，只信任当前服务地址。 */
   trustServerCertificate: (address: string, fingerprint: string) => Promise<void>
-  logout?: () => Promise<void>
+  logout: () => Promise<void>
   /** 订阅当前用户事件；服务端在有界窗口后收尾，调用方负责续订。 */
   watchEvents?: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => () => void
   tryWorkspaceSync?: () => WorkspaceSnapshot

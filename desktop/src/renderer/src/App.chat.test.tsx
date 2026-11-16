@@ -262,7 +262,7 @@ describe('聊天体验', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('模型连接中断')
     expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
   })
-  it('只有一只猫咪时也显示操作和设置预设，并可直接进入模型策略', async () => {
+  it('只有一只猫咪时也显示操作和通用设置，可直接打开账号信息', async () => {
     const fixture = memoryBackend.tryWorkspaceSync().workspace
     memoryBackend.loadFixture({ workspace: { ...fixture, agents: fixture.agents.slice(0, 1) } })
     render(<App />)
@@ -271,11 +271,12 @@ describe('聊天体验', () => {
       2,
     )
     expect(within(screen.getByRole('group', { name: '设置' })).getAllByRole('option')).toHaveLength(
-      2,
+      1,
     )
-    fireEvent.click(screen.getByRole('option', { name: /模型策略/ }))
+    expect(screen.queryByRole('option', { name: /模型策略/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /通用/ }))
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
-    expect(screen.getByText('由服务端管理')).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '账号' })).toBeInTheDocument()
     expect(screen.queryByLabelText('API 密钥')).not.toBeInTheDocument()
   })
   it('招聘不依赖服务端回合：投递接口不可用时仍保留新猫咪', async () => {

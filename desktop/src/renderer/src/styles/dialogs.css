@@ -452,20 +452,26 @@
   border-color: var(--button-background);
 }
 .recruit-kind {
-  display: flex;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 12px;
+  display: inline-flex;
+  align-self: flex-start;
+  max-width: 100%;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
   background: var(--surface-muted);
 }
 .recruit-kind button {
-  flex: 1;
-  padding: 8px 12px;
+  padding: 5px 12px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+}
+.recruit-kind button:hover:not(:disabled) {
+  color: var(--text);
 }
 .recruit-kind button[aria-pressed='true'] {
   background: var(--surface);

@@ -216,6 +216,11 @@ try {
   stage = '客户端读取本人昵称并在网页修改资料后同步';
   await window.getByRole('button', { name: '用户信息', exact: true }).getByText('浏览器登录用户', { exact: true }).waitFor();
   stage = '网页修改用户昵称';
+  await application.evaluate(({ BrowserWindow }) => {
+    const main = BrowserWindow.getAllWindows()[0];
+    main.profileRefreshEvents = { focus: 0, show: 0, hide: 0 };
+    for (const name of Object.keys(main.profileRefreshEvents)) main.on(name, () => { main.profileRefreshEvents[name]++; });
+  });
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
   if (await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())) throw new Error('测试窗口没有隐藏');
   await page.bringToFront();
@@ -434,8 +439,186 @@ try {
   await window.reload();
   await window.getByRole('log').getByText('补充：请简短回答', { exact: true }).waitFor();
   if (await window.getByRole('button', { name: '👍，点击取消', exact: true }).count()) throw new Error('重载恢复了已取消的表情');
+  stage = '侧栏选中留白与分组悬停';
+  for (const name of ['侧栏猫咪', '侧栏伙伴']) {
+    await window.getByRole('button', { name: '新建', exact: true }).click();
+    await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click();
+    await window.getByRole('textbox', { name: '助手名称', exact: true }).fill(name);
+    await window.getByRole('button', { name: '招聘猫咪', exact: true }).click();
+    await window.getByRole('textbox', { name: '给' + name + '发消息', exact: true }).waitFor();
+  }
+  await window.getByRole('button', { name: '侧栏猫咪', exact: true }).click();
+  const sidebarInput = window.getByRole('textbox', { name: '给侧栏猫咪发消息', exact: true });
+  await sidebarInput.waitFor();
+  const groupToggle = window.locator('.group-toggle');
+  const selectedCat = window.locator('.agent-button.is-active');
+  await selectedCat.waitFor();
+  for (const theme of ['light', 'dark']) {
+    await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    for (const width of [300, 400]) {
+      await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width === 300 ? 1073 : 860, width === 300 ? 780 : 640), width);
+      if (width === 400) await window.getByRole('separator', { name: '调整侧栏宽度' }).press('End');
+      await sidebarInput.focus();
+      await window.mouse.move(700, 400);
+      await window.waitForFunction(() => getComputedStyle(document.querySelector('.group-toggle > svg')).opacity === '0');
+      const aligned = await selectedCat.evaluate(element => {
+        const sidebar = element.closest('.sidebar');
+        const bounds = sidebar.getBoundingClientRect();
+        const row = element.getBoundingClientRect();
+        const left = row.left - bounds.left;
+        const right = bounds.right - parseFloat(getComputedStyle(sidebar).borderRightWidth) - row.right;
+        const group = element.closest('.agent-group');
+        const header = group.querySelector('.group-toggle').getBoundingClientRect();
+        const label = group.querySelector('.group-name').getBoundingClientRect();
+        const rows = [...group.querySelectorAll('.agent-button')].map(row => row.getBoundingClientRect());
+        const avatar = group.querySelector('.agent-button .avatar').getBoundingClientRect();
+        return left > 0 && Math.abs(left - right) <= 1 && Math.abs(label.left - avatar.left) <= 1 && rows.length === 2 && Math.abs(rows[0].top - header.bottom - 5) <= 1 && Math.abs(rows[1].top - rows[0].bottom - 5) <= 1;
+      });
+      if (!aligned) throw new Error('侧栏留白、标题头像对齐或分组条目间距不一致');
+      const sidebarBounds = await window.locator('.sidebar').boundingBox();
+      const groupBounds = await window.locator('.agent-group').boundingBox();
+      const sidebarClip = { x: sidebarBounds.x, y: groupBounds.y - 4, width: sidebarBounds.width, height: groupBounds.height + 8 };
+      if (settings.screenshots) await window.screenshot({ clip: sidebarClip, path: join(settings.screenshots, 'sidebar-idle-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      const restingBackground = await groupToggle.evaluate(element => getComputedStyle(element).backgroundColor);
+      await groupToggle.hover();
+      await window.waitForFunction(() => getComputedStyle(document.querySelector('.group-toggle > svg')).opacity === '1');
+      const hovered = await groupToggle.evaluate(element => ({
+        background: getComputedStyle(element).backgroundColor,
+        arrowRight: element.querySelector('svg').getBoundingClientRect().left >= element.querySelector('span').getBoundingClientRect().right,
+        overflow: element.scrollWidth > element.clientWidth,
+      }));
+      if (hovered.background === restingBackground || !hovered.arrowRight || hovered.overflow) throw new Error('分组悬停样式或右侧箭头不正确');
+      if (settings.screenshots) await window.screenshot({ clip: sidebarClip, path: join(settings.screenshots, 'sidebar-hover-' + theme + '-' + width + '.png'), animations: 'disabled' });
+    }
+    await window.reload();
+    await sidebarInput.waitFor();
+  }
+  stage = '分组键盘操作与焦点提示';
+  await window.mouse.move(700, 400);
+  await window.keyboard.press('Tab');
+  await groupToggle.focus();
+  await window.waitForFunction(() => document.querySelector('.group-toggle').matches(':focus-visible') && getComputedStyle(document.querySelector('.group-toggle > svg')).opacity === '1');
+  await window.keyboard.press('Enter');
+  if (await groupToggle.getAttribute('aria-expanded') !== 'false' || await selectedCat.isVisible()) throw new Error('键盘无法收起分组');
+  if (await groupToggle.locator('.group-count').textContent() !== '2' || await groupToggle.getAttribute('aria-description') !== '2 只猫咪') throw new Error('收起分组的猫咪数量错误');
+  await sidebarInput.focus();
+  await window.mouse.move(700, 400);
+  await window.waitForFunction(() => getComputedStyle(document.querySelector('.group-toggle > svg')).opacity === '0');
+  for (const theme of ['light', 'dark']) {
+    await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    const sidebarBounds = await window.locator('.sidebar').boundingBox();
+    const headerBounds = await groupToggle.boundingBox();
+    if (settings.screenshots) await window.screenshot({ clip: { x: sidebarBounds.x, y: headerBounds.y - 4, width: sidebarBounds.width, height: headerBounds.height + 8 }, path: join(settings.screenshots, 'sidebar-collapsed-' + theme + '.png'), animations: 'disabled' });
+  }
+  await window.keyboard.press('Tab');
+  await groupToggle.focus();
+  await window.keyboard.press('Space');
+  await selectedCat.waitFor();
+  if (await groupToggle.getAttribute('aria-expanded') !== 'true' || await groupToggle.locator('.group-count').count()) throw new Error('展开后分组状态或数量显示错误');
+  stage = '侧栏消息预览根据真实受理状态显示';
+  await sidebarInput.fill('侧栏预览已发送');
+  await window.getByRole('button', { name: '发送', exact: true }).click();
+  await window.getByRole('log').getByText('侧栏预览已发送', { exact: true }).waitFor();
+  await window.getByLabel('发送中', { exact: true }).waitFor({ state: 'hidden' });
+  const catPreview = window.getByRole('button', { name: '侧栏猫咪', exact: true }).locator('.agent-preview');
+  if (await catPreview.textContent() !== '侧栏预览已发送') throw new Error('受理成功的消息被侧栏误标未发送');
+  await window.reload();
+  await window.getByRole('log').getByText('侧栏预览已发送', { exact: true }).waitFor();
+  if (await catPreview.textContent() !== '侧栏预览已发送') throw new Error('重开后已发送消息预览状态错误');
+  await window.getByRole('button', { name: '搜索助手和消息', exact: true }).click();
+  await window.getByRole('combobox', { name: '搜索内容', exact: true }).fill('侧栏预览已发送');
+  if (await window.getByRole('option', { name: /侧栏猫咪/ }).locator('small').textContent() !== '侧栏预览已发送') throw new Error('搜索与侧栏的发送状态不一致');
+  await window.keyboard.press('Escape');
+  stage = '重命名输入框浅边框与聚焦提示';
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await window.getByRole('button', { name: '侧栏猫咪', exact: true }).click({ button: 'right' });
+      await window.getByRole('menuitem', { name: '重命名猫咪', exact: true }).click();
+      const nameInput = window.getByRole('textbox', { name: '猫咪名称', exact: true });
+      await nameInput.waitFor();
+      const softFocus = await nameInput.evaluate((element, theme) => {
+        const style = getComputedStyle(element);
+        const border = style.borderColor.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const row = element.closest('.agent-button').getBoundingClientRect();
+        const bounds = element.getBoundingClientRect();
+        return document.activeElement === element && style.borderTopWidth === '1px' && style.boxShadow !== 'none' && (theme === 'light' ? Math.min(...border) >= 180 : Math.max(...border) <= 100) && bounds.left >= row.left && bounds.right <= row.right;
+      }, theme);
+      if (!softFocus) throw new Error('重命名输入框边框过重、缺少聚焦提示或超出条目');
+      if (settings.screenshots) await window.locator('.agent-groups').screenshot({ path: join(settings.screenshots, 'sidebar-rename-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      await nameInput.fill('取消的名称');
+      await nameInput.press('Escape');
+      await window.getByRole('button', { name: '侧栏猫咪', exact: true }).waitFor();
+      if (await catPreview.textContent() !== '侧栏预览已发送') throw new Error('取消重命名改变了消息摘要');
+    }
+  }
+  stage = '猫咪详情移除模型策略';
+  await window.getByRole('button', { name: '查看侧栏猫咪资料', exact: true }).click();
+  const catPanel = window.getByRole('complementary', { name: '侧栏猫咪', exact: true });
+  if (await catPanel.getByText('模型策略', { exact: true }).count() || await catPanel.getByText('由服务端管理', { exact: true }).count()) throw new Error('猫咪详情仍显示模型策略');
+  await window.getByRole('button', { name: '关闭猫咪面板', exact: true }).click();
+  stage = '通用设置账号与招聘页签布局';
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await window.getByRole('button', { name: '打开设置', exact: true }).click();
+      const dialog = window.getByRole('dialog', { name: '设置', exact: true });
+      const account = dialog.getByRole('region', { name: '账号', exact: true });
+      await account.getByText('桌面资料联调用户', { exact: true }).waitFor();
+      if (await dialog.getByRole('button', { name: '模型策略', exact: true }).count() || await account.getByRole('button').count() !== 1) throw new Error('设置分类或账号操作不正确');
+      const validAccount = await account.evaluate(async element => {
+        const profile = await window.desktop.backend.loadUserProfile();
+        const card = element.querySelector('.settings-account');
+        const name = element.querySelector('.settings-account-copy strong');
+        const username = element.querySelector('.settings-account-copy span');
+        const avatar = element.querySelector('img');
+        return name.textContent === profile.displayName && username.textContent === profile.username && avatar.getAttribute('src') === profile.avatar && card.scrollWidth <= card.clientWidth && card.getBoundingClientRect().width > 0;
+      });
+      if (!validAccount) throw new Error('账号资料或卡片布局不正确');
+      if (settings.screenshots) await dialog.screenshot({ path: join(settings.screenshots, 'settings-account-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      await window.getByRole('button', { name: '关闭设置', exact: true }).click();
+      await window.getByRole('button', { name: '新建', exact: true }).click();
+      await window.getByRole('menuitem', { name: '招聘猫咪', exact: true }).click();
+      const recruit = window.getByRole('dialog', { name: '招聘猫咪', exact: true });
+      const kinds = recruit.getByRole('group', { name: '猫咪类型', exact: true });
+      const compact = await kinds.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.height <= 36 && bounds.height >= 32 && bounds.width <= 240 && bounds.width < element.closest('fieldset').getBoundingClientRect().width && element.scrollWidth <= element.clientWidth;
+      });
+      if (!compact) throw new Error('招聘页签尺寸过大或溢出');
+      if (settings.screenshots) await recruit.screenshot({ path: join(settings.screenshots, 'recruit-tabs-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      await kinds.getByRole('button', { name: '自定义猫咪', exact: true }).click();
+      if (await kinds.getByRole('button', { name: '自定义猫咪', exact: true }).getAttribute('aria-pressed') !== 'true') throw new Error('自定义猫咪页签无法选中');
+      await recruit.getByRole('textbox', { name: '猫咪介绍', exact: true }).waitFor();
+      await kinds.getByRole('button', { name: '预设猫咪', exact: true }).focus();
+      await window.keyboard.press('Space');
+      await recruit.getByRole('group', { name: '预设猫咪头像', exact: true }).waitFor();
+      await window.getByRole('button', { name: '关闭弹窗', exact: true }).click();
+    }
+  }
+  stage = '设置退出登录撤销真实会话';
+  await window.getByRole('button', { name: '打开设置', exact: true }).click();
+  await window.getByRole('button', { name: '退出登录', exact: true }).click();
+  // 未登录启动按既有流程先确认已保存地址，不能因地址仍在而恢复已注销的会话。
+  await window.getByRole('heading', { name: '连接服务', exact: true }).waitFor();
+  if ((await window.evaluate(() => window.desktop.backend.session())).phase !== 'address') throw new Error('退出后仍保留可用会话');
+  if (await window.getByRole('textbox', { name: '服务地址', exact: true }).inputValue() !== settings.url) throw new Error('退出丢失了服务地址');
+  await window.reload();
+  await window.getByRole('heading', { name: '连接服务', exact: true }).waitFor();
+  await window.getByRole('button', { name: '连接', exact: true }).click();
+  await window.getByRole('heading', { name: '登录 TomBot', exact: true }).waitFor();
+  if (await window.getByRole('textbox', { name: '给侧栏猫咪发消息', exact: true }).count()) throw new Error('重新连接错误恢复了已退出的工作空间');
   process.stdout.write('真实登录、招聘和发送操作已完成，继续核对数据库记录\n');
 } catch {
+  if (application && stage === '切回客户端同步用户资料') {
+    const visibility = await application.evaluate(({ BrowserWindow }) => {
+      const main = BrowserWindow.getAllWindows()[0];
+      return { visible: main.isVisible(), focused: main.isFocused(), events: main.profileRefreshEvents };
+    });
+    process.stderr.write('账号同步窗口状态：' + JSON.stringify(visibility) + '\n');
+  }
   if (application && settings.screenshots) await application.firstWindow().then(window => window.screenshot({ path: join(settings.screenshots, 'chat-failure.png') }));
   process.stderr.write('浏览器联合验证失败：' + stage + '，授权响应=' + approvalStatus + '，CSP 拒绝数=' + violations.length + '\n');
   process.exitCode = 1;
@@ -458,7 +641,7 @@ try {
         (SELECT count(*) FROM tombot.message_reactions WHERE user_id=u.id),
         (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]')
         FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions)
-	if err != nil || bots != 1 || messages != 1 || runs != 5 || reactions != 0 || interactions != 2 {
+	if err != nil || bots != 1 || messages != 1 || runs != 6 || reactions != 0 || interactions != 2 {
 		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 错误=%v", bots, messages, runs, reactions, interactions, err)
 	}
 	t.Log(string(output))

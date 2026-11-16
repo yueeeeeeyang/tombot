@@ -7,6 +7,7 @@ import (
 	"errors"
 	"slices"
 
+	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/modelregistry"
 )
 
@@ -71,6 +72,28 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		}
 		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
 			return err
+		}
+		// 能力沿用运行快照，执行工具时再检查最新授权，避免恢复时悄悄改写模型输入。
+		if err = transaction.QueryRowContext(ctx, `SELECT kind='direct' FROM tombot.conversations WHERE user_id=$1 AND id=$2`, lease.UserID, lease.ConversationID).Scan(&work.HasMemory); err != nil {
+			return err
+		}
+		work.HasMemory = work.HasMemory && len(work.Bot.ToolPermissions) > 0
+		if work.HasMemory {
+			var saved *string
+			if err = transaction.QueryRowContext(ctx, `SELECT memory_context FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&saved); err != nil {
+				return err
+			}
+			if saved == nil {
+				work.MemoryContext, err = botmemory.Snapshot(ctx, transaction, lease.UserID, lease.BotID, min(botmemory.ContextBytes, service.options.ContextBytes/4))
+				if err != nil {
+					return err
+				}
+				if _, err = transaction.ExecContext(ctx, `UPDATE tombot.runs SET memory_context=$3 WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID, work.MemoryContext); err != nil {
+					return err
+				}
+			} else {
+				work.MemoryContext = *saved
+			}
 		}
 		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1, true)
 		if err != nil {

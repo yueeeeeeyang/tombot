@@ -95,5 +95,8 @@ func messageForModel(message Message) provider.Message {
 		}
 		blocks = append(blocks, domain.MessageBlock{Kind: block.Kind, Text: block.Text})
 	}
+	if message.SenderKind == "user" && validID(message.ID) && !(len(message.Blocks) == 1 && message.Blocks[0].Reaction != nil) {
+		blocks = append(blocks, domain.MessageBlock{Kind: "text", Text: "Source message ID (server metadata): " + message.ID})
+	}
 	return provider.Message{Role: role, Blocks: blocks}
 }

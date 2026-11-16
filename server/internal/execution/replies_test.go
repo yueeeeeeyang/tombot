@@ -51,7 +51,7 @@ func TestMessageReplies(t *testing.T) {
 			if calls == 1 {
 				return emitText(emit, originalText)
 			}
-			if len(input.Messages) != 1 || input.Messages[0].Role != "user" || len(input.Messages[0].Blocks) != 2 || !strings.Contains(input.Messages[0].Blocks[0].Text, originalText) || !strings.Contains(input.Messages[0].Blocks[0].Text, "Quoted sender: bot") || input.Messages[0].Blocks[1].Text != "请解释最后一条" {
+			if len(input.Messages) != 1 || input.Messages[0].Role != "user" || len(input.Messages[0].Blocks) != 3 || !strings.Contains(input.Messages[0].Blocks[0].Text, originalText) || !strings.Contains(input.Messages[0].Blocks[0].Text, "Quoted sender: bot") || input.Messages[0].Blocks[1].Text != "请解释最后一条" || !strings.Contains(input.Messages[0].Blocks[2].Text, "Source message ID") {
 				t.Error("模型没有得到明确回复关系与完整原文")
 			}
 			return emitText(emit, "这是最后一条的解释。")
