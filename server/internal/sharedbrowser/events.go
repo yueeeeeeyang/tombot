@@ -63,7 +63,7 @@ func (service *Service) handleEvent(event any) error {
 		}
 		defer func() { <-service.creation }()
 		service.mu.Lock()
-		known := service.targets[info.TargetID] != nil || info.TargetID == chromedp.FromContext(service.root).Target.TargetID
+		known := service.targets[info.TargetID] != nil || service.probeTargets[info.TargetID] || info.TargetID == chromedp.FromContext(service.root).Target.TargetID
 		parent := service.targets[info.OpenerID]
 		full := false
 		if parent != nil {
@@ -86,6 +86,7 @@ func (service *Service) handleEvent(event any) error {
 		return err
 	case *target.EventTargetDestroyed:
 		service.mu.Lock()
+		delete(service.probeTargets, event.TargetID)
 		item := service.targets[event.TargetID]
 		if item != nil {
 			delete(service.targets, item.target)

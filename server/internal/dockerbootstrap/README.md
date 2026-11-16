@@ -1,50 +1,27 @@
 # Docker 启动引导
 
-`tomnode bootstrap` 是受保护的 Linux 部署命令，负责 Docker、宿主磁盘工具自动安装、启动和基础能力复验。它不提供 HTTP 接口，不接受远程命令、软件源或宿主路径。首个安装适配器限定 Ubuntu 24.04 LTS、systemd、cgroup v2，支持 amd64 和 arm64；其他环境明确拒绝。用户电脑镜像仍是 Debian 13，镜像工具不能替代宿主依赖。
+`tomnode bootstrap` 和节点启动链共用本模块，自动准备 Docker 与宿主磁盘工具。支持 Debian/Ubuntu 的 APT 和 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora 的 DNF，不按发行版版本号或系统软件补丁版本设置白名单。需要 Linux root、amd64/arm64、systemd、cgroup v2 和可用签名软件源。离线电脑镜像与宿主发行版独立。
 
-当前命令及两种 Linux 架构构建已完成；安装流程通过隔离文件系统和命令边界测试。尚未在 Ubuntu 实机上完成新安装验收，也尚未交付经该验收的版本清单。Docker Desktop 的只读引擎检查仅证明当地引擎能力，不证明 Linux 自动安装、电脑镜像或用户隔离已完成。
+## 清单与安装
 
-## 发布与启动
+[版本 2 清单](../../deploy/runtime/linux.json)只包含版本号、总时限及磁盘余量，格式见 [JSON Schema](../../deploy/docker-install.schema.json)。旧版本字段明确拒绝，使用 `tomnode repair` 备份后迁移；不保留启动时忽略旧字段的兼容层，不涉及数据库迁移。
 
-正常部署由 `tomnode install` 安装程序并从单份参数自动生成 `/etc/tombot/node/docker-install.json`，启动链直接调用本模块。`bootstrap` 子命令保留用于单独诊断。清单格式见 [JSON Schema](../../deploy/docker-install.schema.json)，包含准确的引擎、CLI、containerd、`e2fsprogs`、`util-linux`、`mount` 软件包版本、兼容引擎版本集合、官方签名指纹、总超时和磁盘余量。三个宿主版本字段为 `e2fsprogs_package_version`、`util_linux_package_version`、`mount_package_version`，均为必填，不读取浮动的候选版本填充。
+1. 核验发行家族、架构、权限、systemd、cgroup 控制器与磁盘余量，取得节点独占锁。
+2. 已有 Docker 必须具备所需引擎代际，未安装时先检查冲突容器软件；不自动卸载 Podman、旧 Docker 或其他运行时。
+3. 通过 dpkg/rpm 查询实际原生架构、版本和包状态。APT 检查 e2fsprogs、util-linux、mount，RPM 检查 e2fsprogs、util-linux。基础版本和安全更新均可复用；查询异常、损坏、半配置、待移除或错误架构仍失败。仅安装缺失项，不固定完整系统包版本。
+4. 缺少 Docker 时，按实际发行版构造官方 HTTPS 软件源，验证固定官方公钥指纹。APT 设置 Signed-By，RPM 开启 gpgcheck 和 sslverify。不同的既有 Docker 源明确报错，不覆盖、不运行远程安装脚本。引擎、CLI、containerd 由该发行版的官方 stable 仓库解析。
+5. 重新核验实际软件包及 `storagehost` 定义的六个程序：所有者、父目录、权限、链接目标与执行结果均必须有效。版本命令成功不能替代实际挂载、配额及内核能力验收。
+6. 启动 Docker，经固定 Unix socket 检查 Linux、cgroup v2、CPU/内存/进程配额、seccomp，以及服务实际 API 最小/最大范围必须包含 1.47。不再限定某个 Docker 补丁版本。
+7. 状态和实际包版本原子写入 `/var/lib/tombot-node/bootstrap/state.json`；错误清除成功报告，下一次启动重新核实真实状态，不盲目重放安装。
 
-这些值必须来自实际发布验收，不得复制单元测试夹具作为生产清单。测试中的软件包版本和签名数据仅用于验证控制流程。生产清单由 root 所有，文件及所有父目录不可被普通用户写入，不允许路径中的符号链接。
+APT 使用 `--no-remove --no-upgrade --no-install-recommends`，DNF 不使用 `--allowerasing` 或关闭签名选项。包管理器可能为缺失项解析传递依赖；安装在新节点或排空维护窗口执行。整体安装、下载与命令有明确时限、输出上限和有限重试；取消终止子进程组，错误输出不泄露敏感内容。
 
-[节点单元](../../deploy/systemd/tombot-node.service)以 root 调用 `tomnode start`，配置检查成功后直接运行本模块；也可以单独执行 `tomnode bootstrap`，使用 `TOM_DOCKER_INSTALL_MANIFEST` 指定受保护清单。API 独立启动，不依赖本机节点单元。安装逻辑、固定版本及失败语义保持不变；受测清单发布及完整 Ubuntu 首次部署仍待验收。
+软件源及公钥依据 [Docker Debian/Ubuntu 安装说明](https://docs.docker.com/engine/install/)、[Docker RHEL 安装说明](https://docs.docker.com/engine/install/rhel/)。发行版识别与仓库生成集中在 `linuxhost`，不把本机架构直接拼成 RPM 的软件包架构名。
 
-API 和 Worker 不以 root 运行，不加入 Docker 用户组，也不持有 Docker socket。Docker 官方说明守护进程的管理权限具有重要的宿主权限影响，因此安装和运行控制应留在受信部署及节点组件中。[Docker 安全文档](https://docs.docker.com/engine/security/)
+## 验证与回滚
 
-## 固定引导流程
+常规测试覆盖基础包与安全更新复用、只补缺包、APT/RPM 分支、签名错误、软件源冲突、包数据库错误、工具权限与链接、API 边界、资源能力、取消和失败报告。`make test-host-tools` 在隔离 Linux 中只读核验真实包数据库与程序，使用 `TOM_HOST_TOOLS_TEST=1` 及三个 `TOM_TEST_*_VERSION` 指定独立预期证据；RPM 无独立 mount 包。`make test-docker-engine` 只读核验实际 Docker 版本、API 与能力。
 
-1. 校验 root 身份、发行版、架构、systemd、必要程序、cgroup v2 控制器及磁盘余量。
-2. 在 root 保护的 `/run/tombot-node` 中取得节点独占锁；遵守 APT 的包管理器锁和有限网络重试。
-3. 若已有 Docker，验证准确版本是否属于清单允许集合；不自动升级、降级或卸载。若未安装 Docker，在安装任何软件之前检查冲突的容器软件包。
-4. 查询三个宿主磁盘软件包的原生架构、完整版本和 dpkg 安装状态；若缺少软件包，更新索引并按清单一次安装。已有 Docker 也必须经过此步骤。已有版本不符、损坏、未完成配置或计划移除时失败，不以自动升级、降级、卸载或全局 `dpkg --configure -a` 掩盖未知状态。
-5. 若未安装 Docker，检查其他 Docker 软件源并配置固定的官方 HTTPS 签名源；核验唯一主签名指纹及有效状态，固定安装引擎、CLI 和 containerd 版本。
-6. 重新查询实际宿主软件包；检查六个磁盘程序的入口与目标目录、所有者、权限和可执行性，再执行无副作用的版本查询。接受发行版受保护的 `mkfs.ext4` → `mke2fs` 链接。工具路径与节点运行时共用 `storagehost` 契约，不执行格式化、文件分配、挂载或修复操作。
-7. 启用并启动 Docker 服务，通过明确的本机 Unix socket 查询实际引擎，要求 Linux、cgroup v2、内存及进程和 CPU 配额、有效 seccomp 配置。
-8. 将各阶段状态原子写入 `/var/lib/tombot-node/bootstrap/state.json`。宿主安装/复验阶段为 `installing_host_dependencies` / `verifying_host_dependencies`；成功报告的 `host_packages` 来自真实包查询。任何失败写为失败并清除成功报告，不能留下伪成功状态。
+完整 systemd 首装、真实 loop 挂载、配额、SELinux 与电脑验收仍须目标宿主验证。`docker_ready` 只证明引擎与工具可用，不能提前报告电脑节点就绪。
 
-官方软件源和版本固定安装方式依据 [Docker Ubuntu 安装文档](https://docs.docker.com/engine/install/ubuntu/)。不下载并执行便利脚本；APT 更新的任何软件源错误都会中止，不能继续使用旧索引冒充安装成功。
-
-宿主包使用系统已有的受信 Ubuntu 软件源，不引入第三方磁盘工具源。安装使用 `--no-remove`、`--no-upgrade`、`--no-install-recommends` 和三个固定版本；`--no-upgrade` 仅约束命令行上已安装的包，APT 仍可能为缺失包解析、安装或更新传递依赖，因此必须在新节点或排空维护窗口运行，不能宣称宿主所有软件完全不变。依据 [APT 参数说明](https://manpages.ubuntu.com/manpages/noble/man8/apt-get.8.html)和 [dpkg-query 状态定义](https://manpages.ubuntu.com/manpages/noble/man1/dpkg-query.1.html)处理失败；仅退出码 1 且空输出表示目标包未找到，致命或部分查询失败不能当作缺包。
-
-命令使用绝对程序路径、固定参数和最小环境，不经过 Shell。整体安装、HTTP 下载和包管理器都有时限；取消时终止命令进程组，避免遗留安装子进程。下载和命令输出有大小上限；原始标准错误、请求正文和敏感环境不进入日志。
-
-## 失败处理与回滚
-
-不支持系统、权限不足、版本冲突、仓库失败、签名不符或引擎能力不足时，首次节点就绪必须阻断。修复环境后重启会先核实实际状态，不依据上一次状态文件盲目跳过步骤。
-
-安装失败不会通过卸载既有软件、清理用户容器或删除卷自动回滚。已安装的受信软件包可能仍然存在，后续启动会重新核验；项目拥有的源文件采用精确内容检查，发现不同配置会报错。引导升级应在排空节点及备份验证后按受测清单部署，回滚同样需要匹配的受测版本与镜像，不得在未知状态下恢复接单。
-
-本次清单契约新增三个必填字段，没有旧格式默认值或兼容层；发布时必须同时更新二进制和完整清单，不涉及业务数据迁移。软件包安装结果未知时本次引导失败；下次引导先检查实际状态，若已完整安装则不重放 APT。包数据库中断、半安装或版本漂移不能凭上次成功记录继续接单。回滚不得用缺少工具检查的旧程序绕过失败，也不自动删除已有工具；只能部署已验收且与实际宿主版本匹配的整套清单和程序。
-
-`docker_ready` 仅表示 Docker 基础检查及宿主工具检查完成，不证明内核允许 loop 挂载或配额可用。节点还必须验证存储磁盘配额、容器网络隔离、固定镜像、真实终端、Chromium 沙箱、文件能力及任务进程回收，然后才可在数据库标记节点就绪和接受用户开户。
-
-## 验证入口
-
-常规测试纳入 `make lint check test`，覆盖首次安装、重复启动、签名和软件源冲突、APT 失败、服务启动失败、版本及资源能力不足、目录权限与符号链接、锁超时、状态写入和进程取消。实际命令输出超过上限的回归测试防止复制路径绕过输出限制。
-
-宿主包回归覆盖已有 Docker 补装、持有/移除残留/半配置、错误架构与版本、查询部分失败、安装后未落盘、版本漂移、结果未知后的恢复、不重复安装、工具缺失/权限漂移/坏链接及取消。`make test-host-tools` 是 Linux 专用只读检查，显式提供 `TOM_HOST_TOOLS_TEST=1`、`TOM_TEST_E2FSPROGS_VERSION`、`TOM_TEST_UTIL_LINUX_VERSION`、`TOM_TEST_MOUNT_VERSION`；只在隔离 Ubuntu 24.04 环境检查真实 dpkg 和工具，不能据此宣称 systemd 自动安装、挂载或整节点已验收。
-
-`make test-docker-engine` 是显式只读引擎检查，必须提供 `TOM_TEST_DOCKER_BIN`、`TOM_TEST_DOCKER_SOCKET` 和 `TOM_TEST_DOCKER_VERSION`。检查使用临时 CLI 配置，不读取用户登录配置，不创建或删除任何现有容器。当前已在本机 Docker 29.7.2、Linux、cgroup v2 上通过此检查。
+失败保留配置、身份和已安装软件，不清理容器、卷或用户磁盘；修复后重试重新检查。节点程序和配置的备份、恢复及回滚见[节点部署说明](../../deploy/NODE.md#重试升级与回滚)。软件包不自动降级或卸载，回滚前应停止接单并核验实际宿主能力。

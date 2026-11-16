@@ -19,6 +19,8 @@ import (
 
 // verificationRuntime 是生命周期边界替身；成功只用于检验发布规则，不代表真实 Docker 验收通过。
 type verificationRuntime struct {
+	inspectionError                                  error
+	removalError                                     error
 	mu                                               sync.Mutex
 	heartbeat                                        computer.NodeHeartbeat
 	capabilities                                     computer.Capabilities
@@ -47,6 +49,9 @@ func (node *verificationRuntime) observation(spec computer.Specification) comput
 func (node *verificationRuntime) Inspect(_ context.Context, spec computer.Specification) (computer.Observation, error) {
 	node.mu.Lock()
 	defer node.mu.Unlock()
+	if node.inspectionError != nil {
+		return computer.Observation{}, node.inspectionError
+	}
 	if node.inspectionFails {
 		return computer.Observation{}, errors.New("测试状态未知")
 	}
@@ -70,6 +75,9 @@ func (node *verificationRuntime) Remove(_ context.Context, spec computer.Specifi
 	node.mu.Lock()
 	defer node.mu.Unlock()
 	node.removeCalls++
+	if node.removalError != nil {
+		return computer.Observation{}, node.removalError
+	}
 	if node.present {
 		node.deleteCalls++
 	}

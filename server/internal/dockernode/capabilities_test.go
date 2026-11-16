@@ -12,7 +12,7 @@ import (
 )
 
 func TestCapabilityProbeRequiresCurrentClosedEvidence(t *testing.T) {
-	for _, scenario := range []string{"partial", "unclosed", "replayed", "lease", "lifecycle", "container", "parent", "storage", "cancelled"} {
+	for _, scenario := range []string{"complete", "browser", "unclosed", "replayed", "lease", "lifecycle", "container", "parent", "storage", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, probes, _, resource, current := newProbeFixture(t)
 			evidence, err := probes.check(t.Context(), resource, current)
@@ -23,6 +23,8 @@ func TestCapabilityProbeRequiresCurrentClosedEvidence(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			switch scenario {
+			case "browser":
+				f.node.browsers = &fakeComputerBrowsers{checkError: errors.New("测试浏览器探针失败")}
 			case "unclosed":
 				state, err := f.node.journal.readProbe(resource.Specification.UserID)
 				if err != nil {
@@ -64,9 +66,9 @@ func TestCapabilityProbeRequiresCurrentClosedEvidence(t *testing.T) {
 				cancel()
 			}
 			capabilities, err := probe.Check(ctx, resource, current.ID, evidence)
-			if scenario == "partial" {
-				if err != nil || !capabilities.Terminal || !capabilities.Files || !capabilities.ProcessReaping || !capabilities.DiskQuota || !capabilities.NetworkIsolation || capabilities.Browser || capabilities.Ready() {
-					t.Fatal("基础证据错误或被提升为完整就绪", capabilities, err)
+			if scenario == "complete" {
+				if err != nil || !capabilities.Terminal || !capabilities.Files || !capabilities.ProcessReaping || !capabilities.DiskQuota || !capabilities.NetworkIsolation || !capabilities.Browser || !capabilities.Ready() {
+					t.Fatal("完整证据没有确认就绪", capabilities, err)
 				}
 			} else if err == nil || capabilities != (computer.Capabilities{}) {
 				t.Fatal("未确认的证据没有封闭能力", capabilities, err)

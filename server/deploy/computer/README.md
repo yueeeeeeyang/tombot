@@ -108,7 +108,7 @@ Python 项目通过 venv 或 uv 在共享工作目录建立环境；不覆盖 De
 
 镜像布局标识为 `io.tombot.computer.storage-layout=2`。节点预先在同一块 ext4 磁盘创建 `workspace` 与 `browser` 子目录，通过同一 Docker 卷的两个子路径分别挂载到 `/workspace` 和 `/var/lib/tombot-browser`。前者为 root:20000、2770，全部 Bot 共享；后者为 30000:20000、0700，只供用户级 Chrome 服务访问，Bot 通过窗口服务共享登录状态。磁盘根目录及 `lost+found` 不进入容器；业务进程不能通过共享父目录替换 profile。
 
-正式代理入口在接单前调用镜像内 `prepare.py`，以独立 root UID/公共 GID 子进程核验两处挂载、所属身份、权限及同一文件系统的不同目录，再准备工具目录、`/run/bot-desktops` 以及 root:root、1777 的 X11/ICE socket 目录。缺少浏览器挂载、旧布局或权限漂移明确失败，既不递归改权限也不转换旧目录。业务工具目录创建中断遗留的空目录允许继续授权，随后复验 setgid 与实际所有权。新布局需与存储记录版本 3 的节点成套部署，详见[存储与回滚说明](../../internal/dockernode/storage.md)。共享 Chrome 监督已接入节点和代理，完整浏览器工具与能力探针仍待接通；目录验证本身不授予完整浏览器能力。
+正式代理入口在接单前调用镜像内 `prepare.py`，以独立 root UID/公共 GID 子进程核验两处挂载、所属身份、权限及同一文件系统的不同目录，再准备工具目录、`/run/bot-desktops` 以及 root:root、1777 的 X11/ICE socket 目录。缺少浏览器挂载、旧布局或权限漂移明确失败，既不递归改权限也不转换旧目录。业务工具目录创建中断遗留的空目录允许继续授权，随后复验 setgid 与实际所有权。新布局需与存储记录版本 3 的节点成套部署，详见[存储与回滚说明](../../internal/dockernode/storage.md)。共享 Chrome 监督已接入节点和代理，完整浏览器工具与联合能力探针已接通；目录验证本身不授予完整浏览器能力。
 
 节点已对齐 `/tmp` 1777、`/run` 0755、共享内存容量和专用 seccomp，并在对账时拒绝漂移；运行空间与共享内存容量必须由节点配置明确提供。代理现已创建每次执行的私有会话目录，终端启动、读写与尺寸操作已接入节点协议。XFCE 消费相同的身份文件；图形启动通过固定引导程序进入当前执行组，代理另核验私有 socket 的对端、实际分辨率和核心进程生存状态；主服务、屏幕输入和真实 cgroup 执行仍须联合验收。
 
@@ -122,7 +122,7 @@ Google Chrome 已列为必装桌面软件。远程电脑的目标是让用户直
 
 Chrome 保留原生沙箱，不添加 `--no-sandbox`。容器必须使用本目录的 [seccomp.json](seccomp.json)，即 `--security-opt seccomp=/绝对路径/seccomp.json`，同时保留 `no-new-privileges` 及现有六项 capability。配置沿用固定提交的 Docker 默认拒绝策略，仅额外允许 `clone`、`setns`、`unshare`、`chroot`，使非 root Chrome 能在自身用户命名空间中完成沙箱初始化；内核仍检查命名空间内的权限，普通 Bot 不能创建外层挂载命名空间。不授予 `SYS_ADMIN` 或 `SYS_CHROOT` capability，不使用 privileged。单元测试校验除此之外的规则与上游基础策略一致；来源摘要记录在 [seccomp-source.json](seccomp-source.json)，附带 [Apache-2.0 许可](seccomp.LICENSE)。
 
-使用原始 Docker 默认 profile 时，实际 Chrome 启动会因命名空间调用被拒绝而失败；镜像内放置 JSON 文件不会自动让 Docker 应用它。因此节点必须与镜像一起发布运行配置。节点现已直接嵌入同一份 JSON 并交给 Docker API，无需现场再选择策略文件。浏览器验收通过私有 CDP 管道执行页面脚本，并断言 `chrome://sandbox` 中 PID、网络命名空间及 Seccomp-BPF 均已启用。主服务接通后仍须验收共享登录态、出网和完整窗口交互，不能用单浏览器沙箱报告代替这些行为。[Playwright 官方 Docker 文档](https://playwright.dev/docs/docker)说明了非 root 浏览器的命名空间 seccomp 配置需求；这里另外允许 `chroot`，以适配本项目去除 `SYS_CHROOT` capability 后的受限容器。
+使用原始 Docker 默认 profile 时，实际 Chrome 启动会因命名空间调用被拒绝而失败；镜像内放置 JSON 文件不会自动让 Docker 应用它。因此节点必须与镜像一起发布运行配置。节点现已直接嵌入同一份 JSON 并交给 Docker API，无需现场再选择策略文件。浏览器验收通过私有 CDP 管道执行页面脚本，并断言 `chrome://sandbox` 中 PID、网络命名空间及 Seccomp-BPF 均已启用。联合探针同时检查共享登录态、代理链路和窗口交互，不能用单浏览器沙箱报告代替这些行为。[Playwright 官方 Docker 文档](https://playwright.dev/docs/docker)说明了非 root 浏览器的命名空间 seccomp 配置需求；这里另外允许 `chroot`，以适配本项目去除 `SYS_CHROOT` capability 后的受限容器。
 
 ## 升级、部署与回滚
 
@@ -137,3 +137,5 @@ Chrome 保留原生沙箱，不添加 `--no-sandbox`。容器必须使用本目�
 同一用户的 Bot 继续共用本容器，每个 Bot 需要独立的非 root Agent 进程和桌面。镜像的 `computer-agent` 是电脑基础设施监督器；新增 `/usr/lib/tombot/bot-agent` 承载模型与工具循环，使用私有标准流连接受限中继。入口拒绝 root、命令行覆盖和普通文件/终端作为协议通道；非 Linux 平台不能运行。
 
 两个真实降权进程已验证独立循环，一个中断后另一个继续运行；信号取消能够唤醒等待回包的读取。测试启动器直接降权，没有代替生产任务引导与 cgroup 验收。Worker 分发、电脑代理监督及持久模型/操作中继已接通模块接口，Worker 不再调用同进程循环；现有主入口、业务工具与真实 cgroup 联合验收仍待完成。供应商配置和凭据继续只在服务端保存，不能让容器不可用时回退到宿主执行。完整协议及限制见 [Bot Agent 模块](../../internal/botagent/README.md)。
+
+详见[浏览器能力验收与镜像升级](../../docs/browser-readiness.md)。

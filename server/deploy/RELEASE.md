@@ -38,9 +38,9 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 | `deploy/CONFIGURE.md`、`deploy/NODE.md` | 配置生成及单文件节点部署说明 |
 | `tools/` | Python 只读核验工具及其依赖；不安装为系统服务 |
 
-核验后只向新建空目录解包；核验器不为通用解包器提供任意目录写权限。安装宿主程序前核对实际 CPU 架构。宿主程序和服务单元由 root 管理，分别使用 0755、0644 权限；宿主引导支持 Ubuntu 24.04、systemd、cgroup v2，容器系统仍是 Debian 13。
+核验后只向新建空目录解包；核验器不为通用解包器提供任意目录写权限。安装宿主程序前核对实际 CPU 架构。宿主程序和服务单元由 root 管理，分别使用 0755、0644 权限；宿主引导支持 Debian/Ubuntu 与 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora，要求 systemd、cgroup v2，容器系统仍是 Debian 13。
 
-电脑上下文可直接作为 Docker 构建目录。构建后运行源码中的专用镜像验收，推送到部署指定仓库并记录实际摘要，再生成 `computer-image.json`。不能把本地标签、上下文打包成功或任意测试镜像 ID 写成已验收的生产镜像。镜像部署清单、Docker/宿主包受测版本清单都属于具体部署环境，发布包没有自动填入示例版本。
+电脑上下文可直接作为 Docker 构建目录。构建后运行源码中的专用镜像验收，推送到部署指定仓库并记录实际摘要，再生成 `computer-image.json`。不能把本地标签、上下文打包成功或任意测试镜像 ID 写成已验收的生产镜像。镜像部署清单、Docker 安装预算都属于具体部署环境，发布包没有自动填入示例版本。
 
 ## 首次部署顺序
 
@@ -51,7 +51,7 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 5. 打开管理站点 `/admin/`。平台还没有管理员时，登录页提供“创建首位管理员”入口，由部署者当场设定用户名、显示名称与初始密码，并一次性显示动态验证器密钥。之后的管理员由已登录管理员在“管理员”页创建。“电脑节点”页签发接入凭据，节点自行登记。共享浏览器等任何必要能力未确认时，普通用户开户仍停在此门槛，不能绕过。
 6. 完成多用户/多 Bot、实际挂载配额与进程回收、共享浏览器、故障恢复及一致性备份恢复验收后，再对外切换流量。
 
-节点安装器自动生成节点 TLS 证书并安装节点系统服务；不自动创建宿主用户或数据库角色，不生成 API 凭据，也不宣告完整首次部署验收通过。受测宿主清单及真实 Ubuntu 首次安装联调仍属于生产部署剩余工作。
+节点安装器自动生成节点 TLS 证书并安装节点系统服务；不自动创建宿主用户或数据库角色，不生成 API 凭据，也不宣告完整首次部署验收通过。目标发行版的完整首次安装与真实电脑能力仍须实机验收。
 
 安装前检查的账户、路径、权限及失败语义见源码中的 `docs/deployment-check.md`。API 配置应由 root 管理并允许 API 读取，私有引用由 API 身份读取；其他三份配置保持 root 私有。节点示例最大租约为 5 分钟，覆盖默认 3 分钟节点验收。检查命令不读取凭据内容，也不会为缺失的配置生成默认成功结果。
 
@@ -95,7 +95,7 @@ Agent 私有标准流升级为协议 3，增加本地工具授权、结果确认
 完整服务发布包格式 7 与节点离线包格式 1 分开核验。节点包自带电脑镜像，终端用户无需镜像仓库账号或镜像参数。先使用当前工作树构建、验收相同架构的镜像，然后执行：
 
 ```sh
-make node-release NODE_RELEASE_ARGS="--image tombot-computer:release-amd64 --architecture amd64 --runtime deploy/runtime/ubuntu-24.04-amd64.json --output /绝对路径/tomnode-linux-amd64-offline.tar.gz"
+make node-release NODE_RELEASE_ARGS="--image tombot-computer:release-amd64 --architecture amd64 --runtime deploy/runtime/linux.json --output /绝对路径/tomnode-linux-amd64-offline.tar.gz"
 make verify-node-release NODE_RELEASE_VERIFY_ARGS="/绝对路径/tomnode-linux-amd64-offline.tar.gz"
 ```
 

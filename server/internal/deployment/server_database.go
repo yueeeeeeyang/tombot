@@ -17,7 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/pbkdf2"
-	"io.yueyang/tom/internal/dockerbootstrap"
+	"io.yueyang/tom/internal/linuxhost"
 	"io.yueyang/tom/internal/serverapp"
 	"io.yueyang/tom/internal/store/postgres"
 )
@@ -27,20 +27,7 @@ func serverDatabasePurposes() [5]string {
 }
 
 func (installer serverInstaller) ensureServerDatabase(ctx context.Context, record serverInstallation) error {
-	release, err := os.ReadFile(installer.fs.resolve("/etc/os-release"))
-	if err != nil || dockerbootstrap.ValidateHostRelease(release) != nil {
-		return errors.New("自动安装 PostgreSQL 当前支持 Ubuntu 24.04；其他系统请用 --config 提供现有数据库配置")
-	}
-	// Ubuntu 24.04 官方仓库提供 PostgreSQL 16；不改写软件源、现有集群配置或认证规则。
-	packages, err := installer.run(ctx, serverCommand{program: "/usr/bin/dpkg-query", arguments: []string{"-W", "-f=${db:Status-Status}\n", "postgresql-16", "postgresql-client-16"}, timeout: 30 * time.Second})
-	if err != nil || string(packages) != "installed\ninstalled\n" {
-		for _, arguments := range [][]string{{"update"}, {"install", "-y", "postgresql-16", "postgresql-client-16", "ca-certificates"}} {
-			if _, err := installer.run(ctx, serverCommand{program: "/usr/bin/apt-get", arguments: arguments, timeout: 30 * time.Minute, output: io.Discard}); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := installer.runSystemctl(ctx, 90*time.Second, "enable", "--now", "postgresql.service"); err != nil {
+	if err := installer.ensurePostgresPackages(ctx); err != nil {
 		return err
 	}
 	connections := map[string]*url.URL{}
@@ -245,6 +232,80 @@ func (installer serverInstaller) dumpLocalServerDatabase(ctx context.Context, de
 	}
 	if err := file.Sync(); err != nil {
 		return errors.New("本机数据库备份刷盘失败")
+	}
+	return nil
+}
+
+// ensurePostgresPackages 使用宿主维护的软件包，不锁定发行版版本；仅首次初始化空的 RPM 集群。
+func (installer serverInstaller) ensurePostgresPackages(ctx context.Context) error {
+	encoded, err := os.ReadFile(installer.fs.resolve("/etc/os-release"))
+	if err != nil {
+		return errors.New("无法读取 Linux 发行信息")
+	}
+	release, err := linuxhost.ParseRelease(encoded)
+	if err != nil {
+		return err
+	}
+	names := []string{"postgresql", "postgresql-client"}
+	if release.Family == "dnf" {
+		names = []string{"postgresql-server", "postgresql"}
+	}
+	var missing []string
+	for _, name := range names {
+		query := serverCommand{program: "/usr/bin/dpkg-query", arguments: []string{"-W", "-f=${db:Status-Status}\n", name}, timeout: 30 * time.Second}
+		expected := "installed\n"
+		if release.Family == "dnf" {
+			query.program = "/usr/bin/rpm"
+			query.arguments = []string{"-q", "--qf", "%{NAME}\n", name}
+			expected = name + "\n"
+		}
+		output, err := installer.run(ctx, query)
+		if err != nil {
+			var failure *serverCommandExit
+			if !errors.As(err, &failure) || failure.code != 1 {
+				return err
+			}
+			missing = append(missing, name)
+		} else if string(output) != expected {
+			return errors.New("PostgreSQL 软件包状态异常，未覆盖或修复宿主包数据库")
+		}
+	}
+	if len(missing) > 0 {
+		missing = append(missing, "ca-certificates")
+		if release.Family == "apt" {
+			for _, args := range [][]string{{"update"}, append([]string{"install", "--yes", "--no-remove", "--no-upgrade"}, missing...)} {
+				args = append([]string{"-o", "DPkg::Lock::Timeout=60", "-o", "Acquire::Retries=2", "-o", "APT::Update::Error-Mode=any", "-o", "Acquire::http::Timeout=30", "-o", "Acquire::https::Timeout=30"}, args...)
+				if _, err := installer.run(ctx, serverCommand{program: release.Manager(), arguments: args, timeout: 30 * time.Minute, output: io.Discard}); err != nil {
+					return err
+				}
+			}
+		} else {
+			args := append([]string{"--assumeyes", "--setopt=timeout=30", "--setopt=retries=2", "install"}, missing...)
+			if _, err := installer.run(ctx, serverCommand{program: release.Manager(), arguments: args, timeout: 30 * time.Minute, output: io.Discard}); err != nil {
+				return err
+			}
+		}
+	}
+	if release.Family == "dnf" {
+		cluster := installer.fs.resolve("/var/lib/pgsql/data")
+		if _, err := os.Lstat(filepath.Join(cluster, "PG_VERSION")); errors.Is(err, os.ErrNotExist) {
+			entries, err := os.ReadDir(cluster)
+			if err != nil && !errors.Is(err, os.ErrNotExist) {
+				return errors.New("无法检查 PostgreSQL 数据目录")
+			}
+			if len(entries) != 0 {
+				return errors.New("PostgreSQL 数据目录非空且缺少有效集群，未覆盖")
+			}
+			// 初始化选项只作用于新集群；不重写已有数据库的认证规则。
+			if _, err := installer.run(ctx, serverCommand{program: "/usr/bin/postgresql-setup", arguments: []string{"--initdb"}, environment: []string{"PGSETUP_INITDB_OPTIONS=--auth-local=peer --auth-host=scram-sha-256"}, timeout: 2 * time.Minute}); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return errors.New("无法检查 PostgreSQL 集群版本")
+		}
+	}
+	if _, err := installer.runSystemctl(ctx, 90*time.Second, "enable", "--now", "postgresql.service"); err != nil {
+		return err
 	}
 	return nil
 }

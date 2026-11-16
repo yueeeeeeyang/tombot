@@ -91,7 +91,7 @@ func newProbeFixture(t *testing.T) (fixture, *nodeProbes, *probeGroups, Resource
 	probes.locate = func(ctx context.Context, id string, pid int) (processgroup.ContainerReference, error) {
 		return processgroup.ContainerReference{ContainerID: id, Path: "system.slice/docker-" + id + ".scope", Device: 1, Inode: 2}, ctx.Err()
 	}
-	probes.stamp = func(time.Time) (agentchannel.Deadline, error) {
+	probes.node.stampDeadline = func(time.Time, int) (agentchannel.Deadline, error) {
 		return agentchannel.Deadline{ExpiresNS: 1, TimeNamespace: 2}, nil
 	}
 	probes.invoke = func(ctx context.Context, _ Resource, grant computeragent.ProbeGrant, files []*os.File) (computerprobe.Evidence, error) {
@@ -498,7 +498,7 @@ func TestNodeProbeRejectsContainerDrift(t *testing.T) {
 					return processgroup.ContainerReference{}, nil
 				}
 			case "clock":
-				probes.stamp = func(time.Time) (agentchannel.Deadline, error) {
+				probes.node.stampDeadline = func(time.Time, int) (agentchannel.Deadline, error) {
 					return agentchannel.Deadline{}, errors.New("测试时钟读取失败")
 				}
 			}

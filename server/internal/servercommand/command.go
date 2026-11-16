@@ -28,7 +28,8 @@ const usage = `用法：
   --certificate 文件 --private-key 文件  使用已有 HTTPS 证书
   --config 文件                        使用完整现有服务配置，不安装数据库或生成密钥
 
-默认自动安装支持 Ubuntu 24.04（x64/arm64），需要 systemd 和软件源网络访问。
+默认自动安装支持 Debian/Ubuntu、RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora（x64/arm64）。
+不锁定系统版本号，需要 systemd 和可用的软件源网络访问。
 访问地址必须可由浏览器和电脑节点访问；自签名证书需在访问设备上信任。
 重复 install 复用首次配置；更换版本使用新版程序执行 upgrade。
 升级失败保留备份和阶段记录，不自动降级数据库。程序不会下载未经指定的新版本。

@@ -9,23 +9,16 @@ const agent = createWorkspace().agents[0]!
 describe('猫咪侧栏面板', () => {
   it('详情展示名称、介绍、分组和模型，另外两个栏目是空状态', async () => {
     const user = userEvent.setup()
-    const onModelChange = vi.fn()
     const onClose = vi.fn()
-    render(
-      <CatSidePanel
-        agent={agent}
-        onClose={onClose}
-        onModelChange={onModelChange}
-        onComputerUrl={vi.fn()}
-      />,
-    )
+    render(<CatSidePanel agent={agent} onClose={onClose} onComputerUrl={vi.fn()} />)
     expect(screen.getByRole('heading', { name: '小黑' })).toHaveTextContent('小黑')
     expect(await screen.findByText('相处久一点，会更了解彼此。')).toBeInTheDocument()
     expect(screen.queryByText(agent.description)).toBeNull()
     expect(screen.queryByRole('tab', { name: '记忆' })).toBeNull()
     expect(screen.getAllByRole('tab')).toHaveLength(4)
     expect(screen.getByText('我的助手')).toBeInTheDocument()
-    expect(screen.getByRole('combobox', { name: '模型' })).toHaveTextContent('GPT-4o')
+    expect(screen.getByText('由服务端管理')).toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '资料库' }))
     expect(screen.getByRole('status')).toHaveTextContent('资料库还是空的')
     await user.keyboard('{ArrowRight}')
@@ -33,9 +26,7 @@ describe('猫咪侧栏面板', () => {
     expect(screen.getByRole('status')).toHaveTextContent('未连接')
     expect(screen.getByLabelText('远端电脑地址')).toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '详情' }))
-    await user.click(screen.getByRole('combobox', { name: '模型' }))
-    await user.click(screen.getByRole('option', { name: 'Claude Sonnet' }))
-    expect(onModelChange).toHaveBeenCalledWith('claude-sonnet')
+    expect(screen.getByText('自动使用管理员分配的模型策略，无需在客户端配置。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '导出草稿' })).not.toBeInTheDocument()
     const close = screen.getByRole('button', { name: '关闭猫咪面板' })
     expect(close).toHaveClass('round-button')
@@ -45,14 +36,7 @@ describe('猫咪侧栏面板', () => {
 
   it('按下 Esc 关闭面板', () => {
     const onClose = vi.fn()
-    render(
-      <CatSidePanel
-        agent={agent}
-        onClose={onClose}
-        onModelChange={vi.fn()}
-        onComputerUrl={vi.fn()}
-      />,
-    )
+    render(<CatSidePanel agent={agent} onClose={onClose} onComputerUrl={vi.fn()} />)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -76,7 +60,6 @@ describe('猫咪侧栏面板', () => {
       <CatSidePanel
         agent={{ ...agent, artifacts }}
         onClose={vi.fn()}
-        onModelChange={vi.fn()}
         onComputerUrl={vi.fn()}
         now={now}
       />,

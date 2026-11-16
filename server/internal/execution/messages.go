@@ -33,8 +33,19 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 		if err := transaction.QueryRowContext(ctx, `SELECT user_id FROM tombot.user_dispatch_heads WHERE user_id=$1 FOR UPDATE`, principal.UserID).Scan(&userID); err != nil {
 			return err
 		}
+		var inputDigest []byte
+		err := transaction.QueryRowContext(ctx, `SELECT turn_id,run_id,message_id,request_digest FROM tombot.run_inputs WHERE user_id=$1 AND client_request_id=$2`, userID, request.ClientRequestID).Scan(&submitted.TurnID, &submitted.RunID, &submitted.MessageID, &inputDigest)
+		if err == nil {
+			if !bytes.Equal(inputDigest, digest[:]) {
+				return ErrConflict
+			}
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		var previous []byte
-		err := transaction.QueryRowContext(ctx, `SELECT id,request_digest FROM tombot.turns WHERE user_id=$1 AND client_request_id=$2`, userID, request.ClientRequestID).Scan(&submitted.TurnID, &previous)
+		err = transaction.QueryRowContext(ctx, `SELECT id,request_digest FROM tombot.turns WHERE user_id=$1 AND client_request_id=$2`, userID, request.ClientRequestID).Scan(&submitted.TurnID, &previous)
 		if err == nil {
 			if !bytes.Equal(previous, digest[:]) {
 				return ErrConflict
@@ -48,7 +59,7 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 		var kind string
 		var botID *string
 		var archived bool
-		if err = transaction.QueryRowContext(ctx, `SELECT kind,bot_id,is_archived FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, userID, conversationID).Scan(&kind, &botID, &archived); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT c.kind,c.bot_id,c.is_archived OR COALESCE(b.is_archived,false) FROM tombot.conversations c LEFT JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id WHERE c.user_id=$1 AND c.id=$2 FOR UPDATE OF c`, userID, conversationID).Scan(&kind, &botID, &archived); err != nil {
 			return err
 		}
 		if kind != "direct" {
@@ -57,12 +68,14 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 		if archived || botID == nil {
 			return ErrUnavailable
 		}
-		var busy bool
-		if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.turns WHERE user_id=$1 AND conversation_id=$2 AND status IN ('queued','running','canceling'))`, userID, conversationID).Scan(&busy); err != nil {
-			return err
+		var activeRun, activeTurn string
+		err = transaction.QueryRowContext(ctx, `SELECT r.id,r.turn_id FROM tombot.runs r JOIN tombot.turns t ON t.user_id=r.user_id AND t.id=r.turn_id
+            WHERE r.user_id=$1 AND r.conversation_id=$2 AND t.status IN ('queued','running','canceling') AND r.status IN ('queued','running','canceling') ORDER BY r.id DESC LIMIT 1`, userID, conversationID).Scan(&activeRun, &activeTurn)
+		if err == nil {
+			return service.appendInput(ctx, transaction, userID, conversationID, activeTurn, activeRun, request, digest[:], &submitted)
 		}
-		if busy {
-			return ErrBusy
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
 		var maximum, count int
 		err = transaction.QueryRowContext(ctx, `SELECT queued_runs,(SELECT count(*) FROM tombot.jobs WHERE user_id=$1 AND status='queued') FROM tombot.user_limits WHERE user_id=$1`, userID).Scan(&maximum, &count)

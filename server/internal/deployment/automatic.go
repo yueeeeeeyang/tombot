@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"io.yueyang/tom/deploy"
 	"io.yueyang/tom/internal/computer"
@@ -136,10 +138,10 @@ func (installer nodeInstaller) prepareAutomatic(ctx context.Context, optionsPath
 	}
 	listen := options.Listen
 	if listen == "" && len(host.Addresses) == 1 {
-		listen = net.JoinHostPort(host.Addresses[0].String(), "9443")
+		listen = net.JoinHostPort(host.Addresses[0].String(), "9444")
 	}
 	if listen == "" {
-		listen, err = confirmAddress(ctx, "无法唯一确定网卡，请填写本机监听 IP:9443：")
+		listen, err = confirmAddress(ctx, "无法唯一确定网卡，请填写本机监听 IP:端口（建议 9444）：")
 		if err != nil {
 			return installationInput{}, err
 		}
@@ -169,6 +171,14 @@ func (installer nodeInstaller) prepareAutomatic(ctx context.Context, optionsPath
 	if nodeapi.ValidateURL(nodeURL) != nil {
 		return installationInput{}, errors.New("节点访问地址必须是有效 HTTPS 来源")
 	}
+	if sameNodeOrigin(nodeURL, code.URL) {
+		return installationInput{}, errors.New("节点地址不能与服务端地址相同；同机部署请使用独立端口，例如服务端 9443、节点 9444")
+	}
+	if installer.checkListen != nil {
+		if err := installer.checkListen(ctx, listen); err != nil {
+			return installationInput{}, err
+		}
+	}
 	request := nodeInstallRequest{Version: 1, NodeID: nodeID, ImageID: ids.New(), Name: options.Name, Capacity: options.Capacity, InstallOptions: canonical,
 		Server:  &nodeInstallServer{URL: code.URL, Fingerprints: code.Fingerprints, NodeURL: nodeURL},
 		Control: nodeInstallControl{Listen: listen, AllowPublic: !address.Addr().IsPrivate(), ClientFingerprints: bootstrap.ClientFingerprints},
@@ -177,6 +187,35 @@ func (installer nodeInstaller) prepareAutomatic(ctx context.Context, optionsPath
 		return installationInput{}, err
 	}
 	return installationInput{request: request, token: []byte(code.Token), archiveSource: filepath.Join(filepath.Dir(executable), "computer-image.tar")}, nil
+}
+
+func sameNodeOrigin(first, second string) bool {
+	a, err := url.Parse(first)
+	if err != nil {
+		return false
+	}
+	b, err := url.Parse(second)
+	if err != nil {
+		return false
+	}
+	port := func(endpoint *url.URL) string {
+		if endpoint.Port() == "" || endpoint.Port() == "443" {
+			return "443"
+		}
+		return endpoint.Port()
+	}
+	return strings.EqualFold(a.Hostname(), b.Hostname()) && port(a) == port(b)
+}
+
+// checkNodeListen 提前报告端口占用；实际服务绑定仍是最终检查，探测不持有长期监听。
+func checkNodeListen(ctx context.Context, address string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	listener, err := new(net.ListenConfig).Listen(ctx, "tcp", address)
+	if err != nil {
+		return errors.New("节点监听地址不可用或端口已占用，请指定本机独立端口")
+	}
+	return listener.Close()
 }
 
 func isLocalListen(address netip.Addr, addresses []netip.Addr) bool {

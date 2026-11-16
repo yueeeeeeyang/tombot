@@ -7,7 +7,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/accounts"
@@ -22,7 +21,6 @@ import (
 type Accounts interface {
 	ListUsers(context.Context, identity.Principal, string, int) ([]accounts.UserSummary, error)
 	ListNodes(context.Context, identity.Principal, string, int) ([]accounts.NodeSummary, error)
-	ListImages(context.Context, identity.Principal, string, int) ([]accounts.ImageSummary, error)
 	Create(context.Context, identity.Principal, accounts.CreateRequest) (accounts.Operation, error)
 	Get(context.Context, identity.Principal, string) (accounts.Operation, error)
 	Retry(context.Context, identity.Principal, string, string) (accounts.Operation, error)
@@ -37,9 +35,12 @@ type Administrators interface {
 	CreateAdministrator(context.Context, identity.Principal, string, string, string, identity.Attempt) (identity.AdministratorSetup, error)
 }
 
-// Nodes 只向近期验证的管理员签发一次性接入凭据。
+// Nodes 查询节点运维信息；签发凭据、修改配置和重新核对验收都要求近期验证。
 type Nodes interface {
 	Issue(context.Context, identity.Principal, string) (nodeenrollment.Grant, error)
+	GetNode(context.Context, identity.Principal, string) (nodecatalog.NodeDetail, error)
+	UpdateNode(context.Context, identity.Principal, string, nodecatalog.NodeUpdate, string) (nodecatalog.NodeDetail, error)
+	RetryNodeVerification(context.Context, identity.Principal, string, int64, string) (nodecatalog.NodeDetail, error)
 }
 
 // Handler 必须由认证门保护全部路径，包括未匹配和方法错误响应。
@@ -74,11 +75,13 @@ func New(service Accounts, administratorsService Administrators, nodes Nodes, mo
 	router.Post("/api/v2/admin/users", handler.create)
 	router.Get("/api/v2/admin/users", catalogHandler(handler, "users", service.ListUsers))
 	router.Get("/api/v2/admin/computer-nodes", catalogHandler(handler, "nodes", service.ListNodes))
-	router.Get("/api/v2/admin/computer-images", catalogHandler(handler, "images", service.ListImages))
 	router.Post("/api/v2/admin/users/{userID}/activation", handler.activation)
 	router.Get("/api/v2/admin/administrators", catalogHandler(handler, "administrators", administratorsService.ListAdministrators))
 	router.Post("/api/v2/admin/administrators", handler.createAdministrator)
 	router.Post("/api/v2/admin/computer-nodes/enrollment-tokens", handler.enrollmentToken)
+	router.Get("/api/v2/admin/computer-nodes/{nodeID}", handler.nodeDetail)
+	router.Put("/api/v2/admin/computer-nodes/{nodeID}", handler.updateNode)
+	router.Post("/api/v2/admin/computer-nodes/{nodeID}/verification-retry", handler.retryNodeVerification)
 	router.Get("/api/v2/admin/user-creation-operations/{operationID}", handler.operation)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/retry", handler.retry)
 	router.Post("/api/v2/admin/user-creation-operations/{operationID}/reconcile", handler.reconcile)
@@ -99,7 +102,7 @@ func New(service Accounts, administratorsService Administrators, nodes Nodes, mo
 }
 
 func isAccountListRequest(r *http.Request) bool {
-	return r.Method == "GET" && (r.URL.Path == "/api/v2/admin/users" || r.URL.Path == "/api/v2/admin/computer-nodes" || r.URL.Path == "/api/v2/admin/computer-images" || r.URL.Path == "/api/v2/admin/administrators" || strings.HasPrefix(r.URL.Path, "/api/v2/admin/computer-nodes/"))
+	return r.Method == "GET" && (r.URL.Path == "/api/v2/admin/users" || r.URL.Path == "/api/v2/admin/computer-nodes" || r.URL.Path == "/api/v2/admin/administrators")
 }
 
 func catalogHandler[T any](handler *Handler, key string, list func(context.Context, identity.Principal, string, int) ([]T, error)) http.HandlerFunc {
@@ -255,7 +258,7 @@ func (handler *Handler) nodeError(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, nodecatalog.ErrInvalidInput):
 		handler.failure(w, r, 400, "INPUT_INVALID", nodecatalog.ErrInvalidInput.Error(), nil)
 	case errors.Is(err, nodecatalog.ErrConflict):
-		handler.failure(w, r, 409, "NODE_CONFLICT", nodecatalog.ErrConflict.Error(), nil)
+		handler.failure(w, r, 409, "NODE_CONFLICT", "节点配置或验收状态已变化、名称重复或容量低于已预留数量，请重新读取后确认", nil)
 	case errors.Is(err, nodecatalog.ErrNotFound):
 		handler.failure(w, r, 404, "NODE_NOT_FOUND", nodecatalog.ErrNotFound.Error(), nil)
 	default:

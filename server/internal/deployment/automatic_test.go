@@ -73,7 +73,7 @@ func TestAutomaticInstallWithoutParameterFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.Capacity != 6 || request.Control.Listen != "10.0.0.5:9443" || request.Server.NodeURL != "https://10.0.0.5:9443" || !strings.HasPrefix(request.Name, "test-node-") {
+	if request.Capacity != 6 || request.Control.Listen != "10.0.0.5:9444" || request.Server.NodeURL != "https://10.0.0.5:9444" || !strings.HasPrefix(request.Name, "test-node-") {
 		t.Fatal("自动资源和地址计算不符")
 	}
 	if bytes.Contains(saved, []byte("tomnode1.")) {

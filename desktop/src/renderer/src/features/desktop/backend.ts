@@ -1,6 +1,5 @@
 import type { Artifact } from '../workspace/model'
-import type { SettingsDraft } from '../settings/settings'
-import type { Agent, AppWorkspace } from '../workspace/model'
+import type { Agent, AppWorkspace, NewAgent } from '../workspace/model'
 
 export interface StreamEvent {
   type: string
@@ -24,6 +23,7 @@ export type SessionPhase = 'loading' | 'address' | 'offline' | 'login' | 'ready'
 export interface SessionSnapshot {
   phase: SessionPhase
   message?: string
+  errorCode?: string
   serverUrl?: string
   username?: string
 }
@@ -38,10 +38,6 @@ export interface LoginCredentials {
 export interface WorkspaceSnapshot {
   workspace: AppWorkspace
   pristine: boolean
-}
-
-export interface SettingsView extends SettingsDraft {
-  hasApiKey: boolean
 }
 
 export type ServerBubble = {
@@ -73,8 +69,13 @@ export interface MessagePage {
 export interface DeliveryResult {
   /** 服务端已持久化的会话消息；缺省时不改动本地记录。 */
   messages?: ServerBubble[]
+  acceptedMessageId?: string
   code?: string
   message?: string
+}
+
+export interface AgentConversation extends MessagePage {
+  runs: Array<{ id: string; bot_id: string; status: string; progress_summary: string }>
 }
 
 /**
@@ -90,16 +91,22 @@ export interface DesktopBackend {
   connect: (serverUrl: string) => Promise<SessionSnapshot>
   /** 用系统浏览器完成登录：桌面端只接收一次性授权码，口令不经过本进程。 */
   browserLogin: () => Promise<SessionSnapshot>
+  /** 核对管理员提供的公共证书指纹，只信任当前服务地址。 */
+  trustServerCertificate: (address: string, fingerprint: string) => Promise<void>
   logout?: () => Promise<void>
   /** 订阅当前用户事件；服务端在有界窗口后收尾，调用方负责续订。 */
   watchEvents?: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => () => void
   tryWorkspaceSync?: () => WorkspaceSnapshot
   loadWorkspace: () => Promise<WorkspaceSnapshot>
+  loadAgentConversation?: (agentId: string, before?: number) => Promise<AgentConversation>
+  /** 创建机器人及其单聊会话；同一次表单重试必须复用请求标识，失败时抛出。 */
+  createAgent: (profile: NewAgent, requestId: string) => Promise<Agent>
   saveWorkspace: (workspace: AppWorkspace) => void | Promise<void>
   /** 把一条用户消息交给服务端执行；返回该会话的最新消息列表。 */
   deliverMessage: (
     agentId: string,
     content: string,
+    clientRequestId: string,
     onEvent?: (event: StreamEvent) => void,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
@@ -147,14 +154,6 @@ export interface DesktopBackend {
   toggleReaction?: (messageId: string, emoji: string) => Promise<void>
   ensureAgent?: (agentId: string) => Promise<void>
   startBootstrap?: () => Promise<void>
-  trySettingsSync?: () => SettingsView
-  loadSettings: () => Promise<SettingsView>
-  saveSettings: (draft: SettingsDraft, apiKey: string) => SettingsView | Promise<SettingsView>
-  listBuiltinProviders?: () => Promise<Array<{ id: string; name: string }>>
-  listProviderModels?: (
-    providerId: string,
-    apiKey: string,
-  ) => Promise<Array<{ id: string; name: string }>>
 }
 
 /** 读取当前页面的服务通道。没有桥接时直接失败，不用本地数据假装已连接。 */

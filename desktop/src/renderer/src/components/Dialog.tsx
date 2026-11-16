@@ -7,10 +7,12 @@ export function Dialog({
   children,
   onClose,
   variant = 'default',
+  isDismissible = true,
 }: {
   title: string
   children: ReactNode
   onClose: () => void
+  isDismissible?: boolean
   variant?: 'default' | 'search' | 'settings' | 'recruit' | 'dm'
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
@@ -32,17 +34,22 @@ export function Dialog({
       aria-label={title}
       onCancel={(event) => {
         event.preventDefault()
-        onClose()
+        if (isDismissible) onClose()
       }}
       onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
+        if (isDismissible && event.target === event.currentTarget) onClose()
       }}
     >
       <div className="dialog-content">
         {(variant === 'default' || variant === 'recruit') && (
           <div className="dialog-heading">
             <h2>{title}</h2>
-            <button className="icon-button" aria-label="关闭弹窗" onClick={onClose}>
+            <button
+              className="icon-button"
+              aria-label="关闭弹窗"
+              onClick={onClose}
+              disabled={!isDismissible}
+            >
               <X size={17} />
             </button>
           </div>

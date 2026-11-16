@@ -22,7 +22,7 @@
 
 [节点单元](../../deploy/systemd/tombot-node.service)只调用 `tomnode start`，由同一进程顺序完成节点配置检查、Docker 引导、镜像准备和节点恢复。它不再依赖额外前置单元或 API 文件；[API 单元](../../deploy/tomd.service)独立启动，节点维护不会关闭登录及历史查询。数据库迁移由 `tomd` 启动执行，首位管理员在 API 侧创建。配置 `enrollment` 时，节点监听建立后先自动接入，成功才通知就绪；失败完整停止并释放资源。详见[多节点接入](../../docs/node-registration.md)。
 
-[安装引导](../dockerbootstrap/README.md)会按受保护清单安装并核验宿主 `e2fsprogs`、`util-linux`、`mount`，即使 Docker 已存在也检查。安装引导与节点共用六项磁盘工具路径契约；工具运行成功不能代替真实 loop 挂载、实际容量和内核配额验收。升级必须同步提供新增三个宿主包版本字段，缺失不使用默认版本。
+[安装引导](../dockerbootstrap/README.md)会按受保护清单安装并核验宿主 `e2fsprogs`、`util-linux`、`mount`，即使 Docker 已存在也检查。安装引导与节点共用六项磁盘工具路径契约；工具运行成功不能代替真实 loop 挂载、实际容量和内核配额验收。宿主包不锁定发行版补丁版本，安装状态、工具权限和真实能力仍须通过；旧引导清单使用 `tomnode repair` 显式迁移。
 
 节点以 `Type=notify` 运行，只有完成恢复和监听创建才发送 `READY=1`，`STATUS` 明确说明用户电脑仍需完整检查。此通知表示控制服务启动，不写入目录健康状态、不激活账户。前台运行未配置 `NOTIFY_SOCKET` 时不发送通知；配置了端点而通知失败则停止并返回非零。通知使用有时限的 Unix datagram，遵循 [systemd 通知协议](https://raw.githubusercontent.com/systemd/systemd/main/man/sd_notify.xml)。
 

@@ -8,6 +8,7 @@ import { Alert, Dialog, Field } from './components'
 import { UsersPage } from './users/UsersPage'
 import { AdministratorsPage } from './users/AdministratorsPage'
 import { NodesPage } from './users/NodesPage'
+import { NodeDetailPage } from './users/NodeDetailPage'
 import { ModelsPage, PoliciesPage, ProviderPage, PolicyPage } from './models/ModelsPage'
 import { AdminSetup } from './auth/AdminSetup'
 import { Messages } from './components/Messages'
@@ -166,6 +167,9 @@ function Login({ client }: { client: AdminClient }) {
             创建首位管理员
           </button>
         )}
+        <a className="text-button auth-secondary" href="/login">
+          普通用户登录
+        </a>
         <ThemePicker />
       </div>
     </main>
@@ -293,6 +297,7 @@ function Workspace({ client }: { client: AdminClient }) {
             <Route path="/users" element={<UsersPage client={client} />} />
             <Route path="/administrators" element={<AdministratorsPage client={client} />} />
             <Route path="/computer-nodes" element={<NodesPage client={client} />} />
+            <Route path="/computer-nodes/:nodeID" element={<NodeDetailPage client={client} />} />
             <Route path="/model-providers" element={<ModelsPage client={client} />} />
             <Route path="/model-providers/:providerID" element={<ProviderPage client={client} />} />
             <Route path="/model-policies" element={<PoliciesPage client={client} />} />

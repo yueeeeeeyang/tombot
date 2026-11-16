@@ -9,6 +9,9 @@ import (
 )
 
 func (installation *installer) repository(ctx context.Context) error {
+	if installation.release.Family == "dnf" {
+		return installation.rpmRepository(ctx)
+	}
 	sources, err := installation.host.directory("etc/apt/sources.list.d", 0755)
 	if err != nil {
 		return err
@@ -26,7 +29,7 @@ func (installation *installer) repository(ctx context.Context) error {
 			paths = append(paths, filepath.Join(sources, entry.Name()))
 		}
 	}
-	source := repositorySource(installation.host.architecture)
+	source := installation.release.DockerSource(installation.host.architecture)
 	for _, path := range paths {
 		contents, err := installation.host.readProtected(path, 1<<20)
 		if errors.Is(err, os.ErrNotExist) {
@@ -55,7 +58,7 @@ func (installation *installer) repository(ctx context.Context) error {
 	if err = installation.step("verifying_repository"); err != nil {
 		return err
 	}
-	key, err := installation.host.fetch(ctx)
+	key, err := installation.host.fetch(ctx, installation.release.DockerKeyURL())
 	if err != nil {
 		return err
 	}
@@ -78,7 +81,7 @@ func (installation *installer) publishRepository(ctx context.Context, work strin
 	if err != nil {
 		return err
 	}
-	if err = verifyFingerprint(output, installation.manifest.RepositoryFingerprint); err != nil {
+	if err = verifyFingerprint(output, installation.release.DockerKeyFingerprint()); err != nil {
 		return err
 	}
 	keyrings, err := installation.host.directory("etc/apt/keyrings", 0755)
@@ -132,4 +135,76 @@ func verifyFingerprint(encoded []byte, expected string) error {
 		return errors.New("Docker 仓库签名缺少唯一的有效主指纹")
 	}
 	return nil
+}
+
+// rpmRepository 固定 HTTPS 地址与签名校验，不运行远程脚本，也不覆盖已有 Docker 软件源。
+func (installation *installer) rpmRepository(ctx context.Context) (result error) {
+	directory, err := installation.host.directory("etc/yum.repos.d", 0755)
+	if err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 200 {
+		return errors.New("系统软件源数量超过引导检查上限")
+	}
+	source := installation.release.DockerSource(installation.host.architecture)
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".repo") {
+			continue
+		}
+		content, err := installation.host.readProtected(filepath.Join(directory, entry.Name()), 1<<20)
+		if err != nil {
+			return err
+		}
+		if entry.Name() == "tombot-docker.repo" {
+			if string(content) != source {
+				return errors.New("已有不同的 TomBot Docker 软件源，未覆盖")
+			}
+		} else if strings.Contains(string(content), "download.docker.com") {
+			return errors.New("已存在其他 Docker 软件源，未创建冲突来源")
+		}
+	}
+	if err := installation.step("installing_dependencies"); err != nil {
+		return err
+	}
+	if err := installation.installPackages(ctx, "ca-certificates", "gnupg2"); err != nil {
+		return err
+	}
+	if err := installation.step("verifying_repository"); err != nil {
+		return err
+	}
+	key, err := installation.host.fetch(ctx, installation.release.DockerKeyURL())
+	if err != nil {
+		return err
+	}
+	if len(key) == 0 || len(key) > 64<<10 {
+		return errors.New("Docker 仓库签名内容大小无效")
+	}
+	work, err := os.MkdirTemp(installation.stateDirectory, "repository-")
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, os.RemoveAll(work)) }()
+	path := filepath.Join(work, "repository.asc")
+	if err := os.WriteFile(path, key, 0600); err != nil {
+		return err
+	}
+	output, err := installation.command(ctx, "usr/bin/gpg", "--batch", "--no-options", "--homedir", work, "--with-colons", "--fingerprint", "--show-keys", path)
+	if err != nil {
+		return err
+	}
+	if err := verifyFingerprint(output, installation.release.DockerKeyFingerprint()); err != nil {
+		return err
+	}
+	keyring, err := installation.host.directory("etc/pki/rpm-gpg", 0755)
+	if err != nil {
+		return err
+	}
+	if err := writeAtomic(keyring, "tombot-docker.asc", key, 0644); err != nil {
+		return err
+	}
+	return writeAtomic(directory, "tombot-docker.repo", []byte(source), 0644)
 }

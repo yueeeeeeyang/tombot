@@ -141,7 +141,6 @@ test('管理页面主题、窄屏、模态焦点与模型启用流程', async ({
       versions[0] = { ...versions[0], is_enabled: true, verified_at: timestamp }
       body = { version: versions[0] }
     } else if (path === '/computer-nodes') body = { nodes: [] }
-    else if (path === '/computer-images') body = { images: [] }
     else {
       await route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '测试接口未配置' } })
       return

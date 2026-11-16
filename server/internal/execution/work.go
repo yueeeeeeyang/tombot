@@ -44,7 +44,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 			if _, err = transaction.ExecContext(ctx, `UPDATE tombot.turns SET status='running' WHERE user_id=$1 AND id=$2`, lease.UserID, lease.TurnID); err != nil {
 				return err
 			}
-			if err = event(ctx, transaction, lease.UserID, "run.started", lease.RunID, map[string]int{"attempt": lease.Attempt}); err != nil {
+			if err = event(ctx, transaction, lease.UserID, "run.started", lease.RunID, map[string]any{"attempt": lease.Attempt, "bot_id": lease.BotID, "conversation_id": lease.ConversationID}); err != nil {
 				return err
 			}
 		}
@@ -55,7 +55,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		var snapshot []byte
 		var policy *string
 		var version *int64
-		if err = transaction.QueryRowContext(ctx, `SELECT bot_snapshot,model_policy_id,model_version FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&snapshot, &policy, &version); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT bot_snapshot,model_policy_id,model_version,continuation_after FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&snapshot, &policy, &version, &work.ContinuationAfter); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(snapshot, &work.Bot); err != nil {
@@ -64,7 +64,15 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if policy != nil && version != nil {
 			work.Selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version, RunID: lease.RunID}
 		}
-		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, 0, service.options.ContextMessages+1)
+		// 首次启动固定历史水位；恢复时仍重建同一输入，补充消息由模型边界批次加入。
+		var contextSequence int64
+		if err = transaction.QueryRowContext(ctx, `SELECT message_sequence FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, lease.UserID, lease.ConversationID).Scan(&contextSequence); err != nil {
+			return err
+		}
+		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
+			return err
+		}
+		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1)
 		if err != nil {
 			return err
 		}

@@ -4,6 +4,7 @@ package dockernode
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
@@ -16,6 +17,14 @@ func TestNodeDelegatedAuthority(t *testing.T) {
 	session := fixture.prepareComputer(t, fixture.specification)
 	groups := &fakeGroups{path: t.TempDir()}
 	controller := fixture.sessionController(t, groups, sessionOptions())
+	clockCalls := 0
+	fixture.node.stampDeadline = func(deadline time.Time, pid int) (agentchannel.Deadline, error) {
+		clockCalls++
+		if pid != 4242 {
+			t.Fatal("会话未使用已核验容器进程的时钟", pid)
+		}
+		return agentchannel.FromDeadlineForProcess(deadline, os.Getpid())
+	}
 	command := commandFor(session)
 	if _, err := controller.Open(context.Background(), command); err != nil {
 		t.Fatal(err)
@@ -50,6 +59,9 @@ func TestNodeDelegatedAuthority(t *testing.T) {
 	renewal, err := controller.AgentRenewal(context.Background(), session)
 	if err != nil || renewal.Command != command {
 		t.Fatal("代理续约没有使用最新节点版本", err)
+	}
+	if clockCalls != 2 {
+		t.Fatal("初始授权与续约未共同使用目标时钟换算", clockCalls)
 	}
 	controller.remember(sessionKeyOf(session), sessionLease{deadline: time.Now().Add(-time.Second)})
 	if _, files, err := controller.Delegate(context.Background(), session); err == nil || files != nil {

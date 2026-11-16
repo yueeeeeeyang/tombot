@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -23,6 +24,15 @@ type serverCommand struct {
 }
 
 type serverRunner func(context.Context, serverCommand) ([]byte, error)
+
+type serverCommandExit struct {
+	program string
+	code    int
+}
+
+func (failure *serverCommandExit) Error() string {
+	return fmt.Sprintf("服务部署命令执行失败：%s（退出码 %d）；原始输出已隐藏", failure.program, failure.code)
+}
 
 // runServerCommand 不经过 Shell，不继承数据库认证环境，不回传可能包含机密的原始错误输出。
 // 子进程组随取消一并终止；捕获输出有上限，安装包下载及备份使用各自显式时限。
@@ -53,7 +63,11 @@ func runServerCommand(parent context.Context, request serverCommand) ([]byte, er
 		if ctx.Err() != nil {
 			return nil, errors.New("服务部署命令取消或超时，请检查实际状态后重试")
 		}
-		return nil, errors.New("服务部署命令执行失败：" + filepath.Base(request.program) + "；请检查系统日志，原始输出已隐藏")
+		var exited *exec.ExitError
+		if errors.As(err, &exited) {
+			return nil, &serverCommandExit{program: filepath.Base(request.program), code: exited.ExitCode()}
+		}
+		return nil, errors.New("无法执行服务部署命令：" + filepath.Base(request.program))
 	}
 	return captured.Bytes(), nil
 }

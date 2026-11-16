@@ -44,11 +44,12 @@ func readVerification(ctx context.Context, tx *sql.Tx, nodeID string) (*verifica
 	var specification, capabilities []byte
 	var verifiedAt, lease sql.NullTime
 	var code sql.NullString
+	var nodeCode sql.NullString
 	var next time.Time
 	var token int64
-	err := tx.QueryRowContext(ctx, `SELECT image_id,specification,runtime_id,runtime_generation,is_valid,state,fencing_token,lease_expires_at,attempts,capabilities,verified_at,error_code,next_attempt_at
+	err := tx.QueryRowContext(ctx, `SELECT image_id,specification,runtime_id,runtime_generation,is_valid,state,fencing_token,lease_expires_at,attempts,capabilities,verified_at,error_code,next_attempt_at,node_error_code
 		FROM tombot.node_verifications WHERE node_id=$1 FOR UPDATE`, nodeID).
-		Scan(&current.imageID, &specification, &current.runtimeID, &current.runtimeGeneration, &current.isValid, &current.state, &token, &lease, &current.attempts, &capabilities, &verifiedAt, &code, &next)
+		Scan(&current.imageID, &specification, &current.runtimeID, &current.runtimeGeneration, &current.isValid, &current.state, &token, &lease, &current.attempts, &capabilities, &verifiedAt, &code, &next, &nodeCode)
 	if err != nil {
 		return nil, lease, next, token, err
 	}
@@ -73,6 +74,7 @@ func readVerification(ctx context.Context, tx *sql.Tx, nodeID string) (*verifica
 		}
 	}
 	current.errorCode = code.String
+	current.nodeErrorCode = nodeCode.String
 	return current, lease, next, token, nil
 }
 
@@ -85,6 +87,14 @@ func (verifier *Verifier) claim(parent context.Context) (*verification, error) {
 		node, err := lockVerificationNode(ctx, tx, verifier.service.nodeID)
 		if err != nil || !node.online() {
 			return err
+		}
+		var registeredImage string
+		err = tx.QueryRowContext(ctx, `SELECT image_id FROM tombot.node_connections WHERE node_id=$1 FOR SHARE`, verifier.service.nodeID).Scan(&registeredImage)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if err == nil && registeredImage != verifier.options.ImageID {
+			return nil
 		}
 		current, lease, next, token, err := readVerification(ctx, tx, verifier.service.nodeID)
 		missing := errors.Is(err, sql.ErrNoRows)
@@ -156,7 +166,7 @@ func (verifier *Verifier) claim(parent context.Context) (*verification, error) {
 			_, err = tx.ExecContext(ctx, `INSERT INTO tombot.node_verifications(node_id,image_id,specification,runtime_id,runtime_generation,is_valid,state,fencing_token,lease_expires_at,attempts)
 				VALUES($1,$2,$3,$4,$5,true,'checking',$6,$7,$8) ON CONFLICT(node_id) DO UPDATE SET
 				image_id=EXCLUDED.image_id,specification=EXCLUDED.specification,runtime_id=EXCLUDED.runtime_id,runtime_generation=EXCLUDED.runtime_generation,is_valid=true,state='checking',
-				fencing_token=EXCLUDED.fencing_token,lease_expires_at=EXCLUDED.lease_expires_at,attempts=EXCLUDED.attempts,capabilities=NULL,verified_at=NULL,error_code=NULL,next_attempt_at=clock_timestamp(),created_at=clock_timestamp(),updated_at=clock_timestamp()`,
+				fencing_token=EXCLUDED.fencing_token,lease_expires_at=EXCLUDED.lease_expires_at,attempts=EXCLUDED.attempts,capabilities=NULL,verified_at=NULL,error_code=NULL,node_error_code=NULL,next_attempt_at=clock_timestamp(),created_at=clock_timestamp(),updated_at=clock_timestamp()`,
 				verifier.service.nodeID, current.imageID, encoded, current.runtimeID, current.runtimeGeneration, current.specification.FencingToken, current.specification.LeaseExpiresAt, current.attempts)
 		} else {
 			_, err = tx.ExecContext(ctx, `UPDATE tombot.node_verifications SET specification=$2,fencing_token=$3,lease_expires_at=$4,attempts=$5,is_valid=$6,updated_at=clock_timestamp() WHERE node_id=$1`,
@@ -210,8 +220,8 @@ func (verifier *Verifier) advance(parent context.Context, claimed *verification,
 		if current.state != state {
 			attempts, delay = 0, 0
 		}
-		result, err := tx.ExecContext(ctx, `UPDATE tombot.node_verifications SET state=$2,error_code=NULLIF($3,''),capabilities=$4,verified_at=$5,lease_expires_at=NULL,attempts=$6,next_attempt_at=$7,updated_at=clock_timestamp() WHERE node_id=$1 AND lease_expires_at>clock_timestamp()`,
-			verifier.service.nodeID, state, code, capabilities, claimed.verifiedAt, attempts, node.now.Add(delay))
+		result, err := tx.ExecContext(ctx, `UPDATE tombot.node_verifications SET state=$2,error_code=NULLIF($3,''),capabilities=$4,verified_at=$5,lease_expires_at=NULL,attempts=$6,next_attempt_at=$7,node_error_code=NULLIF($8,''),updated_at=clock_timestamp() WHERE node_id=$1 AND lease_expires_at>clock_timestamp()`,
+			verifier.service.nodeID, state, code, capabilities, claimed.verifiedAt, attempts, node.now.Add(delay), claimed.nodeErrorCode)
 		return verificationUpdated(result, err)
 	})
 	if err == nil && state == "quarantined" {

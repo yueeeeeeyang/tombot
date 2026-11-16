@@ -96,50 +96,17 @@ func (service *Service) BeginBrowserAuthorization(ctx context.Context, request B
 	return authorization, nil
 }
 
-// ApproveBrowserAuthorization 校验账号口令与动态验证，通过后生成一次性授权码。
-// 与普通登录共用口令、限流与审计路径，但不在此处签发会话凭据。
-func (service *Service) ApproveBrowserAuthorization(ctx context.Context, authorizationID, username, password, code string, attempt Attempt) (string, error) {
-	normalized, err := NormalizeUsername(username)
-	if err != nil || len(password) > 1024 {
-		return "", ErrInvalidInput
-	}
-	if err = service.limitAttempt(ctx, "browser-login:"+normalized, attempt); err != nil {
-		return "", err
-	}
-	record, err := service.credential(ctx, userSubject, normalized)
-	if err != nil {
-		return "", err
-	}
-	var matches bool
-	err = service.passwordWork(ctx, func() error {
-		var verifyErr error
-		matches, verifyErr = verifyPassword(record.hash, password)
-		return verifyErr
-	})
-	if err != nil {
-		return "", err
-	}
-	if !matches || record.userID == "" || record.status != "active" {
-		err = service.transaction(ctx, func(transaction *sql.Tx) error {
-			return audit(ctx, transaction, record.userID, "", "浏览器登录", "denied", attempt.RequestID)
-		})
-		if err != nil {
-			return "", err
-		}
-		return "", ErrInvalidCredentials
+// ApproveBrowserAuthorization 仅使用已验证的普通用户网页会话签发一次性桌面授权码。
+// 在同一事务内重新锁定会话，避免退出、撤销或改密与批准操作竞争。
+func (service *Service) ApproveBrowserAuthorization(ctx context.Context, authorizationID string, principal Principal, attempt Attempt) (string, error) {
+	if principal.Scope != "web" || principal.Role != "user" {
+		return "", ErrInvalidSession
 	}
 	var authorizationCode string
-	err = service.transaction(ctx, func(transaction *sql.Tx) error {
-		var userID string
-		var now time.Time
-		err := transaction.QueryRowContext(ctx, `SELECT id,transaction_timestamp() FROM tombot.users WHERE id=$1 AND status='active' FOR UPDATE`, record.userID).Scan(&userID, &now)
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrInvalidCredentials
-		}
-		if err != nil {
+	err := service.transaction(ctx, func(transaction *sql.Tx) error {
+		if _, _, err := lockSession(ctx, transaction, principal); err != nil {
 			return err
 		}
-		// 桌面登录只面向普通用户；管理员身份不在用户表中，也不持有桌面会话。
 		value, err := secure.Token()
 		if err != nil {
 			return err
@@ -147,7 +114,7 @@ func (service *Service) ApproveBrowserAuthorization(ctx context.Context, authori
 		result, err := transaction.ExecContext(ctx, `UPDATE tombot.desktop_authorizations
 			SET user_id=$2,code_digest=$3,approved_at=transaction_timestamp()
 			WHERE id=$1 AND approved_at IS NULL AND consumed_at IS NULL AND expires_at>transaction_timestamp()`,
-			authorizationID, record.userID, digest(value))
+			authorizationID, principal.UserID, digest(value))
 		if err != nil {
 			return err
 		}
@@ -156,11 +123,10 @@ func (service *Service) ApproveBrowserAuthorization(ctx context.Context, authori
 			return err
 		}
 		if affected != 1 {
-			// 已过期、已使用或正在被并发批准：不生成新码，避免一个请求被重复授权。
 			return ErrInvalidAuthorization
 		}
 		authorizationCode = value
-		return audit(ctx, transaction, record.userID, "", "浏览器登录", "succeeded", attempt.RequestID)
+		return audit(ctx, transaction, principal.UserID, principal.SessionID, "授权桌面客户端", "succeeded", attempt.RequestID)
 	})
 	if err != nil {
 		return "", err
@@ -169,7 +135,7 @@ func (service *Service) ApproveBrowserAuthorization(ctx context.Context, authori
 }
 
 // ExchangeBrowserAuthorization 用一次性授权码与 PKCE 校验串换取正常会话。
-// 授权码与状态在校验成功前不会泄露用户身份；重复提交视为会话全部撤销。
+// 授权码与状态在校验成功前不会泄露用户身份；重复提交拒绝签发并记录审计。
 func (service *Service) ExchangeBrowserAuthorization(ctx context.Context, code, verifier, state string, attempt Attempt) (Session, error) {
 	if !validToken(code) || !validToken(verifier) || len(state) < 16 || len(state) > 128 {
 		return Session{}, ErrInvalidAuthorization
@@ -199,7 +165,9 @@ func (service *Service) ExchangeBrowserAuthorization(ctx context.Context, code, 
 			return audit(ctx, transaction, userID, "", "浏览器登录交换", "denied", attempt.RequestID)
 		}
 		verifierDigest := sha256.Sum256([]byte(verifier))
-		if !expires.After(time.Now()) || len(challenge) != 32 || !constantTimeEqual(challenge, verifierDigest[:]) {
+		// 登记保存的是 S256 挑战字符串的摘要，交换时必须按同一规则推导后比较。
+		expected, valid := challengeDigest(base64.RawURLEncoding.EncodeToString(verifierDigest[:]))
+		if !valid || !expires.After(time.Now()) || !constantTimeEqual(challenge, expected) {
 			return ErrInvalidAuthorization
 		}
 		var status string

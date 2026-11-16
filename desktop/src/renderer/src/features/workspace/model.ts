@@ -93,6 +93,7 @@ const messageSchema = z
     content: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
     createdAt: z.string().datetime(),
     status: z.enum(['unsent', 'failed', 'sent']),
+    sequence: z.number().int().positive().optional(),
     requestId: z.string().trim().min(1).max(128).optional(),
     replyTo: replySchema.optional(),
     reactions: z.array(reactionSchema).max(REACTION_EMOJIS.length),

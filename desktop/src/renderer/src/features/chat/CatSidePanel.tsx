@@ -1,8 +1,6 @@
 import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
-import { Select, type SelectOption } from '../../../../../../ui/Select'
-import { catModelOptions } from '../models/catalog'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'
 import { ComputerPane } from './ComputerPane'
@@ -11,12 +9,6 @@ import { RoutinePane } from './RoutinePane'
 
 const PANEL_TABS = ['details', 'library', 'computer', 'routine'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
-function modelOptions(modelId: string): readonly SelectOption[] {
-  const catalog = catModelOptions()
-  if (catalog.some((option) => option.value === modelId)) return catalog
-  return [{ value: modelId, label: modelId }, ...catalog]
-}
-
 const TAB_LABELS: Record<PanelTab, string> = {
   details: '详情',
   library: '资料库',
@@ -29,7 +21,6 @@ export function CatSidePanel({
   agent,
   isLead = false,
   onClose,
-  onModelChange,
   onComputerUrl,
   onConnectComputer,
   onPrepareComputer,
@@ -38,7 +29,6 @@ export function CatSidePanel({
   agent: Agent
   isLead?: boolean
   onClose: () => void
-  onModelChange: (modelId: string) => void
   onComputerUrl: (computerUrl: string) => void
   onConnectComputer?: () => void
   onPrepareComputer?: () => void
@@ -126,14 +116,9 @@ export function CatSidePanel({
             <strong>{agent.group}</strong>
           </section>
           <section className="cat-panel-card">
-            <span>模型</span>
-            <Select
-              label="模型"
-              value={agent.modelId}
-              options={modelOptions(agent.modelId)}
-              onChange={onModelChange}
-            />
-            <small>选择会保存到服务。回复时使用这只猫咪自己的模型。</small>
+            <span>模型策略</span>
+            <strong>由服务端管理</strong>
+            <small>自动使用管理员分配的模型策略，无需在客户端配置。</small>
           </section>
         </div>
       )}

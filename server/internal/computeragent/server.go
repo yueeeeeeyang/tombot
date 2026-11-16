@@ -93,7 +93,7 @@ func (server *Server) serveConnection(ctx context.Context, connection *net.UnixC
 	if request.Method == "health" {
 		return server.serveHealth(ctx, channel, request, len(files))
 	}
-	if request.Method == "browser_start" || request.Method == "browser_status" || request.Method == "browser_close" {
+	if request.Method == "browser_start" || request.Method == "browser_status" || request.Method == "browser_close" || request.Method == "browser_probe" {
 		owned := files
 		files = nil
 		return server.serveBrowser(ctx, channel, request, owned)

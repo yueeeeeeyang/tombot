@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/sharedbrowser"
 	"io.yueyang/tom/internal/taskprocess"
@@ -14,6 +15,7 @@ import (
 type BrowserService interface {
 	sharedbrowser.Browser
 	ReleaseSession(context.Context, computer.ExecutionSession) error
+	Probe(context.Context, string) (browserprobe.Evidence, error)
 }
 
 // BrowserScope 独占一个用户级 Chrome 服务组和运行目录，不属于任一 Bot 会话。

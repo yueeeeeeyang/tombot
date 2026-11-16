@@ -31,6 +31,8 @@ func TestAdminAssets(t *testing.T) {
 		{"GET", "/admin/", 200}, {"HEAD", "/admin/", 200}, {"GET", "/admin/assets/index-build.js", 200}, {"GET", "/admin/assets/index-build.css", 200},
 		{"GET", "/admin", 308}, {"GET", "/admin/assets/", 404}, {"GET", "/admin/internal.txt", 404}, {"GET", "/admin/../internal.txt", 404},
 		{"GET", "/admin/assets/%69ndex-build.js", 404}, {"GET", "/admin/missing", 404}, {"POST", "/admin/", 405},
+		{"GET", "/activate", 200}, {"HEAD", "/activate", 200}, {"POST", "/activate", 405},
+		{"GET", "/activate/missing", 404}, {"GET", "/%61ctivate", 404},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
@@ -85,7 +87,7 @@ func TestAdminPageRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	id := "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-	for _, route := range []string{"users", "administrators", "computer-nodes", "model-providers", "model-policies", "model-providers/" + id, "model-policies/" + id + "/versions"} {
+	for _, route := range []string{"users", "administrators", "computer-nodes", "model-providers", "model-policies", "computer-nodes/" + id, "model-providers/" + id, "model-policies/" + id + "/versions"} {
 		for _, method := range []string{"GET", "HEAD", "POST"} {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(method, "/admin/"+route, nil))
@@ -106,7 +108,7 @@ func TestAdminPageRoutes(t *testing.T) {
 			}
 		}
 	}
-	for _, route := range []string{"model-providers/invalid", "model-policies/" + id, "model-providers/" + id + "/missing", "assets/missing.js", "api/v2/admin/users", "%75sers", "users/../private", "model-providers/../../private", "model-policies/" + id + "/versions/missing"} {
+	for _, route := range []string{"computer-nodes/" + id + "/edit", "computer-nodes/invalid", "computer-nodes/" + id + "/unknown", "computer-nodes/" + id + "/edit/extra", "model-providers/invalid", "model-policies/" + id, "model-providers/" + id + "/missing", "assets/missing.js", "api/v2/admin/users", "%75sers", "users/../private", "model-providers/../../private", "model-policies/" + id + "/versions/missing"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("GET", "/admin/"+route, nil))
 		if response.Code != 404 {

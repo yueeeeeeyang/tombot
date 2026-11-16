@@ -63,17 +63,9 @@ def inspect_image(image, architecture):
 
 
 def validate_runtime(manifest):
-    expected = {'engine_package_version', 'cli_package_version', 'containerd_package_version', 'e2fsprogs_package_version', 'util_linux_package_version', 'mount_package_version', 'allowed_engine_versions', 'repository_fingerprint', 'timeout_seconds', 'minimum_free_bytes'}
-    require(set(manifest) == expected, '宿主软件清单字段不完整')
-    for key in expected:
-        if key.endswith('_package_version'):
-            require(isinstance(manifest[key], str) and re.fullmatch(r'[0-9][0-9A-Za-z.+:~_-]{0,100}', manifest[key]), '软件版本必须明确固定')
-    require(manifest['cli_package_version'] == manifest['engine_package_version'] and manifest['engine_package_version'].endswith('~ubuntu.24.04~noble'), '软件清单发行版不符')
-    require(re.fullmatch(r'[0-9A-F]{40}', manifest['repository_fingerprint']), '软件仓库签名指纹无效')
+    require(set(manifest) == {'version', 'timeout_seconds', 'minimum_free_bytes'} and manifest['version'] == 2, '宿主安装清单必须使用版本 2，不能锁定系统补丁版本')
+    require(type(manifest['timeout_seconds']) is int and type(manifest['minimum_free_bytes']) is int, '软件安装预算必须是整数')
     require(30 <= manifest['timeout_seconds'] <= 3600 and 1 << 30 <= manifest['minimum_free_bytes'] <= 100 << 30, '软件安装预算无效')
-    versions = manifest['allowed_engine_versions']
-    require(isinstance(versions, list) and 1 <= len(versions) <= 10 and all(re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', version) for version in versions), '引擎版本范围无效')
-    require(any(manifest['engine_package_version'].startswith('5:' + version + '-') for version in versions), '引擎版本不在许可范围')
 
 
 def verify(archive):
@@ -142,7 +134,7 @@ def build(image, architecture, runtime, output):
         release = {'version': 1, 'platform': 'linux/' + architecture, 'image_reference': reference, 'archive_sha256': digest(payload / 'computer-image.tar'), 'docker': manifest}
         (payload / 'node-release.json').write_text(json.dumps(release, ensure_ascii=False, indent=2) + '\n')
         shutil.copyfile(ROOT / 'deploy/node-install.example.json', payload / 'node-install.example.json')
-        (payload / '安装说明.txt').write_text('完整解压到受保护目录（例如 /root/tombot），执行 sudo ./tomnode install。\n按提示粘贴管理平台新生成的接入码，再确认节点访问地址。默认无需填写 JSON。\n电脑镜像随包离线导入；Docker 和宿主依赖仍从官方软件源安装，需要联网。\n节点将保存身份、凭据与镜像，失败后使用同一程序重试；不要删除已生成身份。\n如需覆盖节点名称、容量、地址或监听网卡，填写可选示例并显式传入文件路径。\n适用 Ubuntu 24.04、systemd、cgroup v2；节点能力以实际验收结果为准。\n')
+        (payload / '安装说明.txt').write_text('完整解压到受保护目录（例如 /root/tombot），执行 sudo ./tomnode install。\n按提示粘贴管理平台新生成的接入码，再确认节点访问地址。默认无需填写 JSON。\n电脑镜像随包离线导入；Docker 和宿主依赖仍从官方软件源安装，需要联网。\n节点将保存身份、凭据与镜像，失败后使用同一程序重试；不要删除已生成身份。\n如需覆盖节点名称、容量、地址或监听网卡，填写可选示例并显式传入文件路径。\n支持 Debian/Ubuntu 与 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora；需要 systemd、cgroup v2 和 Docker API 1.47。节点默认端口 9444，服务端默认 9443。旧安装先停止服务，再用新程序 tomnode repair --image-package . 迁移；节点能力以实际验收结果为准。\n')
         (payload / 'SHA256SUMS').write_text(''.join(digest(payload / name) + '  ' + name + '\n' for name in sorted(FILES - {'SHA256SUMS'})))
         candidate = stage / 'package.tar.gz'
         print('正在压缩并核验安装包', flush=True)

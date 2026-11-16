@@ -119,8 +119,11 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, path.Base(r.URL.Path), time.Time{}, bytes.NewReader(value.content))
 }
 
-// isPagePath 限定可直接打开的管理页面，防止静态资源、接口或拼错路径被入口 HTML 掩盖。
+// isPagePath 限定可直接打开的管理及用户激活页面，防止静态资源、接口或拼错路径被入口 HTML 掩盖。
 func isPagePath(value string) bool {
+	if value == "/activate" {
+		return true
+	}
 	parts := strings.Split(strings.TrimPrefix(value, "/admin/"), "/")
 	if !strings.HasPrefix(value, "/admin/") {
 		return false
@@ -137,5 +140,6 @@ func isPagePath(value string) bool {
 	if _, err := ulid.ParseStrict(parts[1]); err != nil {
 		return false
 	}
-	return len(parts) == 2 && parts[0] == "model-providers" || len(parts) == 3 && parts[0] == "model-policies" && parts[2] == "versions"
+	return len(parts) == 2 && (parts[0] == "model-providers" || parts[0] == "computer-nodes") ||
+		len(parts) == 3 && parts[0] == "model-policies" && parts[2] == "versions"
 }

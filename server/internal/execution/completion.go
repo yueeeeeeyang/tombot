@@ -65,6 +65,15 @@ func (service *Service) Complete(ctx context.Context, lease Lease, outcome Outco
 
 // finishRun 的调用者必须已锁定队列记录；恢复器也使用相同的终态与事件实现。
 func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Outcome) error {
+	// 与消息受理共用会话锁；最终模型调用期间到达的消息会原子转入后续运行。
+	var conversationID string
+	if err := transaction.QueryRowContext(ctx, `SELECT id FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, lease.UserID, lease.ConversationID).Scan(&conversationID); err != nil {
+		return err
+	}
+	var pending bool
+	if err := transaction.QueryRowContext(ctx, `SELECT context_sequence IS NOT NULL AND EXISTS(SELECT 1 FROM tombot.run_inputs i JOIN tombot.messages m ON m.user_id=i.user_id AND m.id=i.message_id WHERE i.user_id=r.user_id AND i.turn_id=r.turn_id AND m.sequence>r.input_sequence) FROM tombot.runs r WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&pending); err != nil {
+		return err
+	}
 	if outcome.Answer != "" {
 		var sequence int64
 		if err := transaction.QueryRowContext(ctx, `UPDATE tombot.conversations SET message_sequence=message_sequence+1,revision=revision+1,updated_at=clock_timestamp() WHERE user_id=$1 AND id=$2 RETURNING message_sequence`, lease.UserID, lease.ConversationID).Scan(&sequence); err != nil {
@@ -93,6 +102,18 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 	if _, err := transaction.ExecContext(ctx, `UPDATE tombot.jobs SET status='finished',lease_owner=NULL,lease_expires_at=NULL,fencing_token=fencing_token+1,updated_at=clock_timestamp() WHERE user_id=$1 AND id=$2`, lease.UserID, lease.JobID); err != nil {
 		return err
 	}
+	if pending {
+		next := ids.New()
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO tombot.runs(user_id,id,turn_id,conversation_id,bot_id,bot_revision,bot_snapshot,status,continuation_after) SELECT user_id,$3,turn_id,conversation_id,bot_id,bot_revision,bot_snapshot,'queued',input_sequence FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID, next); err != nil {
+			return err
+		}
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO tombot.jobs(user_id,id,run_id,bot_id,conversation_id,turn_id,status) VALUES($1,$2,$3,$4,$5,$6,'queued')`, lease.UserID, ids.New(), next, lease.BotID, lease.ConversationID, lease.TurnID); err != nil {
+			return err
+		}
+		if err := event(ctx, transaction, lease.UserID, "run.queued", next, map[string]string{"bot_id": lease.BotID, "conversation_id": lease.ConversationID, "turn_id": lease.TurnID}); err != nil {
+			return err
+		}
+	}
 	var active, unknown, failed, canceled bool
 	if err := transaction.QueryRowContext(ctx, `SELECT bool_or(status IN ('queued','running','canceling')),bool_or(status='unknown'),bool_or(status='failed'),bool_or(status='canceled')
 		FROM tombot.runs WHERE user_id=$1 AND turn_id=$2`, lease.UserID, lease.TurnID).Scan(&active, &unknown, &failed, &canceled); err != nil {
@@ -118,7 +139,7 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 			return err
 		}
 	}
-	return event(ctx, transaction, lease.UserID, "run.finished", lease.RunID, map[string]string{"status": outcome.Status, "error_code": outcome.ErrorCode})
+	return event(ctx, transaction, lease.UserID, "run.finished", lease.RunID, map[string]string{"status": outcome.Status, "error_code": outcome.ErrorCode, "bot_id": lease.BotID, "conversation_id": lease.ConversationID})
 }
 
 // Cancel 排队任务立即终止；已领取任务持久请求取消，等待持有者或恢复器收尾。

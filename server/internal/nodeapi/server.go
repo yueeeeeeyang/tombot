@@ -160,7 +160,7 @@ func (server *Server) serveAction(w http.ResponseWriter, r *http.Request) {
 		if errors.As(callErr, &classified) && codePattern.MatchString(classified.Code) {
 			result.Failure = &computer.Failure{Code: classified.Code, IsPermanent: classified.IsPermanent}
 		}
-		server.logger.WarnContext(ctx, "电脑节点动作未确认成功", "node_id", server.options.NodeID, "request_id", content.RequestID, "action", content.Action)
+		server.logger.WarnContext(ctx, "电脑节点动作未确认成功", "node_id", server.options.NodeID, "request_id", content.RequestID, "action", content.Action, "error_code", result.Failure.Code, "is_permanent", result.Failure.IsPermanent)
 	}
 	body, err := agentchannel.Encode(result)
 	if err != nil {

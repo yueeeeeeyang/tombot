@@ -42,6 +42,7 @@ describe('会话门禁', () => {
 
   it('登录页不收集密码，只提供浏览器登录入口', () => {
     memoryBackend.phase = 'login'
+    memoryBackend.serverUrl = 'https://tom.example.com'
     render(<App />)
     expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(screen.queryByLabelText('密码')).not.toBeInTheDocument()
@@ -52,6 +53,7 @@ describe('会话门禁', () => {
 
   it('浏览器登录完成后进入工作空间', async () => {
     memoryBackend.phase = 'login'
+    memoryBackend.serverUrl = 'https://tom.example.com'
     memoryBackend.password = '口'.repeat(12)
     const user = userEvent.setup()
     render(<App />)

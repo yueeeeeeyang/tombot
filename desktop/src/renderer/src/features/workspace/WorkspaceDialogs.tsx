@@ -1,20 +1,19 @@
 import type { ConnectionStatus } from '../session/useConnectionStatus'
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
+import { ulid } from '../../../../shared/ulid'
 import { Check, HardDrive, Upload } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
-import { Select, type SelectOption } from '../../../../../../ui/Select'
+import { Select } from '../../../../../../ui/Select'
 import { CAT_AVATARS } from '../avatars/presets'
 import { createCustomAvatar } from '../avatars/customAvatar'
 import { SessionFrame } from '../session/SessionGate'
 import { type Agent, type NewAgent, type AppWorkspace as Workspace } from './model'
 
 interface RecruitCatFormProps {
-  onCreate: (profile: NewAgent, model: SelectOption) => void
+  onCreate: (profile: NewAgent, requestId: string) => Promise<void>
   groups: string[]
-  modelOptions: readonly SelectOption[]
   initialProfile?: NewAgent
-  onModelSettings: (profile: NewAgent) => void
   heading?: string
 }
 
@@ -22,11 +21,10 @@ interface RecruitCatFormProps {
 function RecruitCatForm({
   onCreate,
   groups,
-  modelOptions,
   initialProfile,
-  onModelSettings,
   heading,
-}: RecruitCatFormProps) {
+  onPendingChange,
+}: RecruitCatFormProps & { onPendingChange?: (pending: boolean) => void }) {
   const [profile, setProfile] = useState<NewAgent>(
     initialProfile ?? {
       name: '',
@@ -37,169 +35,160 @@ function RecruitCatForm({
   const [error, setError] = useState('')
   const [isCustom, setCustom] = useState(Boolean(initialProfile?.customAvatar))
   const [isReadingAvatar, setReadingAvatar] = useState(false)
-  const [modelValue, setModelValue] = useState(modelOptions[0]?.value ?? '')
-  function submit(event: FormEvent): void {
+  const [isSubmitting, setSubmitting] = useState(false)
+  const submitting = useRef(false)
+  const request = useRef<{ profile: string; id: string } | null>(null)
+  async function submit(event: FormEvent): Promise<void> {
     event.preventDefault()
+    if (isReadingAvatar || submitting.current) return
+    submitting.current = true
+    setSubmitting(true)
+    onPendingChange?.(true)
+    setError('')
     try {
-      const model = modelOptions.find((option) => option.value === modelValue)
-      if (!model) throw new Error('请选择有效模型')
-      if (isReadingAvatar) return
       if (isCustom && !profile.customAvatar) throw new Error('请先上传自定义猫咪头像。')
-      onCreate(
-        isCustom ? profile : { name: profile.name, group: profile.group, avatar: profile.avatar },
-        model,
-      )
+      const selected = isCustom
+        ? profile
+        : { name: profile.name, group: profile.group, avatar: profile.avatar }
+      const encoded = JSON.stringify(selected)
+      if (request.current?.profile !== encoded) request.current = { profile: encoded, id: ulid() }
+      await onCreate(selected, request.current.id)
     } catch (failure) {
       setError((failure as Error).message)
+    } finally {
+      submitting.current = false
+      setSubmitting(false)
+      onPendingChange?.(false)
     }
   }
   return (
     <form onSubmit={submit} className="agent-form">
       {heading && <h1>{heading}</h1>}
       <p className="dialog-description">选一位猫咪搭档，一起开启下一个想法。</p>
-      <div className="recruit-kind" role="group" aria-label="猫咪类型">
-        <button type="button" aria-pressed={!isCustom} onClick={() => setCustom(false)}>
-          预设猫咪
-        </button>
-        <button type="button" aria-pressed={isCustom} onClick={() => setCustom(true)}>
-          自定义猫咪
-        </button>
-      </div>
-      {isCustom ? (
-        <div className="custom-cat-profile">
-          <label className="custom-avatar-upload">
-            {profile.customAvatar ? (
-              <Avatar preset={profile.avatar} customAvatar={profile.customAvatar} size="large" />
-            ) : (
-              <Upload size={28} />
-            )}
-            <span>
-              {isReadingAvatar
-                ? '正在处理图片…'
-                : profile.customAvatar
-                  ? '更换头像'
-                  : '上传猫咪头像'}
-            </span>
-            <small>PNG、JPEG 或 WebP，最大 4 MiB</small>
-            <input
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              aria-label="上传猫咪头像"
-              disabled={isReadingAvatar}
-              onChange={(event) => {
-                const file = event.target.files?.[0]
-                event.target.value = ''
-                if (!file) return
-                setReadingAvatar(true)
-                setError('')
-                void createCustomAvatar(file)
-                  .then((customAvatar) => setProfile((current) => ({ ...current, customAvatar })))
-                  .catch((failure: Error) => setError(failure.message))
-                  .finally(() => setReadingAvatar(false))
-              }}
-            />
-          </label>
-          <label>
-            猫咪介绍
-            <textarea
-              maxLength={120}
-              rows={3}
-              placeholder="介绍它的性格、擅长的事情，或你希望它怎样与你相处"
-              value={profile.description ?? ''}
-              onChange={(event) => setProfile({ ...profile, description: event.target.value })}
-            />
-          </label>
-        </div>
-      ) : (
-        <div className="avatar-picker">
-          <div className="avatar-options" role="group" aria-label="预设猫咪头像">
-            {CAT_AVATARS.map((preset) => (
-              <button
-                key={preset.id}
-                type="button"
-                className="avatar-option"
-                onClick={() => setProfile({ ...profile, avatar: preset.id })}
-                aria-label={preset.name}
-                aria-pressed={profile.avatar === preset.id}
-              >
-                <Avatar preset={preset.id} />
-                <span>{preset.name}</span>
-                {profile.avatar === preset.id && (
-                  <Check className="avatar-option-check" size={11} />
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-      <label>
-        助手名称
-        <input
-          autoFocus
-          value={profile.name}
-          maxLength={24}
-          placeholder="例如：灵感搭档"
-          onChange={(event) => setProfile({ ...profile, name: event.target.value })}
-          required
-        />
-      </label>
-      <div className="recruit-selects">
-        <div className="recruit-field">
-          <span>分组</span>
-          <Select
-            label="分组"
-            value={profile.group}
-            onChange={(group) => setProfile({ ...profile, group })}
-            options={[...new Set(['未分组', ...groups])].map((group) => ({
-              value: group,
-              label: group,
-            }))}
-          />
-        </div>
-        <div className="recruit-field">
-          <span>模型</span>
-          <Select
-            label="模型"
-            value={modelValue}
-            onChange={setModelValue}
-            options={modelOptions}
-            placeholder="暂无已配置模型"
-          />
-        </div>
-      </div>
-      {modelOptions.length === 0 && (
-        <div className="empty-model-note">
-          <span>先在模型设置中填写模型名称，再招聘猫咪。</span>
-          <button type="button" onClick={() => onModelSettings(profile)}>
-            前往模型设置
+      <fieldset className="recruit-fields" disabled={isSubmitting}>
+        <div className="recruit-kind" role="group" aria-label="猫咪类型">
+          <button type="button" aria-pressed={!isCustom} onClick={() => setCustom(false)}>
+            预设猫咪
+          </button>
+          <button type="button" aria-pressed={isCustom} onClick={() => setCustom(true)}>
+            自定义猫咪
           </button>
         </div>
-      )}
+        {isCustom ? (
+          <div className="custom-cat-profile">
+            <label className="custom-avatar-upload">
+              {profile.customAvatar ? (
+                <Avatar preset={profile.avatar} customAvatar={profile.customAvatar} size="large" />
+              ) : (
+                <Upload size={28} />
+              )}
+              <span>
+                {isReadingAvatar
+                  ? '正在处理图片…'
+                  : profile.customAvatar
+                    ? '更换头像'
+                    : '上传猫咪头像'}
+              </span>
+              <small>PNG、JPEG 或 WebP，最大 4 MiB</small>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                aria-label="上传猫咪头像"
+                disabled={isReadingAvatar}
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  event.target.value = ''
+                  if (!file) return
+                  setReadingAvatar(true)
+                  setError('')
+                  void createCustomAvatar(file)
+                    .then((customAvatar) => setProfile((current) => ({ ...current, customAvatar })))
+                    .catch((failure: Error) => setError(failure.message))
+                    .finally(() => setReadingAvatar(false))
+                }}
+              />
+            </label>
+            <label>
+              猫咪介绍
+              <textarea
+                maxLength={120}
+                rows={3}
+                placeholder="介绍它的性格、擅长的事情，或你希望它怎样与你相处"
+                value={profile.description ?? ''}
+                onChange={(event) => setProfile({ ...profile, description: event.target.value })}
+              />
+            </label>
+          </div>
+        ) : (
+          <div className="avatar-picker">
+            <div className="avatar-options" role="group" aria-label="预设猫咪头像">
+              {CAT_AVATARS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className="avatar-option"
+                  onClick={() => setProfile({ ...profile, avatar: preset.id })}
+                  aria-label={preset.name}
+                  aria-pressed={profile.avatar === preset.id}
+                >
+                  <Avatar preset={preset.id} />
+                  <span>{preset.name}</span>
+                  {profile.avatar === preset.id && (
+                    <Check className="avatar-option-check" size={11} />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <label>
+          助手名称
+          <input
+            autoFocus
+            value={profile.name}
+            maxLength={24}
+            placeholder="例如：灵感搭档"
+            onChange={(event) => setProfile({ ...profile, name: event.target.value })}
+            required
+          />
+        </label>
+        <div className="recruit-selects">
+          <div className="recruit-field">
+            <span>分组</span>
+            <Select
+              label="分组"
+              value={profile.group}
+              onChange={(group) => setProfile({ ...profile, group })}
+              options={[...new Set(['未分组', ...groups])].map((group) => ({
+                value: group,
+                label: group,
+              }))}
+            />
+          </div>
+        </div>
+      </fieldset>
       {error && (
         <p role="alert" className="form-error">
           {error}
         </p>
       )}
-      <button
-        className="primary-button"
-        type="submit"
-        disabled={modelOptions.length === 0 || isReadingAvatar}
-      >
-        招聘猫咪
+      <button className="primary-button" type="submit" disabled={isReadingAvatar || isSubmitting}>
+        {isSubmitting ? '正在招聘…' : '招聘猫咪'}
       </button>
       <p className="form-footnote">在对话中一起明确分工，猫咪会逐渐记住你的偏好和工作习惯。</p>
     </form>
   )
 }
 
-/** 创建本地助手；验证错误保留表单输入，成功后由父组件关闭弹窗。 */
+/** 创建服务端助手；等待回执期间保持弹窗，失败时保留输入与重试标识。 */
 export function RecruitCatDialog({
   onClose,
   ...props
 }: RecruitCatFormProps & { onClose: () => void }) {
+  const [isPending, setPending] = useState(false)
   return (
-    <Dialog title="招聘猫咪" variant="recruit" onClose={onClose}>
-      <RecruitCatForm {...props} />
+    <Dialog title="招聘猫咪" variant="recruit" onClose={onClose} isDismissible={!isPending}>
+      <RecruitCatForm {...props} onPendingChange={setPending} />
     </Dialog>
   )
 }
@@ -215,7 +204,7 @@ export function FirstCatPage(props: RecruitCatFormProps) {
   )
 }
 
-/** 展示工作空间概况，和独立的外观及模型设置入口分开。 */
+/** 展示工作空间概况，和独立的外观及模型策略入口分开。 */
 export function WorkspaceDialog({
   workspace,
   hiddenAgents,
@@ -260,7 +249,7 @@ export function WorkspaceDialog({
         <span className={`connection-dot connection-dot--${connectionStatus}`} />
         <div>
           <strong>服务端连接</strong>
-          <p>助手、消息和模型设置由服务保存。</p>
+          <p>助手、消息和模型策略由服务管理。</p>
         </div>
         <span>{connectionStatus === 'connected' ? '已连接' : '连接异常'}</span>
       </div>

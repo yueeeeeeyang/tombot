@@ -37,52 +37,6 @@
   color: var(--text);
 }
 
-.session-card.session-card--wide {
-  width: min(480px, 100%);
-}
-
-/* 初始化页把设置行收成和连接页一样的纵向表单。 */
-.session-card .setting-row {
-  flex-direction: column;
-  align-items: stretch;
-  justify-content: flex-start;
-  gap: 6px;
-  min-height: 0;
-  padding: 0;
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-.session-card .setting-text-input,
-.session-card .setting-row > .custom-select,
-.session-card .provider-kind {
-  width: 100%;
-  max-width: none;
-}
-.session-card .setting-text-input {
-  height: 36px;
-  border-radius: 10px;
-  font-size: 14px;
-  color: var(--text);
-}
-.session-card .select-trigger {
-  min-height: 36px;
-  border-radius: 10px;
-}
-.session-card .provider-kind button {
-  min-height: 36px;
-  border-radius: 10px;
-}
-.session-card .provider-fetch {
-  width: 100%;
-  min-height: 36px;
-  border-radius: 10px;
-}
-.session-card .setting-note,
-.session-card .setting-error {
-  margin: 0;
-  text-align: center;
-}
-
 /* 招聘第一只猫咪是整页，不再套卡片边框。表单控件仍不能拖动窗口。 */
 .session-page,
 .session-page * {
@@ -149,6 +103,42 @@
 
 .session-card .form-error {
   text-align: left;
+}
+
+.session-server {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.session-server-address {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.session-server-address strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.session-server button {
+  flex: none;
+}
+
+.session-certificate {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .session-progress {

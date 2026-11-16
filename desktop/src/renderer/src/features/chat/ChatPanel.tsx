@@ -20,6 +20,9 @@ type ChatPanelProps = {
   isBlocked: boolean
   workSummary?: string
   pendingMessageId?: string
+  hasEarlierMessages?: boolean
+  isLoadingEarlier?: boolean
+  onLoadEarlier?: () => void
   onDraft: (draft: string) => void
   onSave: (replyToId?: string, attachments?: MessageAttachment[]) => boolean
   onDelete: (messageId: string) => void
@@ -41,6 +44,9 @@ export function ChatPanel({
   isBlocked,
   workSummary,
   pendingMessageId,
+  hasEarlierMessages,
+  isLoadingEarlier,
+  onLoadEarlier,
   onDraft,
   onSave,
   onDelete,
@@ -79,11 +85,12 @@ export function ChatPanel({
     ? agent.messages.find((message) => message.id === menu.messageId)
     : undefined
   const now = new Date()
+  const lastMessageId = agent.messages.at(-1)?.id
 
   useEffect(() => () => clearTimeout(highlightTimer.current), [])
   useEffect(() => {
     messagesEnd.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
-  }, [agent.id, agent.messages.length])
+  }, [agent.id, lastMessageId])
   useEffect(() => {
     if (composer.current) {
       composer.current.style.height = 'auto'
@@ -120,13 +127,7 @@ export function ChatPanel({
     }
   }
   function submitDraft(): void {
-    if (
-      (!agent.draft.trim() && pendingAttachments.length === 0) ||
-      uploading.current ||
-      isBlocked ||
-      workSummary !== undefined ||
-      pendingMessageId !== undefined
-    )
+    if ((!agent.draft.trim() && pendingAttachments.length === 0) || uploading.current || isBlocked)
       return
     if (onSave(replyMessage?.id, pendingAttachments)) {
       setPendingAttachments([])
@@ -167,6 +168,16 @@ export function ChatPanel({
       </header>
       <section className="messages-scroll" aria-label={`与${agent.name}的会话`}>
         <div className="conversation">
+          {hasEarlierMessages && (
+            <button
+              type="button"
+              className="text-button"
+              disabled={isLoadingEarlier}
+              onClick={onLoadEarlier}
+            >
+              {isLoadingEarlier ? '正在加载…' : '加载更早消息'}
+            </button>
+          )}
           <div className="saved-messages" role="log" aria-label="消息" aria-live="polite">
             {agent.messages.map((message, index) => {
               const label = messageTimeSeparator(
@@ -338,11 +349,7 @@ export function ChatPanel({
             className="composer-send"
             type="submit"
             disabled={
-              isUploading ||
-              isBlocked ||
-              workSummary !== undefined ||
-              pendingMessageId !== undefined ||
-              (!agent.draft.trim() && pendingAttachments.length === 0)
+              isUploading || isBlocked || (!agent.draft.trim() && pendingAttachments.length === 0)
             }
             aria-label="发送"
             title="发送"

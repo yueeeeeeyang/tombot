@@ -92,14 +92,26 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 			if pin != fingerprint {
 				return ErrUnauthorized
 			}
-			if url != claim.URL || imageID != claim.Registration.ImageID {
+			if url != claim.URL {
 				return ErrConflict
 			}
-			_, err := catalog.RegisterInTransaction(ctx, tx, claim.Registration, requestID)
-			return err
+			if imageID != claim.Registration.ImageID {
+				if claim.Registration.PreviousImageID != imageID {
+					return ErrConflict
+				}
+				if err := catalog.UpgradeImageInTransaction(ctx, tx, claim.Registration); err != nil {
+					return err
+				}
+				_, err := tx.ExecContext(ctx, `UPDATE tombot.node_connections SET image_id=$2 WHERE node_id=$1`, claim.NodeID, claim.Registration.ImageID)
+				return err
+			}
+			return catalog.ReconnectInTransaction(ctx, tx, claim.Registration)
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		if claim.Registration.PreviousImageID != "" {
+			return ErrConflict
 		}
 		raw, err := parseToken(token)
 		if err != nil {

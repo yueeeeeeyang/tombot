@@ -135,6 +135,15 @@ func (service *Service) issueTokens(ctx context.Context, transaction *sql.Tx, su
 	if err != nil {
 		return err
 	}
+	if session.Principal.Scope == "web" {
+		// 网页使用只存于 HttpOnly Cookie 的独立会话，不向页面签发续期凭据。
+		// 绝对有效期沿用部署会话配置，每次访问仍复验账户、设备及撤销状态。
+		session.AccessToken = Credential(access)
+		session.AccessExpiresAt = session.ExpiresAt
+		_, err = transaction.ExecContext(ctx, subject.render(`INSERT INTO {tokens}({owner},id,session_id,kind,token_digest,expires_at)
+			VALUES($1,$2,$3,'access',$4,$5)`), session.Principal.UserID, ids.New(), session.Principal.SessionID, digest(access), session.ExpiresAt)
+		return err
+	}
 	refresh, err := secure.Token()
 	if err != nil {
 		return err

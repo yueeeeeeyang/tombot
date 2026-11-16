@@ -173,7 +173,7 @@ func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) err
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrInvalidCredentials, ErrInvalidSession, ErrInvalidActivation, ErrRateLimited, ErrForbidden, ErrVerificationRequired, ErrAdministratorExists, ErrDeviceLimit, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrInvalidCredentials, ErrInvalidSession, ErrInvalidActivation, ErrInvalidAuthorization, ErrAuthorizationDenied, ErrRateLimited, ErrForbidden, ErrVerificationRequired, ErrAdministratorExists, ErrDeviceLimit, context.Canceled, context.DeadlineExceeded} {
 		// 组合错误可能还包含回滚失败，不能只提取其中的业务拒绝而丢弃基础设施故障。
 		if err == known {
 			return known
@@ -241,5 +241,5 @@ func validDevice(name, platform, scope string) bool {
 	if !utf8.ValidString(name) || strings.TrimSpace(name) == "" || utf8.RuneCountInString(name) > 120 || strings.ContainsAny(name, "\r\n\x00") {
 		return false
 	}
-	return scope == "admin" && platform == "web" || scope == "desktop" && (platform == "macos" || platform == "windows" || platform == "linux")
+	return (scope == "admin" || scope == "web") && platform == "web" || scope == "desktop" && (platform == "macos" || platform == "windows" || platform == "linux")
 }

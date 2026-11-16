@@ -4,11 +4,18 @@ import (
 	"crypto/tls"
 	"encoding/pem"
 	"errors"
-	"io.yueyang/tom/internal/nodeenrollment"
 	"log/slog"
 
 	"io.yueyang/tom/internal/nodeapi"
+	"io.yueyang/tom/internal/nodecatalog"
+	"io.yueyang/tom/internal/nodeenrollment"
 )
+
+// nodeManagement 组合接入凭据和目录管理，两个领域各自保留授权及事务规则。
+type nodeManagement struct {
+	*nodeenrollment.Bootstrap
+	*nodecatalog.Administration
+}
 
 // newNodeClient 构造跨主机节点客户端。
 // 证书由部署分别签发给 API 与节点，双方各自固定对方指纹，不依赖共享 CA 或同机内核身份。

@@ -1,5 +1,10 @@
-import type { StreamEvent, UserEvent } from '../renderer/src/features/desktop/backend'
+import type {
+  SessionSnapshot,
+  StreamEvent,
+  UserEvent,
+} from '../renderer/src/features/desktop/backend'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { NewAgent } from '../renderer/src/features/workspace/model'
 
 interface BootstrapStatus {
   phase: string
@@ -28,27 +33,47 @@ contextBridge.exposeInMainWorld(
     backend: Object.freeze({
       session: () => invoke('desktop:session'),
       connect: (serverUrl: string) => invoke('desktop:connect', serverUrl),
-      browserLogin: () => invoke('desktop:browser-login'),
+      browserLogin: async (): Promise<SessionSnapshot> => {
+        // contextBridge 传递异常时不保留自定义 code；状态必须用普通对象跨越隔离边界。
+        const result = (await ipcRenderer.invoke(
+          'desktop:browser-login',
+        )) as CallResult<SessionSnapshot>
+        if (result.ok) return result.value
+        return {
+          phase: result.code === 'SERVER_URL_MISSING' ? 'address' : 'login',
+          errorCode: result.code,
+          message: result.message,
+        }
+      },
+      trustServerCertificate: (address: string, fingerprint: string) =>
+        invoke('desktop:trust-server-certificate', address, fingerprint),
       logout: () => invoke('desktop:logout'),
       loadWorkspace: () => invoke('desktop:load-workspace'),
+      loadAgentConversation: (agentId: string, before?: number) =>
+        invoke('desktop:agent-conversation', agentId, before),
+      createAgent: (profile: NewAgent, requestId: string) =>
+        invoke('desktop:create-agent', profile, requestId),
       readClipboardFiles: () => invoke('desktop:clipboard-files'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
       watchEvents: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => {
         const listener = (_event: IpcRendererEvent, payload: UserEvent) => onEvent(payload)
         ipcRenderer.on('desktop:user-event', listener)
         let stopped = false
-        void invoke('desktop:watch-events').catch((error: Error) => {
+        const watchId = crypto.randomUUID()
+        void invoke('desktop:watch-events', watchId).catch((error: Error) => {
           // 订阅被动结束后不再回调；主动停止不算错误。
           if (!stopped) onError(error)
         })
         return () => {
           stopped = true
+          ipcRenderer.send('desktop:unwatch-events', watchId)
           ipcRenderer.removeListener('desktop:user-event', listener)
         }
       },
       deliverMessage: (
         agentId: string,
         content: string,
+        clientRequestId: string,
         onEvent?: (event: StreamEvent) => void,
       ) => {
         const requestId = crypto.randomUUID()
@@ -59,9 +84,11 @@ contextBridge.exposeInMainWorld(
           if (payload.requestId === requestId) onEvent?.(payload)
         }
         ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:deliver', { agentId, content, requestId }).finally(() => {
-          ipcRenderer.removeListener('desktop:stream-event', listener)
-        })
+        return invoke('desktop:deliver', { agentId, content, requestId, clientRequestId }).finally(
+          () => {
+            ipcRenderer.removeListener('desktop:stream-event', listener)
+          },
+        )
       },
       openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
       startBootstrap: () => invoke('desktop:bootstrap'),
@@ -132,12 +159,6 @@ contextBridge.exposeInMainWorld(
       toggleReaction: (messageId: string, emoji: string) =>
         invoke('desktop:reaction', { messageId, emoji }),
       ensureAgent: (agentId: string) => invoke('desktop:ensure-agent', agentId),
-      loadSettings: () => invoke('desktop:load-settings'),
-      listBuiltinProviders: () => invoke('desktop:model-providers'),
-      listProviderModels: (providerId: string, apiKey: string) =>
-        invoke('desktop:provider-models', { providerId, apiKey }),
-      saveSettings: (draft: unknown, apiKey: string) =>
-        invoke('desktop:save-settings', { draft, apiKey }),
     }),
   }),
 )

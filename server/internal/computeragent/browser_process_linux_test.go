@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
+	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/processgroup"
@@ -80,6 +81,27 @@ func TestBrowserProcessStartupFailures(t *testing.T) {
 				t.Fatal("失败后启动授权仍然有效")
 			}
 		})
+	}
+}
+
+func TestBrowserProcessReportsKnownChildFailure(t *testing.T) {
+	request, options, _ := browserFixture(t)
+	process, err := newBrowserProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	prepare := func(taskprocess.BrowserRequest, *os.File, *os.File, *os.File, *os.File) (*exec.Cmd, io.Closer, error) {
+		return exec.Command("/bin/sh", "-c", "printf '%s' 'No usable sandbox!' >&2; exit 1"), nil, nil
+	}
+	service, err := process.start(ctx, request, nil, options, prepare)
+	var failure *browserprobe.Failure
+	if !errors.As(err, &failure) || failure.Code != "browser_start_sandbox_failed" || service != nil {
+		t.Fatal("子进程失败分类丢失", err)
+	}
+	if err := process.wait(ctx); err == nil || !process.finished() {
+		t.Fatal("子进程失败未确认回收", err)
 	}
 }
 

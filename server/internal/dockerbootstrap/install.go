@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"io.yueyang/tom/internal/linuxhost"
 )
 
 // Report 仅证明 Docker 基础能力和宿主磁盘工具已核验；真实挂载、配额、镜像及进程探针另由节点执行。
@@ -22,6 +25,7 @@ type Report struct {
 }
 
 type installer struct {
+	release        linuxhost.Release
 	host           host
 	manifest       Manifest
 	logger         *slog.Logger
@@ -113,9 +117,9 @@ func (installation *installer) run(ctx context.Context) (report Report, result e
 		if err != nil {
 			return report, err
 		}
-		match := regexp.MustCompile(`^Docker version ([0-9]+\.[0-9]+\.[0-9]+),`).FindStringSubmatch(string(output))
-		if len(match) != 2 || !installation.manifest.allows(match[1]) {
-			return report, errors.New("已有 Docker 版本不在受测范围，不自动覆盖或卸载")
+		match := regexp.MustCompile(`^Docker version ([^,\n]{1,100}),`).FindStringSubmatch(string(output))
+		if len(match) != 2 || !supportsDockerCLI(match[1]) {
+			return report, errors.New("已有 Docker 不支持节点所需 API，请升级 Docker；未自动覆盖或卸载")
 		}
 	}
 	missing, err := installation.missingHostPackages(ctx)
@@ -139,7 +143,7 @@ func (installation *installer) run(ctx context.Context) (report Report, result e
 		if err = installation.step("installing_engine"); err != nil {
 			return report, err
 		}
-		if _, err = installation.apt(ctx, "install", "--yes", "--no-remove", "--no-install-recommends", "docker-ce="+installation.manifest.EnginePackageVersion, "docker-ce-cli="+installation.manifest.CLIPackageVersion, "containerd.io="+installation.manifest.ContainerdPackageVersion); err != nil {
+		if err = installation.installPackages(ctx, "docker-ce", "docker-ce-cli", "containerd.io"); err != nil {
 			return report, err
 		}
 	}
@@ -163,8 +167,15 @@ func (installation *installer) run(ctx context.Context) (report Report, result e
 	if err != nil {
 		return report, err
 	}
-	report, err = verifyEngine(output, installation.manifest)
+	report, err = verifyEngine(output)
 	if err != nil {
+		return report, err
+	}
+	api, err := installation.command(ctx, "usr/bin/docker", "--host", "unix://"+SocketPath, "version", "--format", "{{json .Server}}")
+	if err != nil {
+		return report, err
+	}
+	if err := verifyDockerAPI(api); err != nil {
 		return report, err
 	}
 	report.HostPackages = packages
@@ -194,6 +205,32 @@ func (installation *installer) executable(relative string) (bool, error) {
 	return true, nil
 }
 
+// packageManagerExecutable 允许发行版自带的同目录入口链接，仍核验链接所有者和实际程序。
+// DNF 常以 dnf -> dnf-3 或 dnf5 发布；不接受跨目录、链接链或可写目标。
+func (installation *installer) packageManagerExecutable() (bool, error) {
+	relative := strings.TrimPrefix(installation.release.Manager(), "/")
+	path := installation.host.path(relative)
+	if err := installation.host.checkParents(filepath.Dir(path)); err != nil {
+		return false, err
+	}
+	stat, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if stat.Mode()&os.ModeSymlink == 0 {
+		return installation.executable(relative)
+	}
+	owner, ok := stat.Sys().(*syscall.Stat_t)
+	target, err := os.Readlink(path)
+	if err != nil || !ok || owner.Uid != installation.host.owner || target == "." || target == ".." || filepath.Base(target) != target {
+		return false, errors.New("系统包管理器链接所有者或目标无效")
+	}
+	return installation.executable(filepath.Join(filepath.Dir(relative), target))
+}
+
 func (installation *installer) preflight() error {
 	releasePath := installation.host.path("etc/os-release")
 	stat, err := os.Lstat(releasePath)
@@ -211,15 +248,25 @@ func (installation *installer) preflight() error {
 	if err != nil {
 		return err
 	}
-	if err = ubuntuRelease(encoded); err != nil {
+	if installation.release, err = linuxhost.ParseRelease(encoded); err != nil {
 		return err
 	}
 	manager, err := os.Stat(installation.host.path("run/systemd/system"))
 	if err != nil || !manager.IsDir() {
 		return errors.New("Docker 自动引导要求 systemd 系统服务环境")
 	}
-	for _, program := range []string{"usr/bin/apt-get", "usr/bin/dpkg-query", "usr/bin/systemctl"} {
-		exists, err := installation.executable(program)
+	query := "usr/bin/dpkg-query"
+	if installation.release.Family == "dnf" {
+		query = "usr/bin/rpm"
+	}
+	for _, program := range []string{strings.TrimPrefix(installation.release.Manager(), "/"), query, "usr/bin/systemctl"} {
+		var exists bool
+		var err error
+		if program == strings.TrimPrefix(installation.release.Manager(), "/") {
+			exists, err = installation.packageManagerExecutable()
+		} else {
+			exists, err = installation.executable(program)
+		}
 		if err != nil {
 			return err
 		}
@@ -270,6 +317,21 @@ func (installation *installer) apt(ctx context.Context, arguments ...string) ([]
 }
 
 func (installation *installer) conflicts(ctx context.Context) error {
+	if installation.release.Family == "dnf" {
+		for _, name := range []string{"docker", "docker-client", "docker-common", "docker-engine", "podman-docker", "podman", "runc"} {
+			result, err := installation.host.run(ctx, installation.host.path("usr/bin/rpm"), "-q", "--qf", "%{NAME}\n", name)
+			if err != nil {
+				return err
+			}
+			if result.exitCode == 0 {
+				return errors.New("发现冲突容器软件包：" + name + "；未自动卸载")
+			}
+			if result.exitCode != 1 || strings.TrimSpace(string(result.output)) != "package "+name+" is not installed" {
+				return errors.New("读取容器软件包状态失败")
+			}
+		}
+		return nil
+	}
 	result, err := installation.host.run(ctx, installation.host.path("usr/bin/dpkg-query"), "--show", "--showformat=${binary:Package}\t${db:Status-Status}\n", "docker.io", "docker-compose", "docker-compose-v2", "docker-doc", "docker-buildx", "podman-docker", "containerd", "runc")
 	if err != nil {
 		return err
@@ -286,7 +348,7 @@ func (installation *installer) conflicts(ctx context.Context) error {
 	return nil
 }
 
-func verifyEngine(encoded []byte, manifest Manifest) (Report, error) {
+func verifyEngine(encoded []byte) (Report, error) {
 	var engine struct {
 		ServerVersion   string
 		OSType          string
@@ -299,7 +361,7 @@ func verifyEngine(encoded []byte, manifest Manifest) (Report, error) {
 	if err := json.Unmarshal(encoded, &engine); err != nil {
 		return Report{}, errors.New("Docker 服务状态响应无效")
 	}
-	if !manifest.allows(engine.ServerVersion) || engine.OSType != "linux" || engine.CgroupVersion != "2" || !engine.MemoryLimit || !engine.PidsLimit || !engine.CPUCfsQuota {
+	if !supportsDockerCLI(engine.ServerVersion) || engine.OSType != "linux" || engine.CgroupVersion != "2" || !engine.MemoryLimit || !engine.PidsLimit || !engine.CPUCfsQuota {
 		return Report{}, errors.New("Docker 版本、cgroup 或资源限制能力不符合要求")
 	}
 	seccomp := false
@@ -312,4 +374,49 @@ func verifyEngine(encoded []byte, manifest Manifest) (Report, error) {
 		return Report{}, errors.New("Docker 默认系统调用过滤未启用")
 	}
 	return Report{Version: engine.ServerVersion, OperatingSystem: engine.OSType, CgroupVersion: engine.CgroupVersion}, nil
+}
+
+// installPackages 使用本发行版签名仓库；不使用跨发行版包、不移除冲突工作负载。
+func (installation *installer) installPackages(ctx context.Context, packages ...string) error {
+	if installation.release.Family == "apt" {
+		if _, err := installation.apt(ctx, "update"); err != nil {
+			return err
+		}
+		_, err := installation.apt(ctx, append([]string{"install", "--yes", "--no-remove", "--no-upgrade", "--no-install-recommends"}, packages...)...)
+		return err
+	}
+	_, err := installation.command(ctx, "usr/bin/dnf", append([]string{"--assumeyes", "--setopt=timeout=30", "--setopt=retries=2", "--setopt=install_weak_deps=False", "install"}, packages...)...)
+	return err
+}
+
+// supportsDockerCLI 只要求包含卷子目录 API 的引擎代际，实际服务的 API 范围另行核对。
+func supportsDockerCLI(version string) bool {
+	parts := regexp.MustCompile(`^([0-9]+)\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.+~-]+)?$`).FindStringSubmatch(version)
+	if parts == nil {
+		return false
+	}
+	major, err := strconv.Atoi(parts[1])
+	return err == nil && major >= 27
+}
+
+func verifyDockerAPI(encoded []byte) error {
+	var version struct {
+		APIVersion    string
+		MinAPIVersion string
+	}
+	if json.Unmarshal(encoded, &version) != nil {
+		return errors.New("Docker API 能力响应无效")
+	}
+	minor := func(value string) (int, error) {
+		if !regexp.MustCompile(`^1\.[0-9]+$`).MatchString(value) {
+			return 0, errors.New("API 版本无效")
+		}
+		return strconv.Atoi(strings.TrimPrefix(value, "1."))
+	}
+	maximum, maxErr := minor(version.APIVersion)
+	minimum, minErr := minor(version.MinAPIVersion)
+	if maxErr != nil || minErr != nil || minimum > 47 || maximum < 47 {
+		return errors.New("Docker 服务不支持节点所需 Engine API 1.47")
+	}
+	return nil
 }

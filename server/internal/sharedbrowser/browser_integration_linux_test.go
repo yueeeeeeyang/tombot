@@ -38,6 +38,10 @@ type liveBrowser struct {
 
 // launchTestBrowser 在临时容器中直接降权；生产独立服务 cgroup 与监督器接入另行验收。
 func launchTestBrowser(t *testing.T, profile string, options Options) *liveBrowser {
+	return launchTestBrowserWithArguments(t, profile, options, nil)
+}
+
+func launchTestBrowserWithArguments(t *testing.T, profile string, options Options, arguments []string) *liveBrowser {
 	t.Helper()
 	if os.Geteuid() != 0 || os.Getenv("TOM_SHARED_BROWSER_TEST") != "1" {
 		t.Fatal("必须在专用受限容器内验证共享浏览器")
@@ -61,6 +65,7 @@ func launchTestBrowser(t *testing.T, profile string, options Options) *liveBrows
 		t.Fatal(err)
 	}
 	command := exec.Command("/usr/bin/google-chrome", "--headless", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-gpu", "--remote-debugging-pipe", "--user-data-dir="+profile, "about:blank")
+	command.Args = append(command.Args, arguments...)
 	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=zh_CN.UTF-8", "HOME=" + filepath.Dir(profile), "XDG_RUNTIME_DIR=" + filepath.Dir(profile)}
 	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: computer.BrowserUID, Gid: computer.DesktopSharedGID}, Setpgid: true}
 	command.ExtraFiles = []*os.File{readCommand, writeResponse}

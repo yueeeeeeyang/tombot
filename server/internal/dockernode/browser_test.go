@@ -11,12 +11,106 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
+	"io.yueyang/tom/internal/browserprobe"
+	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/processgroup"
 )
 
-type fakeComputerBrowsers struct{ ensureError, retireError error }
+type fakeComputerBrowsers struct{ ensureError, retireError, checkError error }
+
+func TestNodeBrowserStartupKeepsSpecificFailureAndClosesOriginalGrant(t *testing.T) {
+	for _, code := range []string{"browser_start_membership_failed", "browser_start_sandbox_failed", "unknown"} {
+		t.Run(code, func(t *testing.T) {
+			_, browsers, groups, resource, current, actions := newBrowserFixture(t)
+			invoke := browsers.invoke
+			browsers.invoke = func(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
+				observed, err := invoke(ctx, resource, grant, action, files)
+				if action == "start" {
+					return computeragent.BrowserObservation{}, &browserprobe.Failure{Code: code}
+				}
+				return observed, err
+			}
+			err := browsers.ensure(t.Context(), resource, current)
+			want := code
+			if code == "unknown" {
+				want = "browser_start_unconfirmed"
+			}
+			var failed *computer.Failure
+			if !errors.As(err, &failed) || failed.Code != want {
+				t.Fatal("启动分类丢失", err)
+			}
+			if len(groups.created) != 1 || len(groups.drained) != 1 || groups.created[0] != groups.drained[0] || len(*actions) != 2 || (*actions)[1] != "close" {
+				t.Fatal("未回收原授权或重放启动", actions)
+			}
+		})
+	}
+}
+
+func TestNodeBrowserReadsStartupDiagnosticAfterAgentExit(t *testing.T) {
+	for _, scenario := range []string{"当前失败", "关闭后失败", "不同授权", "未知分类", "活动记录", "无记录", "符号链接", "权限漂移"} {
+		t.Run(scenario, func(t *testing.T) {
+			f, browsers, groups, resource, current, actions := newBrowserFixture(t)
+			if err := f.node.configureAgent(resource, true); err != nil {
+				t.Fatal(err)
+			}
+			invoke := browsers.invoke
+			browsers.invoke = func(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
+				observed, err := invoke(ctx, resource, grant, action, files)
+				if action != "start" {
+					return observed, err
+				}
+				snapshot := computeragent.BrowserSnapshot{Version: 1, Grant: grant, Phase: "consumed", StartupError: "browser_start_membership_failed"}
+				switch scenario {
+				case "关闭后失败":
+					snapshot.Phase = "closed"
+				case "不同授权":
+					snapshot.Grant.Request.Group.ID = ids.New()
+				case "未知分类":
+					snapshot.StartupError = "不应返回的诊断内容"
+				case "活动记录":
+					snapshot.Phase = "active"
+				}
+				if scenario != "无记录" {
+					encoded, err := agentchannel.Encode(snapshot)
+					if err != nil {
+						t.Fatal(err)
+					}
+					path := filepath.Join(resource.ControlPath, "browser.json")
+					if err := os.WriteFile(path, encoded, 0600); err != nil {
+						t.Fatal(err)
+					}
+					if scenario == "符号链接" {
+						if err := os.Rename(path, path+".original"); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Symlink(path+".original", path); err != nil {
+							t.Fatal(err)
+						}
+					} else if scenario == "权限漂移" {
+						if err := os.Chmod(path, 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				return computeragent.BrowserObservation{}, errors.New("代理已退出，启动回执丢失")
+			}
+			err := browsers.ensure(t.Context(), resource, current)
+			want := "browser_start_unconfirmed"
+			if scenario == "当前失败" || scenario == "关闭后失败" {
+				want = "browser_start_membership_failed"
+			}
+			var failed *computer.Failure
+			if !errors.As(err, &failed) || failed.Code != want {
+				t.Fatal("未按原授权读取可信启动诊断", err)
+			}
+			if len(groups.created) != 1 || len(groups.drained) != 1 || groups.created[0] != groups.drained[0] || len(*actions) != 2 || (*actions)[1] != "close" {
+				t.Fatal("读取诊断改变了原实例清理或重放启动", actions)
+			}
+		})
+	}
+}
 
 func (b *fakeComputerBrowsers) ensure(context.Context, Resource, container) error {
 	return b.ensureError
@@ -31,7 +125,7 @@ func testBrowserOptions() BrowserOptions {
 func newBrowserFixture(t *testing.T) (fixture, *nodeBrowsers, *probeGroups, Resource, container, *[]string) {
 	t.Helper()
 	f, probes, groups, resource, current := newProbeFixture(t)
-	browsers := &nodeBrowsers{node: f.node, store: f.node.journal, groups: groups, options: testBrowserOptions(), logger: sessionLogger(), locate: probes.locate, stamp: probes.stamp}
+	browsers := &nodeBrowsers{node: f.node, store: f.node.journal, groups: groups, options: testBrowserOptions(), logger: sessionLogger(), locate: probes.locate}
 	actions := []string{}
 	browsers.invoke = func(ctx context.Context, _ Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
 		actions = append(actions, action)
@@ -548,3 +642,5 @@ func TestNodeBrowserIsolationFailureAndContainerDriftPreserveBarrier(t *testing.
 		})
 	}
 }
+
+func (b *fakeComputerBrowsers) check(context.Context, Resource, container) error { return b.checkError }

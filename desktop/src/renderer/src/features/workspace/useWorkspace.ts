@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getBackend,
   type DeliveryResult,
@@ -7,7 +7,14 @@ import {
   type ServerBubble,
   type StreamEvent,
 } from '../desktop/backend'
-import { emptyWorkspace, type AppWorkspace, type ChatMessage } from './model'
+import {
+  addAgent,
+  emptyWorkspace,
+  type Agent,
+  type NewAgent,
+  type AppWorkspace,
+  type ChatMessage,
+} from './model'
 import { isReactionEmoji } from './reactions'
 
 interface WorkspaceState {
@@ -21,6 +28,7 @@ interface WorkspaceState {
 function toChatMessage(bubble: ServerBubble): ChatMessage {
   return {
     id: bubble.id,
+    sequence: bubble.sequence,
     role: bubble.role,
     content: bubble.content,
     createdAt: bubble.createdAt,
@@ -55,6 +63,11 @@ export function mergeIncoming(local: AppWorkspace, incoming: IncomingMessages): 
         if (index < 0) messages.push(message)
         else messages[index] = message
       }
+      messages.sort((left, right) =>
+        left.sequence && right.sequence
+          ? left.sequence - right.sequence
+          : left.createdAt.localeCompare(right.createdAt),
+      )
       return { ...agent, messages }
     }),
   }
@@ -68,7 +81,10 @@ function readInitial(backend: DesktopBackend): WorkspaceState {
 }
 
 /** 管理工作空间。服务是权威副本；写入失败时保留内存内容并提示。 */
-export function useWorkspace() {
+export function useWorkspace(
+  receiveActivity?: (source: string, event: StreamEvent) => void,
+  clearActivity?: (source: string) => void,
+) {
   const backend = getBackend()
   const [initial] = useState(() => readInitial(backend))
   const [workspace, setWorkspace] = useState(initial.workspace)
@@ -108,6 +124,160 @@ export function useWorkspace() {
     }
   }, [backend, initial.ready])
 
+  const [historyPages, setHistoryPages] = useState<
+    Record<string, { before: number; hasMore: boolean; loading: boolean }>
+  >({})
+  const paging = useRef(new Set<string>())
+  const refreshing = useRef(new Map<string, { dirty: boolean }>())
+  const refreshConversation = useCallback(
+    async (agentId: string) => {
+      if (!backend.loadAgentConversation || !agentId) return
+      const active = refreshing.current.get(agentId)
+      if (active) {
+        active.dirty = true
+        return
+      }
+      const request = { dirty: false }
+      refreshing.current.set(agentId, request)
+      try {
+        do {
+          request.dirty = false
+          const page = await backend.loadAgentConversation(agentId)
+          const firstSequence = page.messages[0]?.sequence ?? 0
+          setHistoryPages((previous) => {
+            const old = previous[agentId]
+            if (old && old.before > 0 && (!firstSequence || firstSequence > old.before))
+              return previous
+            return {
+              ...previous,
+              [agentId]: {
+                before: firstSequence,
+                hasMore: page.hasMore,
+                loading: old?.loading ?? false,
+              },
+            }
+          })
+          current.current = mergeIncoming(current.current, [
+            { id: agentId, messages: page.messages.map(toChatMessage) },
+          ])
+          setWorkspace(current.current)
+          const source = `server:${agentId}`
+          clearActivity?.(source)
+          for (const run of page.runs) {
+            receiveActivity?.(source, {
+              type: 'activity',
+              text: '',
+              botId: agentId,
+              runId: run.id,
+              isWorking: true,
+            })
+            const summary = run.progress_summary || (run.status === 'queued' ? '等待处理' : '')
+            if (summary)
+              receiveActivity?.(source, {
+                type: 'process',
+                text: summary,
+                botId: agentId,
+                runId: run.id,
+              })
+          }
+        } while (request.dirty)
+      } catch (failure) {
+        setError((failure as Error).message)
+      } finally {
+        refreshing.current.delete(agentId)
+      }
+    },
+    [backend, clearActivity, receiveActivity],
+  )
+
+  useEffect(() => {
+    if (!ready || isBlocked || !backend.loadAgentConversation) return
+    // 快速切换会话时取消尚未发出的首屏请求。
+    const initialLoad = setTimeout(() => {
+      void refreshConversation(workspace.activeAgentId)
+    }, 0)
+    // 断线与服务重启后仍定期核对权威快照，事件用于缩短正常更新延迟。
+    const timer = setInterval(() => {
+      void refreshConversation(current.current.activeAgentId)
+    }, 10_000)
+    return () => {
+      clearTimeout(initialLoad)
+      clearInterval(timer)
+    }
+  }, [backend, ready, isBlocked, workspace.activeAgentId, refreshConversation])
+
+  useEffect(() => {
+    if (!ready || isBlocked || !backend.loadAgentConversation) return
+    return backend.watchEvents?.(
+      (event) => {
+        const botId = typeof event.payload.bot_id === 'string' ? event.payload.bot_id : ''
+        if (botId && event.kind.startsWith('run.')) {
+          const source = `server:${botId}`
+          receiveActivity?.(source, {
+            type: 'activity',
+            text: '',
+            botId,
+            runId: event.resource_id,
+            isWorking: event.kind !== 'run.finished',
+            isFinished: event.kind === 'run.finished',
+          })
+          if (event.kind === 'run.progress' && typeof event.payload.text === 'string') {
+            receiveActivity?.(source, {
+              type: 'process',
+              text: event.payload.text,
+              botId,
+              runId: event.resource_id,
+            })
+          }
+          if (event.kind === 'run.finished' && event.payload.status !== 'succeeded') {
+            setError('消息已接收，但本次任务未完成。请重试或联系管理员查看运行日志。')
+          }
+        }
+        if (
+          event.kind.startsWith('run.') ||
+          event.kind === 'message.created' ||
+          event.kind === 'workspace.refresh'
+        ) {
+          void refreshConversation(current.current.activeAgentId)
+        }
+      },
+      (failure) => setError(failure.message),
+    )
+  }, [backend, ready, isBlocked, receiveActivity, refreshConversation])
+
+  async function loadEarlier(agentId: string): Promise<void> {
+    const pageState = historyPages[agentId]
+    if (
+      !backend.loadAgentConversation ||
+      !pageState?.hasMore ||
+      !pageState.before ||
+      paging.current.has(agentId)
+    )
+      return
+    paging.current.add(agentId)
+    setHistoryPages((previous) => ({ ...previous, [agentId]: { ...pageState, loading: true } }))
+    try {
+      const page = await backend.loadAgentConversation(agentId, pageState.before)
+      current.current = mergeIncoming(current.current, [
+        { id: agentId, messages: page.messages.map(toChatMessage) },
+      ])
+      setWorkspace(current.current)
+      setHistoryPages((previous) => ({
+        ...previous,
+        [agentId]: {
+          before: page.messages[0]?.sequence ?? pageState.before,
+          hasMore: page.hasMore,
+          loading: false,
+        },
+      }))
+    } catch (failure) {
+      setError((failure as Error).message)
+      setHistoryPages((previous) => ({ ...previous, [agentId]: { ...pageState, loading: false } }))
+    } finally {
+      paging.current.delete(agentId)
+    }
+  }
+
   function enqueue<T>(task: () => Promise<T>): Promise<T> {
     pendingTasks.current += 1
     setSaveState('saving')
@@ -136,13 +306,27 @@ export function useWorkspace() {
   }
 
   function scheduleFlush(): void {
-    void enqueue(async () => {
-      try {
-        await flushLatest()
-      } catch (failure) {
-        setError((failure as Error).message)
-        throw failure
-      }
+    void enqueue(flushLatest).catch((failure: Error) => setError(failure.message))
+  }
+
+  /** 等待服务端创建成功，之后才加入侧栏；本地校验不能代替服务端创建。 */
+  function create(profile: NewAgent, requestId: string): Promise<string> {
+    return enqueue(async () => {
+      if (blocked.current) throw new Error(error || initial.error)
+      // 只校验输入与本机容量，绝不把请求标识当成机器人标识写入工作空间。
+      addAgent(current.current, profile, requestId)
+      const agent = await backend.createAgent(profile, requestId)
+      const select = (previous: AppWorkspace, created: Agent): AppWorkspace => ({
+        ...previous,
+        activeAgentId: created.id,
+        leadAgentId: previous.leadAgentId || created.id,
+        agents: [...previous.agents.filter((item) => item.id !== created.id), created],
+      })
+      await backend.saveWorkspace(select(current.current, agent))
+      // 等待期间其他会话仍可能收到消息或编辑草稿，因此在最新快照上合并。
+      current.current = select(current.current, agent)
+      setWorkspace(current.current)
+      return agent.id
     })
   }
 
@@ -175,12 +359,12 @@ export function useWorkspace() {
 
   /**
    * 把一条用户消息交给服务端执行。
-   * 服务端返回该会话的最新消息列表后整体替换本地记录：服务端才是权威副本，
-   * 本地未发送状态不能覆盖已经持久化的回合。
+   * 受理后按消息标识合并，保留同时新增的草稿和待发消息。
    */
   function deliver(
     agentId: string,
     content: string,
+    clientRequestId: string,
     onEvent?: (event: StreamEvent) => void,
   ): Promise<DeliveryResult> {
     return enqueue(async () => {
@@ -191,19 +375,31 @@ export function useWorkspace() {
           if (event.type === 'incoming' && event.incoming) receive(event.incoming)
           else onEvent?.(event)
         }
-        const result = await backend.deliverMessage(agentId, content, receiveEvent)
-        if (result.messages) {
-          const messages = result.messages.map(toChatMessage)
-          const merged: AppWorkspace = {
+        const result = await backend.deliverMessage(agentId, content, clientRequestId, receiveEvent)
+        if (result.acceptedMessageId || result.messages) {
+          const acceptedId = result.acceptedMessageId
+          current.current = {
             ...current.current,
-            agents: current.current.agents.map((agent) =>
-              agent.id === agentId ? { ...agent, messages } : agent,
-            ),
+            agents: current.current.agents.map((agent) => {
+              if (agent.id !== agentId) return agent
+              const alreadyReceived =
+                acceptedId && agent.messages.some((message) => message.id === acceptedId)
+              return {
+                ...agent,
+                messages: agent.messages.flatMap((message) => {
+                  if (message.id !== clientRequestId) return [message]
+                  if (alreadyReceived || result.messages) return []
+                  return [{ ...message, id: acceptedId!, status: 'sent' as const }]
+                }),
+              }
+            }),
           }
-          current.current = merged
-          setWorkspace(merged)
-          const again = backend.saveWorkspace(merged)
-          if (again) await again
+          current.current = mergeIncoming(current.current, [
+            { id: agentId, messages: (result.messages ?? []).map(toChatMessage) },
+          ])
+          setWorkspace(current.current)
+          if (backend.savesSynchronously) backend.saveWorkspace(current.current)
+          void refreshConversation(agentId)
         }
         return result
       } catch (failure) {
@@ -212,5 +408,20 @@ export function useWorkspace() {
     })
   }
 
-  return { workspace, error, isBlocked, ready, commit, deliver, receive }
+  return {
+    workspace,
+    error,
+    isBlocked,
+    ready,
+    commit,
+    create,
+    deliver,
+    receive,
+    historyPages,
+    loadEarlier,
+    hasUnsavedChanges: saveState === 'error',
+    dismissError: () => {
+      if (saveState !== 'error') setError('')
+    },
+  }
 }

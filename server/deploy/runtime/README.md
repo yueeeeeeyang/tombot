@@ -1,7 +1,5 @@
-# 节点宿主软件发布清单
+# 跨发行版宿主安装预算
 
-`ubuntu-24.04-amd64.json` 由发布者维护，随离线节点包写入 `node-release.json`，用户无需填写版本或仓库指纹。电脑镜像使用包内归档；此清单仅管理宿主 Docker、containerd、磁盘和挂载工具。
+`linux.json` 随离线节点包写入 `node-release.json`。清单版本 2 仅配置总超时和磁盘余量，不指定 Ubuntu 版本、Docker 补丁版本或系统工具包版本。amd64/arm64 使用同一预算，电脑镜像仍需与宿主架构匹配。
 
-当前清单在 2026-11-13 的隔离 Ubuntu 24.04 amd64 容器中通过官方 Docker 软件源和 Ubuntu 软件源完成精确版本安装及版本核对。官方源配置依据 [Docker Ubuntu 安装文档](https://docs.docker.com/engine/install/ubuntu/)。这项验证不等于原生 Linux 宿主的 systemd、内核、磁盘配额或 Docker daemon 验收。
-
-发布新版本时在目标架构的受支持宿主重新验证完整软件集合，再更新清单、运行回归测试和构建新安装包。禁止使用 `latest`、省略固定版本或在旧版本不可用时静默选择其他版本；软件源不可用或版本缺失时明确失败。已有安装的重试使用保存的配置快照，不随发布清单更新。升级和回滚须保留配套程序、配置、证书、节点身份及用户磁盘。
+`linuxhost` 按 `/etc/os-release` 选择 APT 或 DNF、软件包名称、Docker 官方仓库地址与签名指纹。安装结果通过真实包状态、工具权限、Docker API 和隔离能力确认。详细条件及旧安装迁移见[节点部署说明](../NODE.md)。

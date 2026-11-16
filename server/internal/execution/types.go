@@ -46,6 +46,7 @@ type Run struct {
 	Status             string     `json:"status"`
 	ErrorCode          string     `json:"error_code"`
 	ComputerWaitReason string     `json:"computer_wait_reason"`
+	ProgressSummary    string     `json:"progress_summary"`
 	CreatedAt          time.Time  `json:"created_at"`
 	StartedAt          *time.Time `json:"started_at"`
 	FinishedAt         *time.Time `json:"finished_at"`
@@ -67,12 +68,13 @@ type Lease struct {
 
 // Work 保存运行开始时固定的机器人设定与模型选择，以及有界上下文和已有操作结果。
 type Work struct {
-	Run              Run
-	Bot              bots.Spec
-	Selection        *modelregistry.Selection
-	Messages         []Message
-	Operations       []Operation
-	HistoryTruncated bool
+	Run               Run
+	Bot               bots.Spec
+	Selection         *modelregistry.Selection
+	Messages          []Message
+	Operations        []Operation
+	HistoryTruncated  bool
+	ContinuationAfter int64
 }
 type Operation struct {
 	ID            string          `json:"id"`

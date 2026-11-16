@@ -20,6 +20,7 @@
 | `GET /api/v2/conversations` | 分页读取所属用户会话目录 |
 | `GET /api/v2/conversations/{conversationID}` | 会话目录详情，不返回消息正文 |
 | `GET/POST /api/v2/conversations/{conversationID}/messages` | 分页消息或幂等受理单聊消息与持久任务 |
+| `GET /api/v2/conversations/{conversationID}/activity` | 当前活动运行及最近工作摘要，仅所属用户可读 |
 | `POST /api/v2/conversations/{conversationID}/read` | 按 `sequence` 推进已读位置，成功返回 `204` |
 | `GET /api/v2/runs/{runID}` | 当前用户的运行状态与固定错误码 |
 | `POST /api/v2/runs/{runID}/cancel` | 提交空对象请求取消，返回实际运行状态 |

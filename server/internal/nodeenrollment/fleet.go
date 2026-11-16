@@ -40,7 +40,12 @@ func (fleet *Fleet) Run(parent context.Context) error {
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	defer cancel()
-	known := map[string]struct{}{}
+	type worker struct {
+		imageID string
+		stop    context.CancelFunc
+		done    chan struct{}
+	}
+	known := map[string]worker{}
 	failures := make(chan error, fleet.maximum*2)
 	scan := func() error {
 		after := ""
@@ -56,8 +61,17 @@ func (fleet *Fleet) Run(parent context.Context) error {
 					return errors.New("节点目录排序无效")
 				}
 				after = endpoint.NodeID
-				if _, exists := known[endpoint.NodeID]; exists {
-					continue
+				if old, exists := known[endpoint.NodeID]; exists {
+					if old.imageID == endpoint.ImageID {
+						continue
+					}
+					old.stop()
+					select {
+					case <-old.done:
+						delete(known, endpoint.NodeID)
+					case <-ctx.Done():
+						return ctx.Err()
+					}
 				}
 				if len(known) >= fleet.maximum {
 					return ErrCapacity
@@ -76,17 +90,23 @@ func (fleet *Fleet) Run(parent context.Context) error {
 				if err != nil {
 					return err
 				}
-				known[endpoint.NodeID] = struct{}{}
+				workerContext, stopWorker := context.WithCancel(ctx)
+				done := make(chan struct{})
+				known[endpoint.NodeID] = worker{endpoint.ImageID, stopWorker, done}
+				var pending sync.WaitGroup
 				for _, run := range []func(context.Context) error{observer.Run, verifier.Run} {
 					workers.Add(1)
+					pending.Add(1)
 					go func() {
 						defer workers.Done()
-						err := run(ctx)
-						if ctx.Err() == nil {
+						defer pending.Done()
+						err := run(workerContext)
+						if workerContext.Err() == nil {
 							failures <- errors.Join(errors.New("节点监督组件意外退出"), err)
 						}
 					}()
 				}
+				go func() { pending.Wait(); close(done) }()
 				fleet.logger.InfoContext(ctx, "开始监督已接入节点", "node_id", endpoint.NodeID, "image_id", endpoint.ImageID)
 			}
 			if len(endpoints) < 100 {

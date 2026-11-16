@@ -1,4 +1,4 @@
-.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-shared-browser test-server-https-browser computer-image test-computer-image build release verify-release node-release verify-node-release
+.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-time-namespaces test-shared-browser test-server-https-browser computer-image test-computer-image build release verify-release node-release verify-node-release
 
 GO ?= go
 NPM ?= npm
@@ -39,6 +39,9 @@ test-offline-image-import:
 
 test-process-groups:
 	$(GO) test -race -tags=cgroupintegration -run '^TestKernelServiceGroups$$' -count=1 -v ./internal/processgroup
+
+test-time-namespaces:
+	$(GO) test -race -tags=timensintegration -run '^TestKernelTimeNamespaceDeadline$$' -count=1 -v ./internal/agentchannel
 
 test-shared-browser:
 	../admin/node_modules/.bin/playwright test --config verification/playwright.config.mjs

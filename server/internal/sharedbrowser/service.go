@@ -38,23 +38,25 @@ type entry struct {
 }
 
 type Service struct {
-	options     Options
-	root        context.Context
-	stop        context.CancelFunc
-	connection  chromedp.Transport
-	browser     *chromedp.Browser
-	listTargets func(context.Context) ([]*target.Info, error)
-	mu          sync.Mutex
-	windows     map[string]*entry
-	targets     map[target.ID]*entry
-	creation    chan struct{}
-	events      chan any
-	done        chan struct{}
-	failed      bool
-	closed      bool
-	commands    sync.WaitGroup
-	uploads     sync.WaitGroup
-	uploadGate  chan struct{}
+	options      Options
+	root         context.Context
+	stop         context.CancelFunc
+	connection   chromedp.Transport
+	browser      *chromedp.Browser
+	listTargets  func(context.Context) ([]*target.Info, error)
+	mu           sync.Mutex
+	windows      map[string]*entry
+	targets      map[target.ID]*entry
+	probeTargets map[target.ID]bool
+	probeGate    chan struct{}
+	creation     chan struct{}
+	events       chan any
+	done         chan struct{}
+	failed       bool
+	closed       bool
+	commands     sync.WaitGroup
+	uploads      sync.WaitGroup
+	uploadGate   chan struct{}
 }
 
 // New 接管 Chrome 的两端私有管道并核验浏览器能力；启动失败关闭管道，不留下可继续使用的半初始化实例。
@@ -71,6 +73,7 @@ func New(ctx context.Context, reader io.ReadCloser, writer io.WriteCloser, optio
 		options.Logger.Warn("共享浏览器协议异常", "user_id", options.UserID, "computer_id", options.ComputerID)
 	}))
 	service := &Service{options: options, root: root, stop: stop, connection: connection, windows: map[string]*entry{}, targets: map[target.ID]*entry{}, creation: make(chan struct{}, 1), events: make(chan any, options.MaximumEvents), done: make(chan struct{}), uploadGate: make(chan struct{}, 1)}
+	service.probeTargets, service.probeGate = map[target.ID]bool{}, make(chan struct{}, 1)
 	// 首次 chromedp 初始化必须在长期上下文执行；只由超时取消，不能让请求结束关闭整个浏览器。
 	timer := time.AfterFunc(options.CallTimeout, stop)
 	err := chromedp.Do(root)

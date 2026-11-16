@@ -34,7 +34,7 @@ describe('管理传输边界', () => {
       'a-very-long-password',
       signal,
     )
-    await client.activate(input.token, input.password, input.code, signal)
+    await client.activate(input.token, input.password, signal)
     expect(calls.slice(1).map((call) => call.path)).toEqual([
       '/api/v2/auth/admin-setup',
       '/api/v2/auth/admin-setup',
@@ -69,7 +69,7 @@ describe('管理传输边界', () => {
       ),
     ).rejects.toMatchObject({ code: 'RESPONSE_INVALID' })
     await expect(
-      fixture.client.activate(input.token, input.password, input.code, signal),
+      fixture.client.activate(input.token, input.password, signal),
     ).rejects.toMatchObject({ code: 'AUTH_INVALID' })
     expect(fixture.client.snapshot().phase).toBe('authenticated')
   })
@@ -77,7 +77,7 @@ describe('管理传输边界', () => {
     const client = new AdminClient(async () => new Response(null, { status: 202 }))
     const input = activationInputs()
     await expect(
-      client.activate(input.token, input.password, input.code, new AbortController().signal),
+      client.activate(input.token, input.password, new AbortController().signal),
     ).rejects.toMatchObject({ code: 'RESPONSE_INVALID' })
   })
   it('使用同源 Cookie 与内存 CSRF，不持久化认证材料', async () => {

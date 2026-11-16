@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -44,7 +45,7 @@ type Identity interface {
 	// 浏览器登录：桌面端登记回调、网页完成验证、再用一次性授权码换取会话。
 	BeginBrowserAuthorization(context.Context, identity.BrowserAuthorizationRequest) (identity.Authorization, error)
 	PendingAuthorization(context.Context, string, string) (identity.Authorization, error)
-	ApproveBrowserAuthorization(context.Context, string, string, string, string, identity.Attempt) (string, error)
+	ApproveBrowserAuthorization(context.Context, string, identity.Principal, identity.Attempt) (string, error)
 	ExchangeBrowserAuthorization(context.Context, string, string, string, identity.Attempt) (identity.Session, error)
 }
 
@@ -62,6 +63,7 @@ type Handler struct {
 	options  Options
 	logger   *slog.Logger
 	router   http.Handler
+	platform *template.Template
 }
 
 type requestContextKey struct{}
@@ -82,7 +84,11 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 	options.AdminOrigin = strings.TrimSuffix(options.AdminOrigin, "/")
 	options.CSRFKey = append([]byte(nil), options.CSRFKey...)
 	options.TrustedProxies = append([]netip.Prefix(nil), options.TrustedProxies...)
-	handler := &Handler{identity: service, options: options, logger: logger}
+	platform, err := template.New("user-platform").Parse(userPlatformHTML)
+	if err != nil {
+		return nil, errors.New("用户平台页面模板无效")
+	}
+	handler := &Handler{identity: service, options: options, logger: logger, platform: platform}
 	router := chi.NewRouter()
 	router.Use(handler.transport)
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
@@ -99,6 +105,11 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 	router.Get("/api/v2/admin/auth/refresh-context", handler.refreshContext)
 	// 授权页由系统浏览器直接访问，来源是服务自身而非管理站点；表单提交走同一路径。
 	router.Get("/login", handler.loginPage)
+	router.Get("/authorize", handler.authorizationPage)
+	router.Get("/", handler.platformPage)
+	router.Get("/account", handler.platformPage)
+	router.Post("/api/v2/web/auth/login", handler.webLogin)
+	router.Post("/api/v2/web/auth/logout", handler.webLogout)
 	router.Post("/api/v2/auth/browser/approve", handler.browserApprove)
 	for _, scope := range []string{"desktop", "admin"} {
 		prefix := "/api/v2/auth"
@@ -148,10 +159,14 @@ func (handler *Handler) transport(next http.Handler) http.Handler {
 		}
 		origin := r.Header.Get("Origin")
 		// 授权页由系统浏览器打开，来源是服务自身；表单提交必须来自同一站点。
-		browserLogin := r.URL.Path == "/login" || r.URL.Path == "/api/v2/auth/browser/approve"
+		browserLogin := r.URL.Path == "/" || r.URL.Path == "/login" || r.URL.Path == "/authorize" || r.URL.Path == "/account" || r.URL.Path == "/api/v2/auth/browser/approve" || strings.HasPrefix(r.URL.Path, "/api/v2/web/auth/")
 		sameOrigin := browserLogin && origin != "" && origin == "https://"+r.Host
 		if origin != "" && origin != handler.options.AdminOrigin && !sameOrigin {
 			handler.failure(w, r, 403, "ORIGIN_INVALID", "请求来源不允许")
+			return
+		}
+		if browserLogin && r.Method != "GET" && (origin != "https://"+r.Host || r.Header.Get("Sec-Fetch-Site") == "cross-site" || r.Header.Get("Sec-Fetch-Site") == "same-site") {
+			handler.failure(w, r, 403, "ORIGIN_INVALID", "登录与授权操作必须来自本站")
 			return
 		}
 		isAdmin := strings.HasPrefix(r.URL.Path, "/api/v2/admin/")
@@ -303,6 +318,8 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		handler.failure(w, r, 400, "AUTH_INPUT_INVALID", identity.ErrInvalidInput.Error())
 	case errors.Is(err, identity.ErrInvalidActivation):
 		handler.failure(w, r, 400, "ACTIVATION_INVALID", identity.ErrInvalidActivation.Error())
+	case errors.Is(err, identity.ErrInvalidAuthorization), errors.Is(err, identity.ErrAuthorizationDenied):
+		handler.failure(w, r, 400, "AUTHORIZATION_INVALID", identity.ErrInvalidAuthorization.Error())
 	case errors.Is(err, identity.ErrInvalidCredentials):
 		handler.failure(w, r, 401, "AUTH_INVALID", identity.ErrInvalidCredentials.Error())
 	case errors.Is(err, identity.ErrInvalidSession):

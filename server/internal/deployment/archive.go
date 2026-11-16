@@ -6,12 +6,18 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"io.yueyang/tom/deploy"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"io.yueyang/tom/internal/dockernode"
 )
+
+func installationArchivePath(path, digest string) bool {
+	return path == filepath.Join(deploy.NodeDirectory, "computer-image.tar") || len(digest) == 64 && strings.Trim(digest, "0123456789abcdef") == "" && path == filepath.Join(deploy.NodeDirectory, "computer-image-"+digest+".tar")
+}
 
 // copyInstallationArchive 将发布归档流式写入私有暂存目录，摘要不匹配时不会发布节点身份。
 func (fs filesystem) copyInstallationArchive(ctx context.Context, source, destination, digest string, caller uint32) (result error) {

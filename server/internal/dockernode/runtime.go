@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/computerprobe"
@@ -74,19 +75,20 @@ type Options struct {
 
 // Runtime 以每用户持久锁串行处理生命周期，并将代次与清理意图先刷盘再调用 Docker。
 type Runtime struct {
-	options     Options
-	engine      engine
-	storage     Storage
-	probe       Probe
-	probes      computerProbes
-	browsers    computerBrowsers
-	agent       agentAvailability
-	journal     *journal
-	closeEngine func()
-	egress      computerEgress
-	releaseLock func() error
-	heartbeat   *runtimeHeartbeat
-	mounts      func() ([]filesystemMount, error)
+	options       Options
+	engine        engine
+	storage       Storage
+	probe         Probe
+	probes        computerProbes
+	browsers      computerBrowsers
+	agent         agentAvailability
+	journal       *journal
+	closeEngine   func()
+	egress        computerEgress
+	releaseLock   func() error
+	heartbeat     *runtimeHeartbeat
+	mounts        func() ([]filesystemMount, error)
+	stampDeadline func(time.Time, int) (agentchannel.Deadline, error)
 }
 
 // New 仅在 Linux 受信 root 节点中启用，拒绝不受保护的目录及缺失的真实存储和能力探针。
@@ -125,7 +127,7 @@ func New(ctx context.Context, options Options, storage Storage, logger *slog.Log
 	}
 	options.Egress.Ports = slices.Clone(options.Egress.Ports)
 	options.Egress.DeniedNetworks = slices.Clone(options.Egress.DeniedNetworks)
-	node := &Runtime{options: options, engine: engine, storage: storage, journal: journal, closeEngine: engine.close, releaseLock: release, mounts: readMounts}
+	node := &Runtime{options: options, engine: engine, storage: storage, journal: journal, closeEngine: engine.close, releaseLock: release, mounts: readMounts, stampDeadline: agentchannel.FromDeadlineForProcess}
 	node.probe = &capabilityProbe{node: node, locate: processgroup.LocateContainer}
 	node.agent = newAgentStartup(node)
 	node.egress = newEgress(node, logger)

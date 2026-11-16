@@ -29,7 +29,7 @@ type host struct {
 	operatingSystem string
 	architecture    string
 	run             commandRunner
-	fetch           func(context.Context) ([]byte, error)
+	fetch           func(context.Context, string) ([]byte, error)
 	freeSpace       func(string) (uint64, error)
 }
 
@@ -240,9 +240,9 @@ func runCommand(ctx context.Context, program string, arguments ...string) (comma
 	return result, nil
 }
 
-func fetchRepositoryKey(ctx context.Context) (contents []byte, result error) {
+func fetchRepositoryKey(ctx context.Context, address string) (contents []byte, result error) {
 	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Docker 签名下载不允许重定向") }}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://download.docker.com/linux/ubuntu/gpg", nil)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return nil, err
 	}

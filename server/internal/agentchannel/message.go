@@ -32,7 +32,7 @@ func (message Message) validate() error {
 		return errors.New("电脑代理控制请求标识无效")
 	}
 	switch message.Method {
-	case "open", "renew", "close", "start", "read", "write", "resize", "desktop_start", "desktop_status", "desktop_capture", "desktop_image_read", "desktop_input", "agent_start", "agent_write", "agent_read", "browser_start", "browser_status", "browser_close", "probe", "health", "node_control", "result":
+	case "open", "renew", "close", "start", "read", "write", "resize", "desktop_start", "desktop_status", "desktop_capture", "desktop_image_read", "desktop_input", "agent_start", "agent_write", "agent_read", "browser_start", "browser_status", "browser_close", "browser_probe", "probe", "health", "node_control", "result":
 	default:
 		return errors.New("电脑代理控制动作无效")
 	}

@@ -49,17 +49,18 @@ type nodeInstallControl struct {
 
 // nodeInstallRequest 只包含公开部署参数与文件引用，私钥在节点首次安装时生成。
 type nodeInstallRequest struct {
-	Server         *nodeInstallServer `json:"server,omitempty"`
-	Name           string             `json:"node_name,omitempty"`
-	Capacity       int                `json:"computer_capacity,omitempty"`
-	Version        int                `json:"version"`
-	NodeID         string             `json:"node_id,omitempty"`
-	ImageID        string             `json:"image_id,omitempty"`
-	Control        nodeInstallControl `json:"control"`
-	Image          imageSettings      `json:"image"`
-	Docker         json.RawMessage    `json:"docker"`
-	InstallOptions json.RawMessage    `json:"install_options,omitempty"`
-	Node           json.RawMessage    `json:"node,omitempty"`
+	PreviousImageID string             `json:"previous_image_id,omitempty"`
+	Server          *nodeInstallServer `json:"server,omitempty"`
+	Name            string             `json:"node_name,omitempty"`
+	Capacity        int                `json:"computer_capacity,omitempty"`
+	Version         int                `json:"version"`
+	NodeID          string             `json:"node_id,omitempty"`
+	ImageID         string             `json:"image_id,omitempty"`
+	Control         nodeInstallControl `json:"control"`
+	Image           imageSettings      `json:"image"`
+	Docker          json.RawMessage    `json:"docker"`
+	InstallOptions  json.RawMessage    `json:"install_options,omitempty"`
+	Node            json.RawMessage    `json:"node,omitempty"`
 }
 
 // NodeInstallationReport 只公开接入主服务所需的节点身份，不包含私钥或认证内容。
@@ -148,7 +149,7 @@ func renderNodeInstallation(request nodeInstallRequest, platform string) (config
 	node.NodeID, node.Listen, node.AllowPublic = request.NodeID, request.Control.Listen, request.Control.AllowPublic
 	node.Control = nodeapp.ControlTLS{CertificateFile: filepath.Join(deploy.NodeDirectory, "certificate.pem"), PrivateKeyFile: filepath.Join(deploy.NodeDirectory, "private.key"), ClientFingerprints: request.Control.ClientFingerprints}
 	if request.Server != nil {
-		node.Enrollment = &nodeenrollment.Config{Server: request.Server.runtime(), Registration: nodecatalog.Registration{Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, ImageReference: request.Image.Reference}}
+		node.Enrollment = &nodeenrollment.Config{Server: request.Server.runtime(), Registration: nodecatalog.Registration{PreviousImageID: request.PreviousImageID, Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, ImageReference: request.Image.Reference}}
 	} else if request.Name != "" || request.Capacity != 0 {
 		return configuration{}, nil, errors.New("登记信息必须同时配置服务端接入信息")
 	}
@@ -170,7 +171,7 @@ func renderNodeInstallation(request nodeInstallRequest, platform string) (config
 	}
 	docker, err := dockerbootstrap.ParseManifest(request.Docker)
 	if err != nil || validatePreparationJSON(request.Docker, &dockerbootstrap.Manifest{}) != nil {
-		return configuration{}, nil, errors.New("节点安装需要完整的受测 Docker 与宿主软件版本清单")
+		return configuration{}, nil, errors.New("节点安装需要有效的 Docker 引导清单")
 	}
 	image := dockernode.ImageManifest{ArchiveFile: request.Image.ArchiveFile, ArchiveSHA256: request.Image.ArchiveSHA256, Version: 1, NodeID: request.NodeID, ImageID: request.ImageID, Reference: request.Image.Reference, Platform: platform, Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", AuthenticationFile: request.Image.AuthenticationFile, CallTimeoutSeconds: request.Image.CallTimeoutSeconds, TimeoutSeconds: request.Image.TimeoutSeconds}
 	value := configuration{node: node, image: image}

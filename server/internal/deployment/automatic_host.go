@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"golang.org/x/sys/unix"
-	"io.yueyang/tom/internal/dockerbootstrap"
+	"io.yueyang/tom/internal/linuxhost"
 )
 
 // inspectInstallationHost 仅采集本机公开资源，不查询公网 IP；多网卡由安装者确认可达地址。
@@ -21,8 +21,11 @@ func inspectInstallationHost(ctx context.Context) (installationHost, error) {
 		return host, err
 	}
 	release, err := os.ReadFile("/etc/os-release")
-	if err != nil || dockerbootstrap.ValidateHostRelease(release) != nil {
-		return host, errors.New("自动安装目前支持 Ubuntu 24.04")
+	if err != nil {
+		return host, errors.New("无法读取 Linux 发行信息")
+	}
+	if _, err := linuxhost.ParseRelease(release); err != nil {
+		return host, err
 	}
 	host.Hostname, err = os.Hostname()
 	if err != nil {

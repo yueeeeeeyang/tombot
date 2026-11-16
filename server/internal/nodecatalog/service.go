@@ -25,10 +25,11 @@ var (
 )
 
 type Registration struct {
-	Name           string `json:"name"`
-	Capacity       int    `json:"capacity"`
-	ImageID        string `json:"image_id"`
-	ImageReference string `json:"image_reference"`
+	PreviousImageID string `json:"previous_image_id,omitempty"`
+	Name            string `json:"name"`
+	Capacity        int    `json:"capacity"`
+	ImageID         string `json:"image_id"`
+	ImageReference  string `json:"image_reference"`
 }
 
 // Node 是登记时的元数据快照；连接入口仍只来自部署配置，不保存或返回地址。
@@ -78,8 +79,30 @@ func validID(value string) bool {
 
 // Validate 限定目录字段，节点实际容量和镜像可执行性不能由此推断。
 func (registration Registration) Validate() error {
-	if !validID(registration.ImageID) || computer.ValidateImageReference(registration.ImageReference) != nil || registration.Capacity < 1 || registration.Capacity > 10000 || !utf8.ValidString(registration.Name) || strings.TrimSpace(registration.Name) != registration.Name || utf8.RuneCountInString(registration.Name) < 1 || utf8.RuneCountInString(registration.Name) > 120 || strings.ContainsFunc(registration.Name, unicode.IsControl) {
+	if registration.PreviousImageID != "" && (!validID(registration.PreviousImageID) || registration.PreviousImageID == registration.ImageID) {
 		return ErrInvalidInput
+	}
+	if !validID(registration.ImageID) || computer.ValidateImageReference(registration.ImageReference) != nil || !validNodeSettings(registration.Name, registration.Capacity) {
+		return ErrInvalidInput
+	}
+	return nil
+}
+
+func validNodeSettings(name string, capacity int) bool {
+	return capacity >= 1 && capacity <= 10000 && utf8.ValidString(name) && strings.TrimSpace(name) == name && utf8.RuneCountInString(name) >= 1 && utf8.RuneCountInString(name) <= 120 && !strings.ContainsFunc(name, unicode.IsControl)
+}
+
+// ReconnectInTransaction 在外层验证已绑定证书和连接后核对不可变镜像，保留管理者修改的目录配置。
+func (service *Service) ReconnectInTransaction(ctx context.Context, tx *sql.Tx, registration Registration) error {
+	if tx == nil || registration.Validate() != nil {
+		return ErrInvalidInput
+	}
+	catalog, err := service.read(ctx, tx, registration.ImageID)
+	if err != nil {
+		return err
+	}
+	if catalog.Image.Reference != registration.ImageReference {
+		return ErrConflict
 	}
 	return nil
 }

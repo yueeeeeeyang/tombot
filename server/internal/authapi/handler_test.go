@@ -123,8 +123,9 @@ func (stub *identityStub) PendingAuthorization(ctx context.Context, _, _ string)
 	stub.record("browser-pending", ctx, identity.Attempt{})
 	return identity.Authorization{ID: stub.authorizationID, State: stub.authorizationState, RedirectURI: stub.redirectURI, DeviceName: "测试桌面", Platform: "linux"}, stub.err
 }
-func (stub *identityStub) ApproveBrowserAuthorization(ctx context.Context, _, _, _, _ string, attempt identity.Attempt) (string, error) {
+func (stub *identityStub) ApproveBrowserAuthorization(ctx context.Context, _ string, principal identity.Principal, attempt identity.Attempt) (string, error) {
 	stub.record("browser-approve", ctx, attempt)
+	stub.principal = principal
 	return stub.authorizationCode, stub.err
 }
 func (stub *identityStub) ExchangeBrowserAuthorization(ctx context.Context, code, verifier, state string, attempt identity.Attempt) (identity.Session, error) {

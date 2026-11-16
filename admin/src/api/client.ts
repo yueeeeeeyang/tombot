@@ -347,11 +347,11 @@ export class AdminClient {
   }
 
   /** 激活只作用于普通用户：管理员在创建时已设置口令与验证器。 */
-  activate(activationToken: string, password: string, code: string, signal: AbortSignal) {
+  activate(activationToken: string, password: string, signal: AbortSignal) {
     return this.exchange(
       '/api/v2/auth/activate',
       z.undefined(),
-      { method: 'POST', body: { activation_token: activationToken, password, code }, signal },
+      { method: 'POST', body: { activation_token: activationToken, password }, signal },
       false,
       204,
     )

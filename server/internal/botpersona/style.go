@@ -1,7 +1,7 @@
-package agent
+package botpersona
 
-// catLanguageStyle 按已保存的猫咪品种提供默认语气；不改写身份或持久化资料，未知品种不附加风格。
-func catLanguageStyle(preset string) string {
+// LanguageStyle 按已保存的猫咪品种提供默认语气；不改写身份或持久化资料，未知品种不附加风格。
+func LanguageStyle(preset string) string {
 	var style string
 	switch preset {
 	case "bombay":

@@ -24,13 +24,21 @@ type agentLink struct {
 	timeout time.Duration
 }
 
-func (link *agentLink) client(ctx context.Context, command computer.SessionCommand, expected *processgroup.Reference) (*computeragent.Client, error) {
+func (link *agentLink) record(command computer.SessionCommand) (*record, error) {
 	state, err := link.node.journal.read(command.Session.UserID)
 	if err != nil {
 		return nil, err
 	}
 	if state == nil || state.Specification.UserID != command.Session.UserID || state.Specification.ComputerID != command.Session.ComputerID || state.Specification.NodeID != command.Session.NodeID || state.Specification.Generation != command.Session.Generation || state.ContainerID != command.Session.ContainerID {
 		return nil, failure("agent_instance_mismatch")
+	}
+	return state, nil
+}
+
+func (link *agentLink) client(ctx context.Context, command computer.SessionCommand, expected *processgroup.Reference) (*computeragent.Client, error) {
+	state, err := link.record(command)
+	if err != nil {
+		return nil, err
 	}
 	resource := link.node.resource(state.Specification)
 	current, err := link.node.load(ctx, resource, state)
@@ -62,6 +70,25 @@ func (link *agentLink) client(ctx context.Context, command computer.SessionComma
 	}, link.timeout)
 }
 
+func (link *agentLink) deadline(ctx context.Context, command computer.SessionCommand, reference processgroup.Reference, deadline time.Time) (agentchannel.Deadline, error) {
+	if command.Validate() != nil || reference.Validate() != nil || reference.Session != command.Session {
+		return agentchannel.Deadline{}, failure("agent_instance_mismatch")
+	}
+	state, err := link.record(command)
+	if err != nil {
+		return agentchannel.Deadline{}, err
+	}
+	expected := processgroup.ContainerReference{ContainerID: command.Session.ContainerID, Path: reference.ParentPath, Device: reference.ParentDevice, Inode: reference.ParentInode}
+	locate := func(ctx context.Context, containerID string, pid int) (processgroup.ContainerReference, error) {
+		actual, err := link.groups.Locate(ctx, command.Session, pid)
+		if err != nil || containerID != command.Session.ContainerID || actual != reference {
+			return processgroup.ContainerReference{}, errors.Join(failure("agent_parent_mismatch"), err)
+		}
+		return expected, nil
+	}
+	return link.node.serviceDeadline(ctx, link.node.resource(state.Specification), expected, locate, deadline)
+}
+
 func (link *agentLink) open(ctx context.Context, command computer.SessionCommand, reference processgroup.Reference, deadline time.Time) (failureResult error) {
 	client, err := link.client(ctx, command, &reference)
 	if err != nil {
@@ -72,7 +99,7 @@ func (link *agentLink) open(ctx context.Context, command computer.SessionCommand
 		return err
 	}
 	defer func() { failureResult = errors.Join(failureResult, agentchannel.CloseFiles(files)) }()
-	stamp, err := agentchannel.FromDeadline(deadline)
+	stamp, err := link.deadline(ctx, command, reference, deadline)
 	if err != nil {
 		return err
 	}
@@ -85,7 +112,7 @@ func (link *agentLink) renew(ctx context.Context, command computer.SessionComman
 	if err != nil {
 		return err
 	}
-	stamp, err := agentchannel.FromDeadline(deadline)
+	stamp, err := link.deadline(ctx, command, reference, deadline)
 	if err != nil {
 		return err
 	}

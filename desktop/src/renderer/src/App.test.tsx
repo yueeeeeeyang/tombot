@@ -110,12 +110,6 @@ describe('客户端交互', () => {
   it('招聘猫咪校验重复名称，失败保留输入，成功切换会话', async () => {
     const user = userEvent.setup()
     render(<App />)
-    await user.click(screen.getByRole('button', { name: '打开设置' }))
-    await user.click(screen.getByRole('button', { name: '模型设置' }))
-    fireEvent.change(screen.getByRole('textbox', { name: '模型名称' }), {
-      target: { value: '写作模型' },
-    })
-    await user.click(screen.getByRole('button', { name: '关闭设置' }))
     await user.click(screen.getByRole('button', { name: '新建' }))
     await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
     const avatars = screen.getByRole('group', { name: '预设猫咪头像' })
@@ -123,14 +117,13 @@ describe('客户端交互', () => {
     expect(screen.queryByText('预设头像')).not.toBeInTheDocument()
     expect(within(avatars).getAllByRole('button')).toHaveLength(8)
     await user.click(within(avatars).getByRole('button', { name: '三花猫' }))
-    await chooseOption(user, '模型', '写作模型')
     await chooseOption(user, '分组', '游戏开发')
     const nameInput = screen.getByRole('textbox', { name: '助手名称' })
     await user.type(nameInput, '小黑')
     await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '招聘猫咪' }))
     expect(screen.getByRole('alert')).toHaveTextContent('名称已存在')
     expect(nameInput).toHaveValue('小黑')
-    expect(screen.getByRole('combobox', { name: '模型' })).toHaveTextContent('写作模型')
+    expect(screen.queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     expect(within(avatars).getByRole('button', { name: '三花猫' })).toHaveAttribute(
       'aria-pressed',
       'true',
@@ -149,41 +142,103 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '查看创作搭档资料' }))
     const catPanel = screen.getByRole('complementary', { name: '创作搭档' })
     expect(catPanel).toHaveTextContent('创作搭档')
-    expect(within(catPanel).getByRole('combobox', { name: '模型' })).toHaveTextContent('写作模型')
-    expect(memoryBackend.tryWorkspaceSync().workspace.agents.at(-1)?.modelId).toBe('写作模型')
+    expect(catPanel).toHaveTextContent('自动使用管理员分配的模型策略')
+    expect(within(catPanel).queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     await user.click(within(catPanel).getByRole('button', { name: '关闭猫咪面板' }))
     expect(screen.queryByRole('complementary', { name: '创作搭档' })).not.toBeInTheDocument()
   })
 
-  it('没有默认模型时停在初始化页，拉取成功后才能招聘第一只猫咪', async () => {
-    memoryBackend.reset()
-    memoryBackend.loadFixture({
-      workspace: emptyWorkspace(),
-      settings: { provider: 'deepseek', providerName: 'DeepSeek', baseUrl: '', modelName: '' },
-      apiKey: '',
-    })
-    try {
-      const user = userEvent.setup()
-      render(<App />)
-      expect(screen.getByRole('heading', { name: '配置默认模型' })).toBeInTheDocument()
-      expect(screen.queryByRole('heading', { name: '招聘第一只猫咪' })).not.toBeInTheDocument()
-      await user.type(screen.getByLabelText('API 密钥'), 'bad-key')
-      await user.click(screen.getByRole('button', { name: '拉取模型' }))
-      expect(await screen.findByRole('alert')).toHaveTextContent('API Key 验证失败')
-      await user.clear(screen.getByLabelText('API 密钥'))
-      await user.type(screen.getByLabelText('API 密钥'), 'good-key')
-      await user.click(screen.getByRole('button', { name: '拉取模型' }))
-      const next = screen.getByRole('button', { name: '继续' })
-      await waitFor(() => expect(next).toBeEnabled())
-      await user.click(next)
-      expect(await screen.findByRole('heading', { name: '招聘第一只猫咪' })).toBeInTheDocument()
-      await user.type(screen.getByRole('textbox', { name: '助手名称' }), '阿花')
-      await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
-      expect(screen.getByRole('textbox', { name: '给阿花发消息' })).toBeInTheDocument()
-      expect(screen.queryByText('good-key')).not.toBeInTheDocument()
-    } finally {
-      memoryBackend.reset()
-    }
+  it('登录后空工作空间直接招聘第一只猫咪，不要求客户端提供模型和密钥', async () => {
+    memoryBackend.loadFixture({ workspace: emptyWorkspace(), isModelPolicyAvailable: true })
+    const user = userEvent.setup()
+    render(<App />)
+    expect(screen.queryByRole('heading', { name: '配置默认模型' })).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '招聘第一只猫咪' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('API 密钥')).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
+    await user.type(screen.getByRole('textbox', { name: '助手名称' }), '阿花')
+    await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
+    await user.type(screen.getByRole('textbox', { name: '给阿花发消息' }), '你好')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('内存测试回复')).toBeInTheDocument()
+  })
+
+  it('服务端策略不可用时保留工作空间和消息，提示联系管理员', async () => {
+    memoryBackend.loadFixture({ isModelPolicyAvailable: false })
+    const user = userEvent.setup()
+    render(<App />)
+    await user.type(screen.getByRole('textbox', { name: '给小黑发消息' }), '测试策略')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('请联系管理员检查服务端模型配置')
+    expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: '配置默认模型' })).not.toBeInTheDocument()
+  })
+
+  it('招聘等待服务端回执，失败保留表单并复用请求标识，成功后才允许发送', async () => {
+    memoryBackend.loadFixture({ workspace: emptyWorkspace(), isModelPolicyAvailable: true })
+    const originalCreate = memoryBackend.createAgent.bind(memoryBackend)
+    let reject!: (error: Error) => void
+    const create = vi.spyOn(memoryBackend, 'createAgent').mockImplementationOnce(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail
+        }),
+    )
+    const deliver = vi.spyOn(memoryBackend, 'deliverMessage')
+    const user = userEvent.setup()
+    render(<App />)
+    const input = screen.getByRole('textbox', { name: '助手名称' })
+    await user.type(input, '新搭档')
+    await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
+    expect(screen.getByRole('button', { name: '正在招聘…' })).toBeDisabled()
+    expect(input).toBeDisabled()
+    expect(screen.queryByRole('textbox', { name: '给新搭档发消息' })).not.toBeInTheDocument()
+    fireEvent.submit(input.closest('form')!)
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(memoryBackend.tryWorkspaceSync().workspace.agents).toHaveLength(0)
+    await act(async () => reject(new Error('连接中断，请重试。')))
+    expect(await screen.findByRole('alert')).toHaveTextContent('连接中断')
+    expect(input).toHaveValue('新搭档')
+    const requestId = create.mock.calls[0]?.[1]
+    expect(requestId).toMatch(/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/)
+    create.mockImplementation(originalCreate)
+    await user.click(screen.getByRole('button', { name: '招聘猫咪' }))
+    expect(create.mock.calls[1]?.[1]).toBe(requestId)
+    const agent = memoryBackend.tryWorkspaceSync().workspace.agents[0]!
+    expect(agent.id).not.toBe(requestId)
+    await user.type(await screen.findByRole('textbox', { name: '给新搭档发消息' }), '你好')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('内存测试回复')).toBeInTheDocument()
+    expect(deliver.mock.calls[0]?.slice(0, 2)).toEqual([agent.id, '你好'])
+  })
+
+  it('招聘弹窗提交期间不能关闭，改资料后使用新的请求标识', async () => {
+    const user = userEvent.setup()
+    let reject!: (error: Error) => void
+    const create = vi.spyOn(memoryBackend, 'createAgent').mockImplementation(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail
+        }),
+    )
+    render(<App />)
+    await user.click(screen.getByRole('button', { name: '新建' }))
+    await user.click(screen.getByRole('menuitem', { name: '招聘猫咪' }))
+    const input = screen.getByRole('textbox', { name: '助手名称' })
+    await user.type(input, '小白')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '招聘猫咪' }))
+    expect(screen.getByRole('button', { name: '关闭弹窗' })).toBeDisabled()
+    fireEvent(screen.getByRole('dialog'), new Event('cancel', { bubbles: true, cancelable: true }))
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    await act(async () => reject(new Error('数量超出限制')))
+    expect(await screen.findByRole('alert')).toHaveTextContent('数量超出限制')
+    await user.type(input, '二号')
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: '招聘猫咪' }))
+    expect(create.mock.calls[1]?.[1]).not.toBe(create.mock.calls[0]?.[1])
+    await act(async () => reject(new Error('数量超出限制')))
+    await user.click(screen.getByRole('button', { name: '关闭弹窗' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('搜索无结果有空状态，搜索结果可跳转', async () => {
@@ -205,7 +260,7 @@ describe('客户端交互', () => {
     await user.click(screen.getByRole('button', { name: '搜索助手和消息' }))
     await user.click(screen.getByRole('combobox', { name: '搜索内容' }))
     await user.keyboard('{ArrowUp}')
-    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('模型设置')
+    expect(screen.getByRole('option', { selected: true })).toHaveTextContent('模型策略')
     await user.keyboard('{ArrowDown}')
     expect(screen.getByRole('option', { selected: true })).toHaveTextContent('小黑')
     await user.keyboard('{Control>}2{/Control}')
@@ -214,7 +269,7 @@ describe('客户端交互', () => {
     await user.type(screen.getByRole('combobox', { name: '搜索内容' }), '模型')
     await user.keyboard('{Enter}')
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '内置提供商' })).toBeInTheDocument()
+    expect(screen.getByText('由服务端管理')).toBeInTheDocument()
   })
 
   it('搜索空结果及中文输入法确认不误触发导航', () => {
@@ -265,46 +320,20 @@ describe('客户端交互', () => {
     expect(screen.getByRole('dialog', { name: '设置' })).toBeInTheDocument()
   })
 
-  it('模型表单支持参数校验、栏目切换，并把密钥交给服务而不是本地存储', async () => {
+  it('模型策略仅展示管理说明，切换设置后也不会出现供应商或密钥编辑入口', async () => {
     const user = userEvent.setup()
     render(<App />)
     await user.click(screen.getByRole('button', { name: '打开设置' }))
-    await user.click(screen.getByRole('button', { name: '模型设置' }))
-    await user.click(screen.getByRole('button', { name: '自定义提供商' }))
-    const apiKey = screen.getByLabelText('API 密钥')
-    expect(apiKey).toBeEnabled()
-    const savedDrafts: Array<Record<string, unknown>> = []
-    const saveSettings = memoryBackend.saveSettings.bind(memoryBackend)
-    memoryBackend.saveSettings = (draft, key) => {
-      savedDrafts.push({ ...draft })
-      return saveSettings(draft, key)
-    }
-    try {
-      fireEvent.change(apiKey, { target: { value: 'desktop-test-key' } })
-      expect(JSON.stringify(localStorage)).not.toContain('desktop-test-key')
-      expect(memoryBackend.trySettingsSync().hasApiKey).toBe(true)
-      expect(savedDrafts.at(-1)).not.toHaveProperty('hasApiKey')
-    } finally {
-      memoryBackend.saveSettings = saveSettings
-    }
-    const address = screen.getByLabelText('API 地址')
-    fireEvent.change(address, { target: { value: '无效地址' } })
-    expect(screen.getByRole('alert')).toHaveTextContent('完整的 HTTP 或 HTTPS')
-    fireEvent.change(address, { target: { value: 'https://models.example.test/api' } })
-    expect(screen.queryByRole('slider', { name: '温度' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('switch', { name: /流式响应/ })).not.toBeInTheDocument()
-    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '模型策略' }))
+    const dialog = screen.getByRole('dialog', { name: '设置' })
+    expect(dialog).toHaveTextContent('自动使用管理员分配的模型策略，无需在客户端配置。')
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('API 密钥')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '通用' }))
-    await user.click(screen.getByRole('button', { name: '模型设置' }))
-    expect(screen.getByRole('button', { name: '自定义提供商' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    )
-    expect(screen.getByLabelText('API 地址')).toHaveValue('https://models.example.test/api')
-    expect(screen.queryByRole('combobox', { name: '提供商' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '内置提供商' }))
-    expect(screen.getByRole('combobox', { name: '提供商' })).toHaveTextContent('DeepSeek')
-    expect(localStorage.getItem(STORAGE_KEY)).toBeNull()
+    await user.click(screen.getByRole('button', { name: '模型策略' }))
+    expect(dialog).toHaveTextContent('如需更换模型或策略，请联系管理员。')
+    expect(screen.queryByRole('button', { name: '拉取模型' })).not.toBeInTheDocument()
   })
 
   it('存储写入失败保留内存草稿并允许重试', () => {
@@ -316,6 +345,10 @@ describe('客户端交互', () => {
       target: { value: '不能丢失的想法' },
     })
     expect(screen.getByRole('alert')).toHaveTextContent('保存失败')
+    expect(screen.queryByRole('button', { name: '关闭提示' })).not.toBeInTheDocument()
+    const closing = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(closing)
+    expect(closing.defaultPrevented).toBe(true)
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('不能丢失的想法')
     memoryBackend.failSave = null
     fireEvent.click(screen.getByRole('button', { name: '重试保存' }))
@@ -340,6 +373,7 @@ describe('客户端交互', () => {
 
   it('未登录时只显示浏览器登录入口，工具栏不出现密码输入', async () => {
     memoryBackend.phase = 'login'
+    memoryBackend.serverUrl = 'https://tom.example.com'
     const user = userEvent.setup()
     render(<App />)
     expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
@@ -351,6 +385,7 @@ describe('客户端交互', () => {
 
   it('浏览器登录失败时留在登录页并显示原因', async () => {
     memoryBackend.phase = 'login'
+    memoryBackend.serverUrl = 'https://tom.example.com'
     const browserLogin = vi
       .spyOn(memoryBackend, 'browserLogin')
       .mockRejectedValueOnce(new Error('登录授权已失效，请重新登录'))
@@ -365,6 +400,7 @@ describe('客户端交互', () => {
 
   it('登录页不提供口令输入，只有浏览器登录', () => {
     memoryBackend.phase = 'login'
+    memoryBackend.serverUrl = 'https://tom.example.com'
     render(<App />)
     expect(screen.getByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '在浏览器中登录' })).toBeInTheDocument()

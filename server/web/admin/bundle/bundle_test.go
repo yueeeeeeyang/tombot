@@ -65,3 +65,21 @@ func TestEmbeddedAdminWithoutExternalDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedLoginAssets(t *testing.T) {
+	handler, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ path, contentType, marker string }{
+		{"/admin/assets/login.css", "text/css", "prefers-color-scheme: dark"},
+		{"/admin/assets/user-platform.css", "text/css", ".user-shell"},
+		{"/admin/assets/login-logo.png", "image/png", "PNG"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", test.path, nil))
+		if response.Code != 200 || !strings.HasPrefix(response.Header().Get("Content-Type"), test.contentType) || !strings.Contains(response.Body.String(), test.marker) {
+			t.Fatal("内置登录资源缺失或类型无效", test.path)
+		}
+	}
+}

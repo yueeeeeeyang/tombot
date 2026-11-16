@@ -63,12 +63,62 @@ export const nodesSchema = z.object({
       status: z.string(),
       capacity: z.number().int(),
       reserved: z.number().int(),
+      verification_status: z.string().optional(),
+      image: z.object({ id, reference: z.string(), is_enabled: z.boolean() }).nullable(),
     }),
   ),
 })
-export const imagesSchema = z.object({
-  images: z.array(z.object({ id, reference: z.string(), is_enabled: z.boolean() })),
+const nodeCapabilitiesSchema = z.object({
+  terminal: z.boolean(),
+  browser: z.boolean(),
+  files: z.boolean(),
+  process_reaping: z.boolean(),
+  disk_quota: z.boolean(),
+  network_isolation: z.boolean(),
 })
+export const nodeDetailSchema = z.object({
+  id,
+  name: z.string(),
+  status: z.string(),
+  capacity: z.number().int(),
+  reserved: z.number().int(),
+  generation: z.number().int(),
+  last_seen_at: z.string().optional(),
+  capability_expires_at: z.string().optional(),
+  configuration_version: z.number().int().positive(),
+  is_draining: z.boolean(),
+  created_at: z.string(),
+  url: z.string().nullable(),
+  certificate_fingerprint: z.string().nullable(),
+  runtime_id: z.string().nullable(),
+  control_expires_at: z.string().nullable(),
+  control_sequence: z.number().int(),
+  image: z.object({ id, reference: z.string(), is_enabled: z.boolean() }).nullable(),
+  diagnosis: z.object({ code: z.string(), message: z.string() }),
+  can_retry_verification: z.boolean(),
+  verification: z
+    .object({
+      state: z.string(),
+      is_valid: z.boolean(),
+      attempts: z.number().int(),
+      fencing_token: z.number().int(),
+      error_code: z.string().nullable(),
+      node_error_code: z.string().nullable(),
+      updated_at: z.string(),
+      next_attempt_at: z.string(),
+      verified_at: z.string().nullable(),
+      lease_expires_at: z.string().nullable(),
+      capabilities: nodeCapabilitiesSchema.nullable(),
+      resources: z.object({
+        cpu_millis: z.number(),
+        memory_bytes: z.number(),
+        disk_bytes: z.number(),
+        process_limit: z.number(),
+      }),
+    })
+    .nullable(),
+})
+export type NodeDetail = z.infer<typeof nodeDetailSchema>
 export const activationSchema = z.object({
   user_id: id,
   activation_token: z.string().min(1).max(256),

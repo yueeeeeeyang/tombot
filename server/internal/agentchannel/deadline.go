@@ -5,13 +5,14 @@ import (
 	"time"
 )
 
-// Deadline 使用同一 Linux 时间命名空间的绝对单调时钟，避免排队或传输延迟延长执行权。
+// Deadline 绑定接收进程时间命名空间中的绝对单调时钟，避免排队或传输延迟延长执行权。
 type Deadline struct {
 	ExpiresNS     int64  `json:"expires_ns"`
 	TimeNamespace uint64 `json:"time_namespace"`
 }
 
-// FromDeadline 将节点已有的本地期限转换为内核单调时钟；先采样内核，再计算剩余时间，只会保守缩短。
+// FromDeadline 在当前时间命名空间表示已有期限；先采样内核，再计算剩余时间，只会保守缩短。
+// 向其他进程签发授权时使用 FromDeadlineForProcess，不能假定容器与宿主共用时钟。
 func FromDeadline(deadline time.Time) (Deadline, error) {
 	now, namespace, err := monotonicClock()
 	if err != nil {

@@ -281,7 +281,7 @@ func (controller *egressController) checkPeer(ctx context.Context, resource Reso
 	if err != nil {
 		return err
 	}
-	if current.ID != expected.ContainerID || current.Name != "/"+resource.Name || !sameLabels(current.Config.Labels, resource.Labels) || !current.State.Running || current.State.Dead {
+	if current.ID != expected.ContainerID || current.Name != "/"+resource.Name || !sameLabels(current.Config.Labels, containerLabels(resource)) || !current.State.Running || current.State.Dead {
 		return failure("egress_container_changed")
 	}
 	if err := controller.node.validateContainer(resource, current); err != nil {

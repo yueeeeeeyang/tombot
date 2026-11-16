@@ -6,11 +6,13 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"io.yueyang/tom/deploy"
@@ -22,6 +24,7 @@ import (
 const nodeServiceName = "tombot-node.service"
 
 type nodeInstaller struct {
+	checkListen         func(context.Context, string) error
 	detectHost          func(context.Context) (installationHost, error)
 	fetchBootstrap      func(context.Context, nodeenrollment.JoinCode) (nodeenrollment.BootstrapConfiguration, error)
 	fs                  filesystem
@@ -47,7 +50,7 @@ func InstallNode(ctx context.Context, requestPath, executable string, caller uin
 	if err != nil || info.Mode().Perm()&0111 == 0 {
 		return NodeInstallationReport{}, errors.New("系统服务管理程序缺失或权限无效")
 	}
-	installer := nodeInstaller{fs: fs, platform: "linux/" + runtime.GOARCH, caller: caller, logger: logger, systemctl: runNodeSystemctl, readEnrollmentToken: readEnrollmentToken}
+	installer := nodeInstaller{fs: fs, platform: "linux/" + runtime.GOARCH, caller: caller, logger: logger, systemctl: runNodeSystemctl, readEnrollmentToken: readEnrollmentToken, checkListen: checkNodeListen}
 	installer.prepareInstallation = func(ctx context.Context) (installationInput, error) {
 		return installer.prepareAutomatic(ctx, requestPath, executable, readEnrollmentToken, confirmAddress)
 	}
@@ -69,7 +72,11 @@ func runNodeSystemctl(parent context.Context, arguments ...string) error {
 		if ctx.Err() != nil {
 			return errors.New("节点系统服务操作取消或超时，保留安装文件并检查服务实际状态")
 		}
-		return errors.New("节点系统服务操作失败，请查看节点服务日志并使用原参数重试")
+		var exited *exec.ExitError
+		if errors.As(err, &exited) {
+			return fmt.Errorf("systemctl %s 失败（退出码 %d），请运行 journalctl -u tombot-node -n 80 --no-pager 查看具体启动阶段", strings.Join(arguments, " "), exited.ExitCode())
+		}
+		return fmt.Errorf("无法执行 systemctl %s，请检查系统服务管理程序", strings.Join(arguments, " "))
 	}
 	return nil
 }
@@ -329,7 +336,7 @@ func (installer nodeInstaller) verifyInstallation(ctx context.Context, record no
 		return NodeInstallationReport{}, err
 	}
 	if imageManifest.ArchiveFile != "" {
-		if imageManifest.ArchiveFile != filepath.Join(deploy.NodeDirectory, "computer-image.tar") || record.Files["computer-image.tar"] != imageManifest.ArchiveSHA256 {
+		if !installationArchivePath(imageManifest.ArchiveFile, imageManifest.ArchiveSHA256) || record.Files[filepath.Base(imageManifest.ArchiveFile)] != imageManifest.ArchiveSHA256 {
 			return NodeInstallationReport{}, errors.New("离线镜像记录不一致")
 		}
 		if _, err := installer.fs.inspect(fileRule{path: imageManifest.ArchiveFile, maximum: dockernode.MaximumImageArchive, private: true}, account{}); err != nil {
@@ -338,7 +345,7 @@ func (installer nodeInstaller) verifyInstallation(ctx context.Context, record no
 		if err := installer.fs.verifyInstallationArchive(ctx, imageManifest.ArchiveFile, imageManifest.ArchiveSHA256); err != nil {
 			return NodeInstallationReport{}, err
 		}
-		names = append(names, "computer-image.tar")
+		names = append(names, filepath.Base(imageManifest.ArchiveFile))
 	}
 	if len(record.Files) != len(names) {
 		return NodeInstallationReport{}, errors.New("节点安装记录的文件集合无效")

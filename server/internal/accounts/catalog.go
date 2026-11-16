@@ -23,14 +23,16 @@ type UserSummary struct {
 
 // NodeSummary 不返回节点连接地址；容量为查询时快照，最终准入仍由开户事务判断。
 type NodeSummary struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Status   string `json:"status"`
-	Capacity int    `json:"capacity"`
-	Reserved int    `json:"reserved"`
+	ID                 string        `json:"id"`
+	Name               string        `json:"name"`
+	Status             string        `json:"status"`
+	Capacity           int           `json:"capacity"`
+	Reserved           int           `json:"reserved"`
+	VerificationStatus *string       `json:"verification_status,omitempty"`
+	Image              *ImageSummary `json:"image"`
 }
 
-// ImageSummary 仅暴露可用于选择的固定镜像版本及启用状态。
+// ImageSummary 只返回节点已经验收的固定镜像；历史登记记录不参与新电脑选择。
 type ImageSummary struct {
 	ID        string `json:"id"`
 	Reference string `json:"reference"`
@@ -61,25 +63,22 @@ func (service *Service) ListUsers(ctx context.Context, actor identity.Principal,
 		})
 }
 
-// ListNodes 读取节点状态和已预留容量；离线节点仍可见，由界面说明不可选择的原因。
+// ListNodes 同页关联节点已验收镜像和容量；历史镜像不会混入，最终准入仍在开户事务中复验。
 func (service *Service) ListNodes(ctx context.Context, actor identity.Principal, before string, limit int) ([]NodeSummary, error) {
 	return listCatalog(ctx, service, actor, before, limit,
-		`SELECT id,name,tombot.computer_node_status(status,runtime_id,control_expires_at,capability_expires_at),capacity,reserved FROM tombot.computer_nodes WHERE ($1='' OR id<$1) ORDER BY id DESC LIMIT $2`,
+		`SELECT n.id,n.name,tombot.computer_node_status(n.status,n.runtime_id,n.control_expires_at,n.capability_expires_at),n.capacity,n.reserved,v.state,i.id,i.reference,i.is_enabled
+		FROM tombot.computer_nodes n LEFT JOIN tombot.node_verifications v ON v.node_id=n.id
+		LEFT JOIN tombot.computer_images i ON i.id=n.verified_image_id
+		WHERE ($1='' OR n.id<$1) ORDER BY n.id DESC LIMIT $2`,
 		func(rows *sql.Rows) (NodeSummary, error) {
 			var node NodeSummary
-			err := rows.Scan(&node.ID, &node.Name, &node.Status, &node.Capacity, &node.Reserved)
+			var imageID, reference sql.NullString
+			var enabled sql.NullBool
+			err := rows.Scan(&node.ID, &node.Name, &node.Status, &node.Capacity, &node.Reserved, &node.VerificationStatus, &imageID, &reference, &enabled)
+			if imageID.Valid {
+				node.Image = &ImageSummary{ID: imageID.String, Reference: reference.String, IsEnabled: enabled.Bool}
+			}
 			return node, err
-		})
-}
-
-// ListImages 读取不可变镜像引用，停用镜像不能因此绕过开户时的启用校验。
-func (service *Service) ListImages(ctx context.Context, actor identity.Principal, before string, limit int) ([]ImageSummary, error) {
-	return listCatalog(ctx, service, actor, before, limit,
-		`SELECT id,reference,is_enabled FROM tombot.computer_images WHERE ($1='' OR id<$1) ORDER BY id DESC LIMIT $2`,
-		func(rows *sql.Rows) (ImageSummary, error) {
-			var image ImageSummary
-			err := rows.Scan(&image.ID, &image.Reference, &image.IsEnabled)
-			return image, err
 		})
 }
 

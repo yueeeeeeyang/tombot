@@ -27,5 +27,5 @@ func NodeExample() []byte { return append([]byte(nil), nodeExample...) }
 // NodeService 返回随二进制发布的节点服务单元，部署无需另行下载模板。
 func NodeService() string { return nodeService }
 
-// NodeInstallTemplate 返回待填写的安装模板；环境身份与受测版本必须由部署者提供。
+// NodeInstallTemplate 返回可选安装模板；默认安装从接入码和离线发布清单取得配置。
 func NodeInstallTemplate() string { return nodeInstallTemplate }

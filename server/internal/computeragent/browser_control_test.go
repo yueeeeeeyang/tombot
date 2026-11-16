@@ -3,6 +3,7 @@ package computeragent
 import (
 	"context"
 	"errors"
+	"io.yueyang/tom/internal/browserprobe"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -332,6 +333,76 @@ func TestBrowserControlFailureAndExit(t *testing.T) {
 	}
 }
 
+func TestBrowserStartupDiagnosticSurvivesFatalCleanup(t *testing.T) {
+	for _, scenario := range []string{"回收失败", "回收成功", "诊断保存失败"} {
+		t.Run(scenario, func(t *testing.T) {
+			fixture := newFixture(t)
+			controller, store, factory := newBrowserControlFixture(t, fixture)
+			grant := browserGrant(fixture)
+			startup := browserprobe.StartFailure("browser_start_sandbox_failed", errors.New("不应持久化的底层输出"))
+			factory.prepare = func(scope *fakeBrowserScope) {
+				scope.start = func(context.Context, taskprocess.BrowserRequest, sharedbrowser.Options) (BrowserService, error) {
+					return nil, startup
+				}
+				scope.drain = func(context.Context) error {
+					if scenario == "回收失败" {
+						return startup
+					}
+					return nil
+				}
+			}
+			store.beforeSave = func(snapshot BrowserSnapshot) error {
+				if snapshot.StartupError != "" {
+					if !factory.scopes[0].revoked.Load() {
+						return errors.New("保存诊断前没有撤销执行权")
+					}
+					if scenario == "诊断保存失败" {
+						return errors.New("测试诊断刷盘失败")
+					}
+				}
+				return nil
+			}
+			var fatal atomic.Bool
+			controller.onFatal = func() {
+				fatal.Store(true)
+				if scenario == "回收失败" {
+					snapshot, err := store.LoadBrowser(t.Context())
+					if err != nil || snapshot == nil || snapshot.Grant != grant || snapshot.Phase != "consumed" || snapshot.StartupError != "browser_start_sandbox_failed" {
+						t.Error("代理退出前未持久保存本次启动原因", snapshot, err)
+					}
+				}
+				fixture.controller.fail()
+			}
+			observed, err := controller.startAt(t.Context(), grant, probeFiles(t), time.Now().Add(time.Second))
+			if err == nil || observed != (BrowserObservation{}) || fatal.Load() != (scenario != "回收成功") {
+				t.Fatal("失败启动被报告成功或未按原规则封闭", err)
+			}
+			snapshot, err := store.LoadBrowser(t.Context())
+			if err != nil || snapshot == nil {
+				t.Fatal(snapshot, err)
+			}
+			if scenario != "诊断保存失败" && snapshot.StartupError != "browser_start_sandbox_failed" {
+				t.Fatal("清理覆盖了启动原因", snapshot)
+			}
+			if scenario == "回收失败" && snapshot.Phase != "consumed" || scenario == "回收成功" && snapshot.Phase != "closed" {
+				t.Fatal("诊断改变了关闭屏障", snapshot)
+			}
+			if scenario == "回收成功" {
+				factory.prepare = nil
+				grant.Revision++
+				grant.Request.Group.ID = ids.New()
+				if _, err := controller.startAt(t.Context(), grant, probeFiles(t), time.Now().Add(time.Second)); err != nil {
+					t.Fatal("原实例关闭后无法启动新授权", err)
+				}
+				snapshot, err = store.LoadBrowser(t.Context())
+				if err != nil || snapshot == nil || snapshot.Grant != grant || snapshot.Phase != "active" || snapshot.StartupError != "" {
+					t.Fatal("新授权继承了旧的失败分类", snapshot, err)
+				}
+			}
+		})
+	}
+}
+
 func TestBrowserControlCancellationAndBlockedPersistence(t *testing.T) {
 	for _, blocked := range []bool{false, true} {
 		t.Run(map[bool]string{false: "启动取消", true: "持久化阻塞"}[blocked], func(t *testing.T) {
@@ -505,4 +576,8 @@ func TestBrowserControlShutdownPersistsClosure(t *testing.T) {
 	if _, err := controller.startAt(t.Context(), grant, probeFiles(t), time.Now().Add(time.Second)); err == nil {
 		t.Fatal("停服后继续接单")
 	}
+}
+
+func (unusedWindowBrowser) Probe(context.Context, string) (browserprobe.Evidence, error) {
+	return browserprobe.Evidence{}, sharedbrowser.ErrUnavailable
 }

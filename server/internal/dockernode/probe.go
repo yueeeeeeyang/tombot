@@ -47,7 +47,6 @@ type nodeProbes struct {
 	options ProbeOptions
 	logger  *slog.Logger
 	locate  func(context.Context, string, int) (processgroup.ContainerReference, error)
-	stamp   func(time.Time) (agentchannel.Deadline, error)
 	invoke  func(context.Context, Resource, computeragent.ProbeGrant, []*os.File) (computerprobe.Evidence, error)
 }
 
@@ -56,7 +55,7 @@ func newProbes(node *Runtime, logger *slog.Logger) (*nodeProbes, error) {
 	if err != nil {
 		return nil, err
 	}
-	probes := &nodeProbes{node: node, store: node.journal, groups: groups, options: node.options.Probes, logger: logger, locate: processgroup.LocateContainer, stamp: agentchannel.FromDeadline}
+	probes := &nodeProbes{node: node, store: node.journal, groups: groups, options: node.options.Probes, logger: logger, locate: processgroup.LocateContainer}
 	probes.invoke = probes.call
 	return probes, nil
 }
@@ -100,7 +99,7 @@ func (probes *nodeProbes) check(ctx context.Context, resource Resource, current 
 		return evidence, err
 	}
 	deadline, _ := ctx.Deadline()
-	stamp, err := probes.stamp(deadline)
+	stamp, err := probes.node.serviceDeadline(ctx, resource, parent, probes.locate, deadline)
 	if err != nil {
 		return evidence, err
 	}

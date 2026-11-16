@@ -69,7 +69,8 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 		if err := available(ctx, transaction, lease); err != nil {
 			return err
 		}
-		if request.Kind == "tool" || request.Kind == "computer" {
+		// 工作摘要是运行时内建的只写状态工具，业务工具仍逐次检查权限。
+		if request.Kind == "computer" || request.Kind == "tool" && request.ToolName != "report_progress" {
 			var permitted bool
 			if err := transaction.QueryRowContext(ctx, `SELECT tool_permissions ? $3 FROM tombot.bots WHERE user_id=$1 AND id=$2`, lease.UserID, lease.BotID, request.ToolName).Scan(&permitted); err != nil {
 				return err

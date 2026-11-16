@@ -84,6 +84,7 @@ for (const theme of ['浅色', '深色']) {
                   status: 'bootstrapping',
                   capacity: 4,
                   reserved: 0,
+                  image: null,
                 },
               ]
             : [],

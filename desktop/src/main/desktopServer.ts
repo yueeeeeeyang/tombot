@@ -1,10 +1,13 @@
+import { loginResultPage } from './loginResultPage'
 import { app, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { readClipboardFiles } from './clipboardFiles'
-import { ulid } from './ulid'
+import { ulid } from '../shared/ulid'
+import { ServerTransport } from './serverTransport'
+import { createBot } from './botCreation'
 import {
   draftsFromWorkspace,
   workspaceFromSnapshot,
@@ -13,7 +16,7 @@ import {
   type ServerGroup,
   type ServerSnapshot,
 } from './workspaceSnapshot'
-import type { AppWorkspace } from '../renderer/src/features/workspace/model'
+import type { AppWorkspace, NewAgent } from '../renderer/src/features/workspace/model'
 import type { UserEvent } from '../renderer/src/features/desktop/backend'
 import {
   normalizeServerAddress,
@@ -33,13 +36,14 @@ const codeMessages: Record<string, string> = {
   ALREADY_INITIALIZED: '服务已经初始化，请改为验证密码。',
   NOT_INITIALIZED: '请先完成初始化。',
   AUTH_INVALID: '密码不正确。',
-  AUTH_REQUIRED: '需要先验证密码。',
+  SESSION_INVALID: '登录状态已失效，请重新在浏览器中登录。',
   AUTH_RATE_LIMITED: '尝试次数过多，请稍后再试。',
   BOOTSTRAP_RUNNING: '引导正在进行，请稍候。',
-  MODEL_NOT_READY: '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。',
+  MODEL_NOT_READY: '当前模型策略不可用，请联系管理员检查服务端模型配置。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
   OFFLINE: '无法连接服务。请确认地址和网络后重试。',
   SERVER_URL_MISSING: '还没有填写服务地址。',
+  AUTH_PENDING: '正在验证服务或等待浏览器登录，请完成后再操作。',
 }
 
 interface Failure {
@@ -56,6 +60,14 @@ let accessExpiresAt = ''
 let username = ''
 let savedServerAddress = ''
 let sessionLoad: Promise<void> | null = null
+// 主进程也锁住服务切换，避免页面重载后绕过等待状态，将授权发往另一台服务。
+let isBrowserLoginPending = false
+let isCertificateTrustPending = false
+let serverTransport: ServerTransport | undefined
+
+function transport(): ServerTransport {
+  return (serverTransport ??= new ServerTransport(join(app.getPath('userData'), 'server-trust')))
+}
 /** 服务端工作空间修订号；保存选择时必须回传，冲突由服务端判定。 */
 let workspaceRevision = 0
 /** 机器人到单聊会话的映射；会话只由服务端创建，客户端不自行构造。 */
@@ -128,7 +140,7 @@ async function persistSession(): Promise<void> {
 }
 
 interface AuthSession {
-  principal?: { user_id?: string; role?: string }
+  principal?: { user_id?: string; role?: string; username?: string }
   access_token?: string
   refresh_token?: string
   access_expires_at?: string
@@ -179,6 +191,19 @@ async function loadWorkspace(): Promise<{ workspace: AppWorkspace; pristine: boo
     throw Object.assign(new Error('服务没有返回工作空间。'), { code: 'RESPONSE_INVALID' })
   workspaceRevision = snapshot.workspace.revision
   const mapped = workspaceFromSnapshot(snapshot, await readLocalDrafts())
+  // 目录最多一百项，只有自定义头像需要额外读取，每批最多四个请求。
+  const customBots = snapshot.bots.filter((bot) => !bot.is_archived && bot.has_custom_avatar)
+  for (let index = 0; index < customBots.length; index += 4) {
+    await Promise.all(
+      customBots.slice(index, index + 4).map(async (bot) => {
+        const avatar = (await call('GET', `/bots/${encodeURIComponent(bot.id)}/avatar`)) as {
+          content: string
+        }
+        const agent = mapped.workspace.agents.find((item) => item.id === bot.id)
+        if (agent) agent.customAvatar = avatar.content
+      }),
+    )
+  }
   conversations.clear()
   botNames.clear()
   botAvatars.clear()
@@ -218,6 +243,7 @@ async function storeSession(session: AuthSession): Promise<void> {
   accessToken = session.access_token
   refreshToken = session.refresh_token
   accessExpiresAt = session.access_expires_at ?? ''
+  username = session.principal?.username ?? ''
   await persistSession()
 }
 
@@ -229,13 +255,29 @@ function accessIsStale(): boolean {
   return expiry - Date.now() < 30_000
 }
 
+let pendingRefresh: { address: string; task: Promise<void> } | undefined
+
+/** 并发历史、状态和事件请求共享一次续期，防止一次性刷新凭据被重复消费。 */
 async function refreshAccess(): Promise<void> {
   await loadSession()
-  if (!refreshToken) {
-    throw Object.assign(new Error(codeMessages.AUTH_REQUIRED), { code: 'SESSION_INVALID' })
+  const address = requireServerAddress()
+  if (pendingRefresh?.address === address) return pendingRefresh.task
+  const task = renewAccess(address)
+  const pending = { address, task }
+  pendingRefresh = pending
+  try {
+    await task
+  } finally {
+    if (pendingRefresh === pending) pendingRefresh = undefined
   }
-  const base = requireServerAddress()
-  const response = await fetch(`${base}/api/v2/auth/refresh`, {
+}
+
+async function renewAccess(base: string): Promise<void> {
+  if (!refreshToken) {
+    throw Object.assign(new Error(codeMessages.SESSION_INVALID), { code: 'SESSION_INVALID' })
+  }
+  const original = refreshToken
+  const response = await transport().fetch(`${base}/api/v2/auth/refresh`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ refresh_token: refreshToken }),
@@ -243,21 +285,25 @@ async function refreshAccess(): Promise<void> {
   })
   const text = await response.text()
   const payload = text ? (JSON.parse(text) as AuthSession & { code?: string }) : {}
+  if (base !== requireServerAddress() || original !== refreshToken) {
+    throw Object.assign(new Error('服务或登录状态已变化，请重试。'), { code: 'SERVER_CHANGED' })
+  }
   if (!response.ok) {
     clearCredentials()
     await persistSession()
-    throw Object.assign(new Error(codeMessages.AUTH_REQUIRED), { code: 'SESSION_INVALID' })
+    throw Object.assign(new Error(codeMessages.SESSION_INVALID), { code: 'SESSION_INVALID' })
   }
   await storeSession(payload)
 }
 
 /**
- * 会话检查不再依赖"服务是否初始化"。v2 只有三种结果：
- * 没有地址、凭据无效需要重新登录、凭据有效可以进入工作空间。
+ * 未登录时先确认服务地址；只有本次连接明确确认过地址，才进入登录页。
+ * 有效会话仍可直接恢复工作空间。
  */
-async function inspectSession(): Promise<{
+async function inspectSession(hasConfirmedAddress = false): Promise<{
   phase: 'address' | 'offline' | 'login' | 'ready'
   message?: string
+  errorCode?: string
   serverUrl: string
   username?: string
 }> {
@@ -265,7 +311,7 @@ async function inspectSession(): Promise<{
   const choice = selectServerAddress(savedServerAddress, process.env.TOMBOT_SERVER_URL)
   if (!choice.connect) return { phase: 'address', serverUrl: choice.prefill }
   if (!accessToken && !refreshToken) {
-    return { phase: 'login', serverUrl: choice.connect }
+    return { phase: hasConfirmedAddress ? 'login' : 'address', serverUrl: choice.connect }
   }
   try {
     if (accessIsStale()) await refreshAccess()
@@ -273,15 +319,21 @@ async function inspectSession(): Promise<{
       principal?: { user_id?: string }
     }
     if (!session.principal?.user_id) {
-      throw Object.assign(new Error(codeMessages.AUTH_REQUIRED), { code: 'SESSION_INVALID' })
+      throw Object.assign(new Error(codeMessages.SESSION_INVALID), { code: 'SESSION_INVALID' })
     }
     return { phase: 'ready', serverUrl: choice.connect, username }
   } catch (error) {
     const coded = error as { code?: string }
     if (coded.code === 'SESSION_INVALID' || coded.code === 'AUTH_INVALID') {
-      return { phase: 'login', serverUrl: choice.connect }
+      return { phase: hasConfirmedAddress ? 'login' : 'address', serverUrl: choice.connect }
     }
-    return { phase: 'offline', message: failure(error).message, serverUrl: choice.connect }
+    const failed = failure(error)
+    return {
+      phase: 'offline',
+      message: failed.message,
+      errorCode: failed.code,
+      serverUrl: choice.connect,
+    }
   }
 }
 
@@ -304,25 +356,26 @@ async function send(
   body: unknown,
   timeout: number,
   signal: AbortSignal | undefined,
+  authenticated = true,
 ): Promise<{ status: number; payload: unknown }> {
   const base = requireServerAddress()
-  let response: Response
-  try {
-    response = await fetch(`${base}/api/v2${path}`, {
-      method,
-      headers: {
-        'content-type': 'application/json',
-        ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: combineSignals(signal, AbortSignal.timeout(timeout)),
-    })
-  } catch (error) {
-    if (signal?.aborted) throw error
-    if (error instanceof Error && error.name === 'AbortError') {
-      throw Object.assign(new Error('连接服务超时。'), { code: 'OFFLINE' })
-    }
-    throw Object.assign(new Error(codeMessages.OFFLINE), { code: 'OFFLINE' })
+  const response = await transport().fetch(`${base}/api/v2${path}`, {
+    method,
+    headers: {
+      'content-type': 'application/json',
+      ...(authenticated && accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+    },
+    credentials: 'omit',
+    redirect: 'error',
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: combineSignals(signal, AbortSignal.timeout(timeout)),
+  })
+  if (
+    response.ok &&
+    method === 'GET' &&
+    /^\/bots\/[0-7][0-9A-HJKMNP-TV-Z]{25}\/avatar$/.test(path)
+  ) {
+    return { status: response.status, payload: { content: await readAvatar(response) } }
   }
   const text = await response.text()
   let payload: unknown = {}
@@ -336,6 +389,32 @@ async function send(
   return { status: response.status, payload }
 }
 
+/** 头像接口返回小尺寸 PNG；限制读取大小，避免将异常响应当成图片或无界加载。 */
+async function readAvatar(response: Response): Promise<string> {
+  const reader = response.body?.getReader()
+  if (!reader) throw new Error('服务没有返回猫咪头像。')
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    if (response.headers.get('content-type')?.split(';')[0] !== 'image/png')
+      throw new Error('猫咪头像格式无效。')
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      size += value.length
+      if (size > 72 * 1024) throw new Error('猫咪头像超过大小限制。')
+      chunks.push(value)
+    }
+  } finally {
+    await reader.cancel()
+    reader.releaseLock()
+  }
+  const bytes = Buffer.concat(chunks)
+  if (bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a')
+    throw new Error('猫咪头像格式无效。')
+  return `data:image/png;base64,${bytes.toString('base64')}`
+}
+
 function failureOf(payload: unknown, status: number): Failure {
   const failure = (payload ?? {}) as ApiFailure
   const code = failure.code ?? (status === 401 ? 'SESSION_INVALID' : 'REQUEST_FAILED')
@@ -346,6 +425,20 @@ function failureOf(payload: unknown, status: number): Failure {
       ? serverMessage
       : '服务暂时无法完成这个操作。')
   return { code, message }
+}
+
+/** 登录与授权码交换发生在会话建立之前，不携带旧凭据，也不触发续期或自动重发。 */
+async function authenticate(
+  path: '/auth/login' | '/auth/browser/start' | '/auth/browser/exchange',
+  body: unknown,
+): Promise<unknown> {
+  await loadSession()
+  const result = await send('POST', path, body, 20_000, undefined, false)
+  if (result.status >= 400) {
+    const failed = failureOf(result.payload, result.status)
+    throw Object.assign(new Error(failed.message), { code: failed.code })
+  }
+  return result.payload
 }
 
 /**
@@ -405,92 +498,111 @@ let eventCursor = 0
  * 只有凭据失效或订阅被取消才停止。事件只作为"重新读取"的提示，不携带正文。
  */
 async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promise<void> {
+  let failures = 0
   while (!signal.aborted) {
-    let response: Response
     try {
       await loadSession()
       if (accessIsStale()) await refreshAccess()
-      response = await fetch(`${requireServerAddress()}/api/v2/events?after=${eventCursor}`, {
-        headers: {
-          accept: 'text/event-stream',
-          ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+      const response = await transport().fetch(
+        `${requireServerAddress()}/api/v2/events?after=${eventCursor}`,
+        {
+          headers: {
+            accept: 'text/event-stream',
+            ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+          },
+          signal: AbortSignal.any([signal, AbortSignal.timeout(70_000)]),
         },
-        signal,
-      })
-    } catch (error) {
-      if (signal.aborted || (error instanceof Error && error.name === 'AbortError')) return
-      await new Promise((resolve) => setTimeout(resolve, 2_000))
-      continue
-    }
-    if (response.status === 401) {
-      try {
+      )
+      if (response.status === 401) {
+        await response.body?.cancel()
         await refreshAccess()
-      } catch {
-        return
+        throw new Error('登录状态已更新，正在恢复消息订阅。')
       }
-      continue
-    }
-    if (
-      !response.ok ||
-      !(response.headers.get('content-type') ?? '').includes('text/event-stream')
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5_000))
-      continue
-    }
-    const reader = response.body?.getReader()
-    if (!reader) return
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let cursorExpired = false
-    while (!signal.aborted) {
-      const chunk = await reader.read()
-      if (chunk.done) break
-      buffer += decoder.decode(chunk.value, { stream: true })
-      const blocks = buffer.split('\n\n')
-      buffer = blocks.pop() ?? ''
-      for (const block of blocks) {
-        if (block.startsWith(':') || block.startsWith('retry:')) continue
-        const sequence = /^id: (\d+)$/m.exec(block)?.[1]
-        const data = block
-          .split('\n')
-          .filter((line) => line.startsWith('data: '))
-          .map((line) => line.slice(6))
-          .join('\n')
-        if (!data) continue
-        if (block.startsWith('event: error')) {
-          // 游标早于服务端清理边界时，缺失的事件已经删除；必须重新读取快照。
-          // 只跳过这一帧会让本地状态永久落后于服务端。
-          let code = ''
-          try {
-            code = (JSON.parse(data) as { code?: string }).code ?? ''
-          } catch (error) {
-            // 错误帧本身不可解析时按普通失败处理，由外层退避后重新订阅。
-            console.error('事件错误帧无法解析', error)
+      if (
+        !response.ok ||
+        !(response.headers.get('content-type') ?? '').includes('text/event-stream')
+      ) {
+        await response.body?.cancel()
+        throw new Error('暂时无法订阅消息状态。')
+      }
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('消息订阅未返回内容。')
+      let received = false
+      let cursorExpired = false
+      try {
+        const decoder = new TextDecoder()
+        let buffer = ''
+        while (!signal.aborted) {
+          const chunk = await reader.read()
+          if (chunk.done) break
+          received = true
+          buffer += decoder.decode(chunk.value, { stream: true })
+          if (buffer.length > 1_048_576) throw new Error('消息事件超过允许大小。')
+          const blocks = buffer.split('\n\n')
+          buffer = blocks.pop() ?? ''
+          for (const block of blocks) {
+            const data = block
+              .split('\n')
+              .filter((line) => line.startsWith('data: '))
+              .map((line) => line.slice(6))
+              .join('\n')
+            if (!data) continue
+            const parsed = JSON.parse(data) as UserEvent & { code?: string }
+            if (block.startsWith('event: error')) {
+              if (parsed.code !== 'EVENT_CURSOR_EXPIRED') throw new Error('消息订阅被服务中断。')
+              cursorExpired = true
+              break
+            }
+            const sequence = Number(/^id: (\d+)$/m.exec(block)?.[1])
+            if (
+              !Number.isSafeInteger(sequence) ||
+              sequence <= 0 ||
+              typeof parsed.kind !== 'string' ||
+              !parsed.payload
+            ) {
+              throw new Error('消息事件格式无效。')
+            }
+            if (sequence <= eventCursor) continue
+            if (!event.sender.isDestroyed()) event.sender.send('desktop:user-event', parsed)
+            eventCursor = sequence
           }
-          if (code === 'EVENT_CURSOR_EXPIRED') cursorExpired = true
-          break
+          if (cursorExpired) break
         }
-        if (!sequence) continue
+      } finally {
         try {
-          const parsed = JSON.parse(data) as UserEvent
-          eventCursor = Math.max(eventCursor, Number(sequence))
-          if (!event.sender.isDestroyed()) event.sender.send('desktop:user-event', parsed)
-        } catch {
-          // 单个损坏帧不终止订阅；服务端序号仍会推进，下次续订不会重复消费。
+          await reader.cancel()
+        } finally {
+          reader.releaseLock()
         }
       }
-      if (cursorExpired) break
+      if (cursorExpired) {
+        await loadWorkspace()
+        if (!event.sender.isDestroyed())
+          event.sender.send('desktop:user-event', {
+            sequence: eventCursor,
+            kind: 'workspace.refresh',
+            resource_id: '',
+            payload: {},
+            created_at: new Date().toISOString(),
+          })
+      }
+      if (received) failures = 0
+      else throw new Error('消息订阅意外结束。')
+    } catch (error) {
+      if (signal.aborted) return
+      failures++
+      if (failures >= 5)
+        throw new Error('实时状态连接中断，已切换为定时刷新。请检查网络后重新打开客户端。', {
+          cause: error,
+        })
     }
-    if (cursorExpired) {
-      // 快照会覆盖清理边界内缺失的变更；游标随之推进到快照水位后重新续订。
-      await reader.cancel().catch(() => undefined)
-      await loadWorkspace()
-      continue
-    }
-    // 连接被服务端正常收尾时立即续订，交由其 retry 提示控制节奏。
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) =>
+      setTimeout(resolve, failures ? Math.min(8_000, 500 * 2 ** failures) : 500),
+    )
   }
 }
+
+const eventWatches = new Map<string, AbortController>()
 
 /** 注册渲染进程可调用的服务通道。令牌只留在主进程，页面拿不到。 */
 export function registerDesktopIpc(): void {
@@ -498,6 +610,9 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:connect', (_event, input: unknown) =>
     handle(async () => {
       await loadSession()
+      if (isBrowserLoginPending || isCertificateTrustPending) {
+        throw Object.assign(new Error(codeMessages.AUTH_PENDING), { code: 'AUTH_PENDING' })
+      }
       const next = normalizeServerAddress(typeof input === 'string' ? input : '')
       if (next !== savedServerAddress) {
         // 凭据属于上一台服务，换地址后不能继续带过去。
@@ -505,35 +620,102 @@ export function registerDesktopIpc(): void {
         savedServerAddress = next
         await persistSession()
       }
-      return inspectSession()
+      return inspectSession(true)
     }),
+  )
+  ipcMain.handle(
+    'desktop:trust-server-certificate',
+    (_event, address: unknown, fingerprint: unknown) =>
+      handle(async () => {
+        await loadSession()
+        if (isBrowserLoginPending || isCertificateTrustPending) {
+          throw Object.assign(new Error(codeMessages.AUTH_PENDING), { code: 'AUTH_PENDING' })
+        }
+        if (address !== requireServerAddress()) {
+          throw Object.assign(new Error('服务地址已变化，请重新核对当前服务的证书。'), {
+            code: 'SERVER_CHANGED',
+          })
+        }
+        isCertificateTrustPending = true
+        try {
+          await transport().trustCertificate(requireServerAddress(), fingerprint)
+        } finally {
+          isCertificateTrustPending = false
+        }
+      }),
   )
   ipcMain.handle('desktop:login', (_event, input: LoginInput) =>
     handle(() => login(typeof input === 'string' ? { username: '', password: input } : input)),
   )
-  ipcMain.handle('desktop:browser-login', () => handle(() => beginBrowserLogin()))
+  ipcMain.handle('desktop:browser-login', () =>
+    handle(async () => {
+      if (isBrowserLoginPending || isCertificateTrustPending) {
+        throw Object.assign(new Error(codeMessages.AUTH_PENDING), { code: 'AUTH_PENDING' })
+      }
+      isBrowserLoginPending = true
+      try {
+        return await beginBrowserLogin()
+      } finally {
+        isBrowserLoginPending = false
+      }
+    }),
+  )
   ipcMain.handle('desktop:logout', () => handle(() => logout()))
   ipcMain.handle('desktop:load-workspace', () => handle(() => loadWorkspace()))
+  ipcMain.handle('desktop:create-agent', (_event, profile: NewAgent, requestId: string) =>
+    handle(async () => {
+      const id = await createBot(call, profile, requestId)
+      // 首只猫咪会修改工作空间修订号；刷新后才能保存选择并向正确的会话投递。
+      const snapshot = await loadWorkspace()
+      const agent = snapshot.workspace.agents.find((item) => item.id === id)
+      if (!agent) throw new Error('服务目录尚未确认新猫咪，请重试。')
+      return agent
+    }),
+  )
   ipcMain.handle('desktop:clipboard-files', () => handle(readClipboardFiles))
   ipcMain.handle('desktop:save-workspace', (_event, workspace: AppWorkspace) =>
     handle(() => saveWorkspace(workspace)),
   )
-  ipcMain.handle('desktop:watch-events', (event) =>
+  ipcMain.on('desktop:unwatch-events', (event, watchId: string) => {
+    eventWatches.get(`${event.sender.id}:${watchId}`)?.abort()
+  })
+  ipcMain.handle('desktop:agent-conversation', (_event, agentId: string, before?: number) =>
+    handle(async () => {
+      const conversationID = await conversationFor(agentId)
+      const [page, activity] = await Promise.all([
+        listMessagesPage(conversationID, before),
+        call('GET', `/conversations/${encodeURIComponent(conversationID)}/activity`) as Promise<{
+          runs: unknown[]
+        }>,
+      ])
+      return { ...page, runs: activity.runs }
+    }),
+  )
+  ipcMain.handle('desktop:watch-events', (event, watchId: string) =>
     handle(async () => {
       const controller = new AbortController()
+      const key = `${event.sender.id}:${watchId}`
+      eventWatches.get(key)?.abort()
+      eventWatches.set(key, controller)
       const detach = () => controller.abort()
       event.sender.once('destroyed', detach)
+      event.sender.once('did-start-navigation', detach)
       try {
         await pumpEvents(event, controller.signal)
         return null
       } finally {
         event.sender.removeListener('destroyed', detach)
+        event.sender.removeListener('did-start-navigation', detach)
+        if (eventWatches.get(key) === controller) eventWatches.delete(key)
       }
     }),
   )
   ipcMain.handle(
     'desktop:deliver',
-    (event, input: { agentId: string; content: string; requestId: string }) =>
+    (
+      event,
+      input: { agentId: string; content: string; requestId: string; clientRequestId: string },
+    ) =>
       handle(async () => {
         try {
           return await deliverMessage(event, input)
@@ -544,25 +726,6 @@ export function registerDesktopIpc(): void {
           }
           throw error
         }
-      }),
-  )
-  ipcMain.handle('desktop:load-settings', () => handle(() => call('GET', '/model-settings')))
-  ipcMain.handle('desktop:model-providers', () =>
-    handle(async () => {
-      const listed = (await call('GET', '/model-providers')) as Array<{ id: string; name: string }>
-      return listed
-    }),
-  )
-  ipcMain.handle(
-    'desktop:provider-models',
-    (_event, input: { providerId: string; apiKey: string }) =>
-      handle(async () => {
-        const result = (await call(
-          'POST',
-          `/model-providers/${encodeURIComponent(input.providerId)}/models`,
-          { apiKey: input.apiKey },
-        )) as { models?: Array<{ id: string; name: string }> }
-        return result.models ?? []
       }),
   )
   ipcMain.handle('desktop:introduction', (_event, agentId: string) =>
@@ -736,89 +899,26 @@ export function registerDesktopIpc(): void {
       return result.url
     }),
   )
-  ipcMain.handle(
-    'desktop:save-settings',
-    (_event, input: { draft: Record<string, unknown>; apiKey: string }) =>
-      handle(() => {
-        const draft = input.draft
-        return call('PUT', '/model-settings', {
-          language: draft.language,
-          provider: draft.provider,
-          providerName: draft.providerName,
-          baseUrl: draft.baseUrl,
-          modelName: draft.modelName,
-          ...(input.apiKey ? { apiKey: input.apiKey } : {}),
-        })
-      }),
-  )
 }
 
-/**
- * 投递一条用户消息：先受理成持久运行，再轮询到终态，最后读回会话消息。
- * v2 没有逐字流式接口，模型输出只能整段返回，因此这里不发送 delta 事件。
- */
+/** 受理后立即返回；运行和回复通过用户事件刷新，不占用客户端发送通道。 */
 async function deliverMessage(
-  event: IpcMainInvokeEvent,
-  input: { agentId: string; content: string; requestId: string },
+  _event: IpcMainInvokeEvent,
+  input: { agentId: string; content: string; requestId: string; clientRequestId: string },
 ): Promise<unknown> {
   const conversationID = await conversationFor(input.agentId)
   const accepted = (await call(
     'POST',
     `/conversations/${encodeURIComponent(conversationID)}/messages`,
     {
-      client_request_id: ulid(),
+      client_request_id: input.clientRequestId,
       content: input.content,
     },
-  )) as { submission?: { run_id?: string } }
-  const runID = accepted.submission?.run_id
-  if (!runID) throw Object.assign(new Error('服务没有返回运行标识。'), { code: 'RESPONSE_INVALID' })
-  event.sender.send('desktop:stream-event', {
-    requestId: input.requestId,
-    type: 'process',
-    text: '正在处理',
-    runId: runID,
-    isWorking: true,
-  })
-  const run = await waitForRun(runID)
-  if (run.status !== 'succeeded') {
-    throw Object.assign(new Error(runError(run.error_code)), {
-      code: run.error_code || 'RUN_FAILED',
-    })
+  )) as { submission?: { run_id?: string; message_id?: string } }
+  if (!accepted.submission?.run_id || !accepted.submission.message_id) {
+    throw Object.assign(new Error('服务没有返回消息和运行标识。'), { code: 'RESPONSE_INVALID' })
   }
-  const messages = await listConversation(conversationID)
-  return { messages }
-}
-
-/** 轮询运行到终态；取消与失败都按服务端给出的状态收尾，不在这里猜测结果。 */
-async function waitForRun(runID: string): Promise<{ status: string; error_code?: string }> {
-  const deadline = Date.now() + 10 * 60_000
-  while (Date.now() < deadline) {
-    const result = (await call('GET', `/runs/${encodeURIComponent(runID)}`)) as {
-      run?: { status?: string; error_code?: string }
-    }
-    const status = result.run?.status ?? ''
-    if (
-      status === 'succeeded' ||
-      status === 'failed' ||
-      status === 'canceled' ||
-      status === 'unknown'
-    ) {
-      return { status, error_code: result.run?.error_code }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 800))
-  }
-  throw Object.assign(new Error('运行超过等待时限，请稍后重新读取结果。'), { code: 'RUN_TIMEOUT' })
-}
-
-function runError(code: string | undefined): string {
-  const messages: Record<string, string> = {
-    CANCELED: '这次运行已取消。',
-    MODEL_FAILED: '模型调用失败，请稍后重试。',
-    MODEL_NOT_CONFIGURED: '管理员尚未配置可用模型。',
-    COMPUTER_UNAVAILABLE: '这台机器人暂时没有可用电脑。',
-    TOOL_RESULT_UNKNOWN: '工具执行结果未知，已停止继续操作。',
-  }
-  return (code && messages[code]) || '运行没有成功完成。'
+  return { acceptedMessageId: accepted.submission.message_id }
 }
 
 /** 机器人到会话的映射可能还没加载；找不到时重新读取一次目录。 */
@@ -858,10 +958,6 @@ async function listMessagesPage(
     })
     .reverse()
   return { messages, hasMore: rows.length === messagePageSize }
-}
-
-async function listConversation(conversationID: string): Promise<unknown[]> {
-  return (await listMessagesPage(conversationID)).messages
 }
 
 /** 读取群组的可写字段；v2 的保存是整体替换，改名和成员调整都要带上原有内容。 */
@@ -984,7 +1080,7 @@ async function uploadFile(input: {
     input.name,
   )
   const query = input.shared ? 'scope=shared' : `bot_id=${encodeURIComponent(input.botId ?? '')}`
-  const response = await fetch(`${requireServerAddress()}/api/v1/fs/upload?${query}`, {
+  const response = await transport().fetch(`${requireServerAddress()}/api/v1/fs/upload?${query}`, {
     method: 'POST',
     headers: { ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
     body: form,
@@ -1008,10 +1104,13 @@ async function previewFile(path: string, botId?: string): Promise<string> {
   const query = path.startsWith('shared/')
     ? `scope=shared&path=${encodeURIComponent(path)}`
     : `bot_id=${encodeURIComponent(botId ?? '')}&path=${encodeURIComponent(path)}`
-  const response = await fetch(`${requireServerAddress()}/api/v1/fs/download?${query}`, {
-    headers: { ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
-    signal: AbortSignal.timeout(20_000),
-  })
+  const response = await transport().fetch(
+    `${requireServerAddress()}/api/v1/fs/download?${query}`,
+    {
+      headers: { ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
+      signal: AbortSignal.timeout(20_000),
+    },
+  )
   if (!response.ok) throw Object.assign(new Error('附件暂时无法显示。'), { code: 'PREVIEW_FAILED' })
   const bytes = Buffer.from(await response.arrayBuffer())
   if (bytes.length > 1_500_000)
@@ -1032,7 +1131,7 @@ async function readConversationStream(
   requestId: string,
 ): Promise<unknown> {
   await loadSession()
-  const response = await fetch(
+  const response = await transport().fetch(
     `${requireServerAddress()}/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
     {
       method: 'POST',
@@ -1166,36 +1265,78 @@ async function beginBrowserLogin(): Promise<{ phase: 'ready'; username?: string 
   const state = Buffer.from(await randomBytes(32)).toString('base64url')
   const verifier = Buffer.from(await randomBytes(32)).toString('base64url')
   const challenge = createHash('sha256').update(verifier).digest('base64url')
-  const callback = await new Promise<{ code: string; state: string }>((resolve, reject) => {
+  await new Promise<void>((resolve, reject) => {
+    const close = () => {
+      clearTimeout(timer)
+      server.close()
+    }
+    let isCompleting = false
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1')
       if (url.pathname !== '/callback') {
         response.writeHead(404).end()
         return
       }
-      const code = url.searchParams.get('code')
-      const returned = url.searchParams.get('state')
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(
-        code && returned === state
-          ? '<p>登录成功，请回到桌面客户端。</p>'
-          : '<p>登录未完成，请回到桌面客户端重试。</p>',
-      )
-      server.close()
-      if (!code || returned !== state) {
-        reject(Object.assign(new Error(codeMessages.AUTH_INVALID), { code: 'AUTH_INVALID' }))
+      if (request.method !== 'GET') {
+        response.writeHead(405, { Allow: 'GET' }).end()
         return
       }
-      resolve({ code, state: returned })
+      if (isCompleting) {
+        response.writeHead(409).end()
+        return
+      }
+      isCompleting = true
+      clearTimeout(timer)
+      // 成功页必须等待授权交换与本地保存完成，避免浏览器显示成功而客户端仍失败。
+      void (async () => {
+        try {
+          const code = url.searchParams.get('code')
+          const returned = url.searchParams.get('state')
+          if (
+            !code ||
+            returned !== state ||
+            url.searchParams.getAll('code').length !== 1 ||
+            url.searchParams.getAll('state').length !== 1
+          ) {
+            throw Object.assign(new Error('登录回调无效，请重新发起登录。'), {
+              code: 'AUTHORIZATION_INVALID',
+            })
+          }
+          const result = (await authenticate('/auth/browser/exchange', {
+            code,
+            code_verifier: verifier,
+            state: returned,
+          })) as AuthSession
+          await storeSession(result)
+          const page = loginResultPage(true)
+          response.writeHead(200, page.headers).end(page.html)
+          resolve()
+        } catch (error) {
+          const page = loginResultPage(false)
+          response.writeHead(400, page.headers).end(page.html)
+          reject(error)
+        } finally {
+          close()
+        }
+      })()
     })
-    server.on('error', reject)
+    server.on('error', (error) => {
+      close()
+      reject(error)
+    })
+    // 用户可能在浏览器里直接关闭页面；超时后释放监听，不能永久等待。
+    const timer = setTimeout(() => {
+      close()
+      reject(Object.assign(new Error('登录超时，请重新发起。'), { code: 'AUTH_TIMEOUT' }))
+    }, 10 * 60_000)
+    timer.unref()
     // 只监听本机回环，端口由系统分配，避免与他人冲突。
     server.listen(0, '127.0.0.1', async () => {
       try {
         const address = server.address()
         if (!address || typeof address === 'string') throw new Error('无法分配本地回调端口。')
         const redirectURI = `http://127.0.0.1:${address.port}/callback`
-        const started = (await call('POST', '/auth/browser/start', {
+        const started = (await authenticate('/auth/browser/start', {
           redirect_uri: redirectURI,
           state,
           code_challenge: challenge,
@@ -1205,29 +1346,18 @@ async function beginBrowserLogin(): Promise<{ phase: 'ready'; username?: string 
         if (!started.authorization_url) throw new Error('服务没有返回授权页地址。')
         await shell.openExternal(`${requireServerAddress()}${started.authorization_url}`)
       } catch (error) {
-        server.close()
+        close()
         reject(error)
       }
     })
-    // 用户可能在浏览器里直接关闭页面；超时后释放监听，不能永久等待。
-    setTimeout(() => {
-      server.close()
-      reject(Object.assign(new Error('登录超时，请重新发起。'), { code: 'AUTH_TIMEOUT' }))
-    }, 10 * 60_000).unref()
   })
-  const result = (await call('POST', '/auth/browser/exchange', {
-    code: callback.code,
-    code_verifier: verifier,
-    state: callback.state,
-  })) as AuthSession
-  await storeSession(result)
-  return { phase: 'ready' }
+  return { phase: 'ready', username }
 }
 
 /** 账号登录：用户名和密码由用户输入，动态验证码只在管理员账户要求时提交。 */
 async function login(input: LoginInput): Promise<void> {
   await loadSession()
-  const result = (await call('POST', '/auth/login', {
+  const result = (await authenticate('/auth/login', {
     username: input.username.trim(),
     password: input.password,
     ...(input.code ? { code: input.code.trim() } : {}),

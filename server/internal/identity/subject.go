@@ -49,10 +49,10 @@ var (
 	}
 )
 
-// subjectForScope 只接受两个固定作用域；管理会话只能使用管理员身份表。
+// subjectForScope 限定桌面、用户网页与管理作用域；管理会话只能使用管理员身份表。
 func subjectForScope(scope string) (subject, bool) {
 	switch scope {
-	case "desktop":
+	case "desktop", "web":
 		return userSubject, true
 	case "admin":
 		return administratorSubject, true

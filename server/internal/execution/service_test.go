@@ -66,7 +66,14 @@ func newFixtureWithProtocol(t *testing.T, cluster *pgtest.Cluster, protocol stri
 	t.Helper()
 	ctx := context.Background()
 	pool, name := cluster.Database(t)
-	if err := postgres.Migrate(ctx, pool); err != nil {
+	// 与一键安装保持一致：迁移身份拥有结构，但不能绕过强制行级隔离。
+	for _, role := range []postgres.Role{postgres.TenantRole, postgres.IdentityRole, postgres.ControlRole, postgres.DispatchRole} {
+		execute(t, pool, `DO $roles$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='`+string(role)+`') THEN CREATE ROLE `+string(role)+` NOLOGIN; END IF; END $roles$`)
+	}
+	migrationLogin := cluster.Login(t)
+	execute(t, pool, `GRANT CREATE ON DATABASE `+name+` TO `+migrationLogin)
+	migration := pgtest.Connect(t, cluster.DSN(name, migrationLogin))
+	if err := postgres.Migrate(ctx, migration); err != nil {
 		t.Fatal(err)
 	}
 	open := func(role postgres.Role) *postgres.Database {
@@ -235,8 +242,10 @@ func TestDurableExecution(t *testing.T) {
 		}
 		_, err = fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{request.ClientRequestID, "不同正文"})
 		expect(t, err, ErrConflict)
-		_, err = fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{ids.New(), "新回合"})
-		expect(t, err, ErrBusy)
+		additional, err := fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{ids.New(), "补充消息"})
+		if err != nil || additional.RunID != first.RunID || additional.MessageID == first.MessageID {
+			t.Fatal("执行中未受理补充消息", err)
+		}
 		_, err = fixture.service.Send(ctx, fixture.b, fixture.first.ConversationID, request)
 		expect(t, err, ErrNotFound)
 		_, err = fixture.service.Messages(ctx, fixture.b, fixture.first.ConversationID, 0, 10)
@@ -246,13 +255,13 @@ func TestDurableExecution(t *testing.T) {
 		_, err = fixture.service.Cancel(ctx, fixture.b, first.RunID)
 		expect(t, err, ErrNotFound)
 		messages, err := fixture.service.Messages(ctx, fixture.a, fixture.first.ConversationID, 0, 10)
-		if err != nil || len(messages) != 1 || messages[0].Sequence != 1 || messages[0].Blocks[0].Text != request.Content {
+		if err != nil || len(messages) != 2 || messages[0].Sequence != 2 || messages[1].Blocks[0].Text != request.Content {
 			t.Fatal("持久消息错误", err)
 		}
 		if err = fixture.service.MarkRead(ctx, fixture.a, fixture.first.ConversationID, 1); err != nil {
 			t.Fatal(err)
 		}
-		expect(t, fixture.service.MarkRead(ctx, fixture.a, fixture.first.ConversationID, 2), ErrInvalidInput)
+		expect(t, fixture.service.MarkRead(ctx, fixture.a, fixture.first.ConversationID, 3), ErrInvalidInput)
 		if err = fixture.service.MarkRead(ctx, fixture.a, fixture.first.ConversationID, 0); err != nil {
 			t.Fatal(err)
 		}

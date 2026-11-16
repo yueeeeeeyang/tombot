@@ -66,7 +66,7 @@ func (node *Runtime) validateSnapshot(resource Resource, state *record, current 
 	}
 	if current.hasContainer {
 		container := current.container
-		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !sameLabels(container.Config.Labels, resource.Labels) || state.ContainerID != "" && state.ContainerID != container.ID {
+		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !sameLabels(container.Config.Labels, containerLabels(resource)) || state.ContainerID != "" && state.ContainerID != container.ID {
 			return failure("container_identity_mismatch")
 		}
 		if err := node.validateContainer(resource, container); err != nil {
@@ -80,11 +80,21 @@ func (node *Runtime) validateSnapshot(resource Resource, state *record, current 
 	return nil
 }
 
+// containerLabels 包含镜像继承的布局声明；卷只使用资源身份标签，不能混入容器镜像元数据。
+func containerLabels(resource Resource) map[string]string {
+	labels := make(map[string]string, len(resource.Labels)+1)
+	for key, value := range resource.Labels {
+		labels[key] = value
+	}
+	labels[computer.StorageLayoutLabel] = computer.StorageLayoutVersion
+	return labels
+}
+
 func (node *Runtime) configuration(resource Resource) createContainer {
 	init := true
 	resources := resource.Specification.Resources
 	configuration := createContainer{Image: resource.Specification.ImageReference, User: "0:0", Hostname: strings.ToLower(resource.Specification.ComputerID), WorkingDir: "/workspace",
-		Entrypoint: []string{"/usr/lib/tombot/computer-agent"}, Cmd: []string{}, Env: []string{"LANG=C.UTF-8", "HOME=/run/tombot", "TMPDIR=/tmp"}, Labels: resource.Labels, StopSignal: "SIGTERM"}
+		Entrypoint: []string{"/usr/lib/tombot/computer-agent"}, Cmd: []string{}, Env: []string{"LANG=C.UTF-8", "HOME=/run/tombot", "TMPDIR=/tmp"}, Labels: containerLabels(resource), StopSignal: "SIGTERM"}
 	configuration.HostConfig = hostConfig{NetworkMode: "none", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, CapAdd: computer.AgentCapabilities(),
 		SecurityOpt: computerimage.SecurityOptions(), NanoCpus: int64(resources.CPUMillis) * 1000000, Memory: resources.MemoryBytes, MemorySwap: resources.MemoryBytes, ShmSize: node.options.SharedMemoryBytes, PidsLimit: int64(resources.ProcessLimit), Init: &init, IpcMode: "private", CgroupnsMode: "private",
 		Mounts: []mount{
@@ -353,7 +363,7 @@ func (node *Runtime) remove(ctx context.Context, resource Resource, state *recor
 			return computer.Observation{}, err
 		}
 		if err == nil {
-			if stopped.ID != current.container.ID || !sameLabels(stopped.Config.Labels, resource.Labels) || stopped.State.Running {
+			if stopped.ID != current.container.ID || !sameLabels(stopped.Config.Labels, containerLabels(resource)) || stopped.State.Running {
 				return computer.Observation{}, failure("container_stop_unconfirmed")
 			}
 			if err = node.engine.removeContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {

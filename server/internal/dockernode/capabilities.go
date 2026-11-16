@@ -8,7 +8,7 @@ import (
 	"io.yueyang/tom/internal/processgroup"
 )
 
-// capabilityProbe 只汇总本次实际执行、持久关闭和宿主复验的证据，未接通的浏览器能力不会推定成功。
+// capabilityProbe 汇总本次真实检查、探针清理和宿主复验，任一失败都不提升电脑能力。
 type capabilityProbe struct {
 	node   *Runtime
 	locate func(context.Context, string, int) (processgroup.ContainerReference, error)
@@ -49,9 +49,11 @@ func (probe *capabilityProbe) Check(ctx context.Context, resource Resource, cont
 	if err := probe.node.storage.VerifyFilesystem(ctx, resource, evidence.FilesystemType, evidence.FilesystemSize); err != nil {
 		return computer.Capabilities{}, err
 	}
+	if err := probe.node.browsers.check(ctx, resource, current.container); err != nil {
+		return computer.Capabilities{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return computer.Capabilities{}, err
 	}
-	// none 网络与容器内接口均已复验；该标志不替代代理可达、Chrome 沙箱和共享窗口的后续联合检查。
-	return computer.Capabilities{Terminal: evidence.Terminal, Files: evidence.Files, ProcessReaping: true, DiskQuota: true, NetworkIsolation: evidence.LocalNetwork}, nil
+	return computer.Capabilities{Terminal: evidence.Terminal, Browser: true, Files: evidence.Files, ProcessReaping: true, DiskQuota: true, NetworkIsolation: evidence.LocalNetwork}, nil
 }

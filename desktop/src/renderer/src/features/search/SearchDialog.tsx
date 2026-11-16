@@ -24,10 +24,10 @@ const SETTINGS_RESULTS = [
   },
   {
     id: 'settings-models',
-    name: '模型设置',
-    preview: '模型供应商与模型选择',
+    name: '模型策略',
+    preview: '由管理员统一配置，自动使用分配的策略',
     section: 'models' as const,
-    keywords: '设置 模型 供应商 参数 温度 API',
+    keywords: '设置 模型 策略 管理员 服务端',
   },
 ]
 

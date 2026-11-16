@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"io.yueyang/tom/internal/computer"
@@ -66,6 +67,7 @@ type verification struct {
 	capabilities      *computer.Capabilities
 	verifiedAt        *time.Time
 	errorCode         string
+	nodeErrorCode     string
 	started           time.Time
 }
 
@@ -86,17 +88,11 @@ func (verifier *Verifier) ProcessNext(ctx context.Context) (bool, error) {
 	if current.state == "checking" && !current.isValid {
 		return true, verifier.advance(ctx, current, "cleaning", "node_control_changed")
 	}
-	observation, err := verifier.call(ctx, current, verifier.node.Inspect)
-	if err != nil {
-		return true, verifier.uncertain(ctx, current, "inspection_unconfirmed")
-	}
-	if !observation.Matches(current.specification) || observation.State == "quarantined" {
-		return true, verifier.advance(ctx, current, "quarantined", "resource_identity_unconfirmed")
-	}
 	if current.state == "cleaning" {
 		// 物理资源不存在不代表本代次已经持久关闭；仍调用幂等 Remove 消费关闭屏障，才能安全进入下一代。
-		observation, err = verifier.call(ctx, current, verifier.node.Remove)
+		observation, err := verifier.call(ctx, current, verifier.node.Remove)
 		if err != nil {
+			current.nodeErrorCode = verificationFailureCode(err)
 			return true, verifier.uncertain(ctx, current, "cleanup_unconfirmed")
 		}
 		if !observation.Matches(current.specification) || observation.State != "absent" {
@@ -104,9 +100,18 @@ func (verifier *Verifier) ProcessNext(ctx context.Context) (bool, error) {
 		}
 		return true, verifier.finish(ctx, current)
 	}
+	observation, err := verifier.call(ctx, current, verifier.node.Inspect)
+	if err != nil {
+		current.nodeErrorCode = verificationFailureCode(err)
+		return true, verifier.uncertain(ctx, current, "inspection_unconfirmed")
+	}
+	if !observation.Matches(current.specification) || observation.State == "quarantined" {
+		return true, verifier.advance(ctx, current, "quarantined", "resource_identity_unconfirmed")
+	}
 	if observation.State != "ready" {
 		observation, err = verifier.call(ctx, current, verifier.node.Ensure)
 		if err != nil {
+			current.nodeErrorCode = verificationFailureCode(err)
 			var failure *computer.Failure
 			if errors.As(err, &failure) && failure.IsPermanent {
 				return true, verifier.advance(ctx, current, "cleaning", "capability_check_failed")
@@ -121,8 +126,21 @@ func (verifier *Verifier) ProcessNext(ctx context.Context) (bool, error) {
 		return true, verifier.advance(ctx, current, "cleaning", "capability_check_failed")
 	}
 	current.capabilities = &observation.Capabilities
+	current.nodeErrorCode = ""
 	current.verifiedAt = &current.started
 	return true, verifier.advance(ctx, current, "cleaning", "")
+}
+
+// verificationFailureCode 只保存协议中的分类码；原始错误文本可能包含远端响应，不能入库或显示。
+func verificationFailureCode(err error) string {
+	var failure *computer.Failure
+	if errors.As(err, &failure) && regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`).MatchString(failure.Code) {
+		return failure.Code
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "node_call_timeout"
+	}
+	return "node_operation_unknown"
 }
 
 func (verifier *Verifier) call(ctx context.Context, current *verification, invoke func(context.Context, computer.Specification) (computer.Observation, error)) (computer.Observation, error) {

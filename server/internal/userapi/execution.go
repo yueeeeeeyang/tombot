@@ -84,3 +84,8 @@ func (handler *Handler) cancelRun(w http.ResponseWriter, r *http.Request) {
 	run, err := handler.executor.Cancel(r.Context(), current(r).principal, chi.URLParam(r, "runID"))
 	handler.result(w, r, "run", run, err)
 }
+
+func (handler *Handler) conversationActivity(w http.ResponseWriter, r *http.Request) {
+	runs, err := handler.executor.Activity(r.Context(), current(r).principal, chi.URLParam(r, "conversationID"))
+	handler.result(w, r, "runs", runs, err)
+}

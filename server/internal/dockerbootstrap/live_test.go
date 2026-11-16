@@ -22,8 +22,15 @@ func TestLiveDockerEngine(t *testing.T) {
 	if err != nil || result.exitCode != 0 {
 		t.Fatal("读取真实 Docker 引擎状态失败", err)
 	}
-	report, err := verifyEngine(result.output, Manifest{AllowedEngineVersions: []string{version}})
-	if err != nil {
+	report, err := verifyEngine(result.output)
+	if err != nil || report.Version != version {
+		t.Fatal(err)
+	}
+	api, err := runCommand(ctx, program, "--config", t.TempDir(), "--host", "unix://"+socket, "version", "--format", "{{json .Server}}")
+	if err != nil || api.exitCode != 0 {
+		t.Fatal("读取真实 Docker API 范围失败", err)
+	}
+	if err := verifyDockerAPI(api.output); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("真实 Docker 引擎已验证：版本 %s，系统 %s，cgroup %s", report.Version, report.OperatingSystem, report.CgroupVersion)

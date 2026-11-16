@@ -1,35 +1,30 @@
 import { Settings, SlidersHorizontal, X } from 'lucide-react'
-import { ModelProviderFields } from './ModelProviderFields'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../../../../../ui/Select'
-import { type SettingsDraft, type SettingsSection, type ThemePreference } from './settings'
+import { type LanguagePreference, type SettingsSection, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {
   theme: ThemePreference
   themeError: string
   onThemeChange: (theme: ThemePreference) => void
   section: SettingsSection
-  draft: SettingsDraft
+  language: LanguagePreference
+  languageError: string
   onSectionChange: (section: SettingsSection) => void
-  onChange: (draft: SettingsDraft) => void
-  apiKey: string
-  hasApiKey: boolean
-  onApiKeyChange: (apiKey: string) => void
+  onLanguageChange: (language: LanguagePreference) => void
   onClose: () => void
 }
 
-/** 主题即时生效并留在本机。语言和模型设置保存到服务，关闭或切换栏目不丢失当前输入。 */
+/** 主题即时生效并留在本机。语言保存在本机，模型由管理员统一配置。 */
 export function SettingsDialog({
   theme,
   themeError,
+  languageError,
   onThemeChange,
   section,
-  draft,
+  language,
   onSectionChange,
-  onChange,
-  apiKey,
-  hasApiKey,
-  onApiKeyChange,
+  onLanguageChange,
   onClose,
 }: SettingsDialogProps) {
   return (
@@ -50,35 +45,34 @@ export function SettingsDialog({
             onClick={() => onSectionChange('models')}
           >
             <SlidersHorizontal size={17} strokeWidth={1.7} />
-            模型设置
+            模型策略
           </button>
         </nav>
         <section className="settings-pane" aria-labelledby="settings-section-title">
-          <h2 id="settings-section-title">{section === 'general' ? '通用' : '模型设置'}</h2>
+          <h2 id="settings-section-title">{section === 'general' ? '通用' : '模型策略'}</h2>
           {section === 'general' ? (
             <GeneralSettings
-              draft={draft}
-              onChange={onChange}
+              language={language}
+              onLanguageChange={onLanguageChange}
               theme={theme}
               onThemeChange={onThemeChange}
             />
           ) : (
-            <ModelSettings
-              draft={draft}
-              onChange={onChange}
-              apiKey={apiKey}
-              hasApiKey={hasApiKey}
-              onApiKeyChange={onApiKeyChange}
-            />
+            <div className="settings-section">
+              <h3>由服务端管理</h3>
+              <p className="settings-preview-note">
+                自动使用管理员分配的模型策略，无需在客户端配置。
+              </p>
+            </div>
           )}
           <p className="settings-preview-note">
             {section === 'general'
-              ? '主题即时生效。语言选择会保存，界面仍使用简体中文'
-              : '模型设置会保存到服务。密钥只留在服务端，不会回显。'}
+              ? '主题即时生效。语言选择保存在本机，界面仍使用简体中文'
+              : '如需更换模型或策略，请联系管理员。'}
           </p>
-          {themeError && (
+          {(themeError || languageError) && (
             <p className="form-error" role="alert">
-              {themeError}
+              {themeError || languageError}
             </p>
           )}
         </section>
@@ -92,11 +86,11 @@ export function SettingsDialog({
 
 /** 主题通过独立回调应用和保存，语言选项保留为界面预览。 */
 function GeneralSettings({
-  draft,
-  onChange,
+  language,
+  onLanguageChange,
   theme,
   onThemeChange,
-}: Pick<SettingsDialogProps, 'draft' | 'onChange' | 'theme' | 'onThemeChange'>) {
+}: Pick<SettingsDialogProps, 'language' | 'onLanguageChange' | 'theme' | 'onThemeChange'>) {
   return (
     <div className="settings-section">
       <h3>外观</h3>
@@ -118,8 +112,8 @@ function GeneralSettings({
           <span>语言</span>
           <Select
             label="语言"
-            value={draft.language}
-            onChange={(value) => onChange({ ...draft, language: value })}
+            value={language}
+            onChange={onLanguageChange}
             options={[
               { value: 'system', label: '跟随系统' },
               { value: 'zh-CN', label: '简体中文' },
@@ -127,23 +121,6 @@ function GeneralSettings({
             ]}
           />
         </div>
-      </div>
-    </div>
-  )
-}
-
-/** 渲染供应商表单。密钥只提交给服务，不会留在本地存储。 */
-function ModelSettings(
-  props: Pick<
-    SettingsDialogProps,
-    'draft' | 'onChange' | 'apiKey' | 'hasApiKey' | 'onApiKeyChange'
-  >,
-) {
-  return (
-    <div className="settings-section">
-      <h3>模型供应商</h3>
-      <div className="settings-card">
-        <ModelProviderFields {...props} />
       </div>
     </div>
   )

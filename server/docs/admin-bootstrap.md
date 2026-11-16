@@ -8,7 +8,7 @@
 
 ## 前置
 
-Ubuntu 24.04 首次部署可直接执行 `sudo ./tomd install`，自动完成服务端前置准备，详见[一键安装说明](../deploy/SERVER.md)。节点安装与管理员创建互相独立。
+支持的 Linux 发行版首次部署可直接执行 `sudo ./tomd install`，自动完成服务端前置准备，发行版范围与环境要求详见[一键安装说明](../deploy/SERVER.md)。节点安装与管理员创建互相独立。
 
 1. 按[应用配置](../internal/serverapp/README.md)准备空 PostgreSQL、迁移连接文件及四种用途的业务连接文件，数据库登录身份及权限组由部署预先准备。历史迁移不改写。
 2. 配套节点通过 Docker 引导、存储和资源检查，登记实际节点与固定镜像。API 以独立非 root 身份运行，不加入 Docker 组。

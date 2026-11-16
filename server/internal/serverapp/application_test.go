@@ -167,9 +167,17 @@ func TestApplicationIntegration(t *testing.T) {
 			{"GET", "/health/live", "", "", 200},
 			{"GET", "/health/ready", "", "", 200},
 			{"GET", "/admin/", "", "", 200},
+			{"GET", "/activate", "", "", 200},
+			{"HEAD", "/activate", "", "", 200},
+			{"POST", "/activate", "", "", 405},
+			{"GET", "/activate/missing", "", "", 404},
 			{"GET", "/admin/assets/app-test.js", "", "", 200},
 			{"GET", "/admin", "", "", 308},
-			{"GET", "/", "", "", 307},
+			{"GET", "/", "", "", 303},
+			{"GET", "/login", "", "", 200},
+			{"GET", "/account", "", "", 303},
+			{"GET", "/authorize", "", "", 400},
+			{"GET", "/account/missing", "", "", 404},
 			{"GET", "/admin/missing", "", "", 404},
 			{"GET", "/api/v2/auth/session", "", "", 401},
 			{"GET", "/api/v2/admin/auth/session", "", "", 401},
@@ -185,7 +193,7 @@ func TestApplicationIntegration(t *testing.T) {
 			if status != fixture.status {
 				t.Errorf("%s %s: %d，预期 %d", fixture.method, fixture.path, status, fixture.status)
 			}
-			if fixture.path == "/admin/" && !strings.Contains(headers.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
+			if (fixture.path == "/admin/" || fixture.path == "/activate") && !strings.Contains(headers.Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 				t.Error("管理页缺少限制头")
 			}
 		}

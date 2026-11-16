@@ -22,7 +22,8 @@ func (controller *SessionController) Delegate(ctx context.Context, session compu
 		if len(files) != agentchannel.MaximumFiles {
 			return errors.New("节点代理控制描述符数量无效")
 		}
-		deadline, err := agentchannel.FromDeadline(lease.deadline)
+		link := &agentLink{node: controller.node, groups: controller.groups}
+		deadline, err := link.deadline(ctx, state.Command, *state.Group, lease.deadline)
 		if err != nil {
 			return err
 		}
@@ -40,7 +41,8 @@ func (controller *SessionController) Delegate(ctx context.Context, session compu
 // AgentRenewal 将现有节点期限同步给代理；获取或重发本身不会延长节点授权。
 func (controller *SessionController) AgentRenewal(ctx context.Context, session computer.ExecutionSession) (renewal computeragent.Renewal, failure error) {
 	failure = controller.withActiveSession(ctx, session, func(ctx context.Context, state *sessionRecord, lease sessionLease) error {
-		deadline, err := agentchannel.FromDeadline(lease.deadline)
+		link := &agentLink{node: controller.node, groups: controller.groups}
+		deadline, err := link.deadline(ctx, state.Command, *state.Group, lease.deadline)
 		if err != nil {
 			return err
 		}

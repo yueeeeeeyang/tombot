@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
+	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/computer"
 )
 
@@ -25,9 +26,16 @@ func SealBrowser(request BrowserRequest) (*os.File, error) {
 // RunBrowser 仅在纯 Go 受信引导子进程调用，成功后原位执行固定 Chrome，不返回。
 // 3/4/5 是封存授权、服务入组和撤销读端，6/7 是私有 CDP 管道；不继承其他控制入口。
 func RunBrowser() (failure error) {
+	stage := "browser_start_identity_failed"
+	defer func() {
+		if failure != nil {
+			failure = browserprobe.StartFailure(stage, failure)
+		}
+	}()
 	if err := CheckController(); err != nil {
 		return err
 	}
+	stage = "browser_start_request_failed"
 	requestFile := os.NewFile(3, "browser-request")
 	groupFile := os.NewFile(4, "browser-group")
 	revocation := os.NewFile(5, "browser-revocation")
@@ -55,9 +63,11 @@ func RunBrowser() (failure error) {
 	if _, err = request.Deadline.Local(BrowserMaximumStartTime); err != nil {
 		return err
 	}
+	stage = "browser_start_directory_failed"
 	if err = verifyBrowserDirectories(request); err != nil {
 		return err
 	}
+	stage = "browser_start_pipe_failed"
 	if err = checkBrowserPipes(commands, responses); err != nil {
 		return err
 	}
@@ -69,6 +79,7 @@ func RunBrowser() (failure error) {
 	if err = checkRevocation(revocation); err != nil {
 		return err
 	}
+	stage = "browser_start_membership_failed"
 	expected := "/" + request.Group.Container.Path + "/" + request.Group.Name() + "/cgroup.procs"
 	if err = joinGroupFile(groupFile, expected, "/"+request.Group.Name()); err != nil {
 		return err
@@ -78,6 +89,7 @@ func RunBrowser() (failure error) {
 		return errors.New("关闭共享浏览器资源组入口失败")
 	}
 	groupFile = nil
+	stage = "browser_start_privileges_failed"
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err = prepareProcess(computer.BrowserUID, computer.DesktopSharedGID); err != nil {
@@ -98,6 +110,7 @@ func RunBrowser() (failure error) {
 		return err
 	}
 	// 全线程降权已把所有附加入口设为 CLOEXEC；只开放 Chrome 固定的两个协议描述符。
+	stage = "browser_start_pipe_failed"
 	if err = unix.Dup3(6, 3, 0); err != nil {
 		return errors.New("映射共享浏览器命令管道失败")
 	}
@@ -110,6 +123,7 @@ func RunBrowser() (failure error) {
 	if err != nil {
 		return err
 	}
+	stage = "browser_start_launch_failed"
 	if err = syscall.Exec(BrowserProgram, arguments, environment); err != nil {
 		return errors.New("启动共享 Chrome 失败")
 	}

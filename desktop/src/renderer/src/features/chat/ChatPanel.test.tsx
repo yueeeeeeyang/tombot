@@ -337,3 +337,19 @@ describe('消息气泡操作', () => {
     expect(screen.queryByText('你好')).not.toBeInTheDocument()
   })
 })
+
+it('工作动画和真实任务摘要显示时仍可发送补充消息', async () => {
+  const props = renderPanel(createAgent([], '补充一个要求'), {
+    workSummary: '正在检查第二份文件',
+    pendingMessageId: 'previous',
+  })
+  const summary = screen.getByText('正在检查第二份文件')
+  expect(summary.closest('.composer-area')).not.toBeNull()
+  expect(summary.closest('.work-status')?.querySelector('.avatar')).toHaveAttribute(
+    'data-pose',
+    'working',
+  )
+  expect(screen.getByRole('button', { name: '发送' })).toBeEnabled()
+  await userEvent.setup().click(screen.getByRole('button', { name: '发送' }))
+  expect(props.onSave).toHaveBeenCalledOnce()
+})

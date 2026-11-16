@@ -16,7 +16,7 @@ class NodeReleaseTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.archive = Path(self.directory.name) / 'node.tar.gz'
-        self.runtime = json.loads((node_release.ROOT / 'deploy/runtime/ubuntu-24.04-amd64.json').read_bytes())
+        self.runtime = json.loads((node_release.ROOT / 'deploy/runtime/linux.json').read_bytes())
         header = bytearray(64)
         header[:6] = b'\x7fELF\x02\x01'
         header[18:20] = (62).to_bytes(2, 'little')

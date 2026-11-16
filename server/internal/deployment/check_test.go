@@ -130,7 +130,7 @@ func encodeFixture(t *testing.T, value any) []byte {
 // materializeFixture 中的内容只用于元信息检查，不是有效凭据或受测发布清单。
 func materializeFixture(t *testing.T, fs filesystem, value configuration, paths Paths, api account) {
 	t.Helper()
-	manifest := dockerbootstrap.Manifest{EnginePackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", CLIPackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", ContainerdPackageVersion: "2.3.6-1~ubuntu.24.04~noble", E2fsprogsPackageVersion: "1.47.0-test1", UtilLinuxPackageVersion: "2.39.3-test1", MountPackageVersion: "2.39.3-test1", AllowedEngineVersions: []string{"29.7.2"}, RepositoryFingerprint: strings.Repeat("A", 40), TimeoutSeconds: 300, MinimumFreeBytes: 1 << 30}
+	manifest := dockerbootstrap.DefaultManifest()
 	for _, fixture := range []struct {
 		path string
 		body any

@@ -13,7 +13,7 @@ func testMessage() Message {
 }
 
 func TestSharedBrowserControlMethods(t *testing.T) {
-	for _, method := range []string{"browser_start", "browser_status", "browser_close"} {
+	for _, method := range []string{"browser_start", "browser_status", "browser_close", "browser_probe"} {
 		message := testMessage()
 		message.Method = method
 		if err := message.validate(); err != nil {

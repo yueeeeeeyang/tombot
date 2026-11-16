@@ -25,7 +25,15 @@ func TestBrowserFileRecordIntegrity(t *testing.T) {
 	if snapshot, err := store.LoadBrowser(t.Context()); err != nil || snapshot != nil {
 		t.Fatal("空共享浏览器记录错误", err)
 	}
-	snapshot := BrowserSnapshot{Version: 1, Grant: browserGrant(fixture), Phase: "consumed"}
+	snapshot := BrowserSnapshot{Version: 1, Grant: browserGrant(fixture), Phase: "consumed", StartupError: "browser_start_membership_failed"}
+	for _, invalid := range []BrowserSnapshot{
+		{Version: 1, Grant: snapshot.Grant, Phase: "active", StartupError: snapshot.StartupError},
+		{Version: 1, Grant: snapshot.Grant, Phase: "consumed", StartupError: "未知原始诊断"},
+	} {
+		if store.SaveBrowser(t.Context(), invalid) == nil {
+			t.Fatal("接受了非法启动诊断")
+		}
+	}
 	if err := store.SaveBrowser(t.Context(), snapshot); err != nil {
 		t.Fatal(err)
 	}

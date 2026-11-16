@@ -28,7 +28,7 @@ TOM_DEPLOYMENT_OUTPUT=/etc/tombot-generated \
 
 ## 参数结构
 
-下面是字段示意，节点 ID、镜像 ID、固定镜像引用与受测 Docker 清单须由此次部署提供，示意内容不能直接启动服务：
+下面是字段示意，节点 ID、镜像 ID、固定镜像引用与Docker 安装预算须由此次部署提供，示意内容不能直接启动服务：
 
 ```json
 {
@@ -41,14 +41,7 @@ TOM_DEPLOYMENT_OUTPUT=/etc/tombot-generated \
     "reference": "仓库/镜像@sha256:已验收的镜像摘要"
   },
   "docker": {
-    "engine_package_version": "受测引擎包版本",
-    "cli_package_version": "受测客户端包版本",
-    "containerd_package_version": "受测容器运行时包版本",
-    "e2fsprogs_package_version": "受测磁盘工具包版本",
-    "util_linux_package_version": "受测基础工具包版本",
-    "mount_package_version": "受测挂载工具包版本",
-    "allowed_engine_versions": ["受测引擎补丁版本"],
-    "repository_fingerprint": "官方仓库签名指纹",
+    "version": 2,
     "timeout_seconds": 1800,
     "minimum_free_bytes": 1073741824
   },
@@ -73,7 +66,7 @@ TOM_DEPLOYMENT_OUTPUT=/etc/tombot-generated \
 
 节点和镜像 ID 只在顶层提供一次；程序绑定 节点与镜像文件。ID 应保存在部署参数中，重试、登记和恢复都沿用原值。镜像平台使用当前宿主 `linux/amd64` 或 `linux/arm64`，API UID/GID 从部署参数读取的认证账户确定，不接受通过覆盖参数改绑身份。控制通道身份不再依赖 UID/GID，而是双方固定证书指纹。
 
-`docker` 是完整的受测安装清单，格式沿用 `docker-install.schema.json`。生成器不选择最新版本、不联网查找软件包，不把测试夹具当作生产清单。`image` 可选 `authentication_file`、`call_timeout_seconds`（默认 30）与 `timeout_seconds`（默认 600）；认证字段只能引用私有文件，不能写入认证内容。
+`docker` 使用版本 2 安装预算，格式见 `docker-install.schema.json`；软件包和签名源由实际宿主发行版选择，生成配置时不执行安装。`image` 可选 `authentication_file`、`call_timeout_seconds`（默认 30）与 `timeout_seconds`（默认 600）；认证字段只能引用私有文件，不能写入认证内容。
 
 `server` 使用正式服务配置字段，继承 `serverapp.DefaultConfig` 的运行预算。下列文件引用有明确默认值，可通过同名字段改为其他受保护位置：
 

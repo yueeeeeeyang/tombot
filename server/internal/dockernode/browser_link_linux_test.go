@@ -5,6 +5,7 @@ package dockernode
 import (
 	"context"
 	"errors"
+	"io.yueyang/tom/internal/browserprobe"
 	"net"
 	"os"
 	"path/filepath"
@@ -22,18 +23,21 @@ import (
 )
 
 // linkBrowserFactory 只验证双方持久屏障与真实 Unix 协议，明确不执行 Chrome 或证明资源组可用。
-type linkBrowserFactory struct{}
+type linkBrowserFactory struct {
+	probe func(context.Context, string) (browserprobe.Evidence, error)
+}
 type linkBrowserScope struct {
+	probe func(context.Context, string) (browserprobe.Evidence, error)
 	files []*os.File
 	done  chan struct{}
 	once  sync.Once
 }
 
-func (linkBrowserFactory) OpenBrowser(_ taskprocess.BrowserRequest, files []*os.File, _ time.Duration) (computeragent.BrowserScope, error) {
-	return &linkBrowserScope{files: files, done: make(chan struct{})}, nil
+func (factory linkBrowserFactory) OpenBrowser(_ taskprocess.BrowserRequest, files []*os.File, _ time.Duration) (computeragent.BrowserScope, error) {
+	return &linkBrowserScope{files: files, done: make(chan struct{}), probe: factory.probe}, nil
 }
-func (*linkBrowserScope) Start(context.Context, taskprocess.BrowserRequest, sharedbrowser.Options) (computeragent.BrowserService, error) {
-	return linkUnavailableWindows{}, nil
+func (scope *linkBrowserScope) Start(context.Context, taskprocess.BrowserRequest, sharedbrowser.Options) (computeragent.BrowserService, error) {
+	return linkProbeWindows{probe: scope.probe}, nil
 }
 func (s *linkBrowserScope) Done() <-chan struct{}       { return s.done }
 func (s *linkBrowserScope) Revoke() error               { s.once.Do(func() { close(s.done) }); return nil }
@@ -41,6 +45,17 @@ func (s *linkBrowserScope) Drain(context.Context) error { return s.Revoke() }
 func (s *linkBrowserScope) Close() error                { return agentchannel.CloseFiles(s.files) }
 
 type linkUnavailableWindows struct{}
+type linkProbeWindows struct {
+	linkUnavailableWindows
+	probe func(context.Context, string) (browserprobe.Evidence, error)
+}
+
+func (browser linkProbeWindows) Probe(ctx context.Context, challenge string) (browserprobe.Evidence, error) {
+	if browser.probe == nil {
+		return browserprobe.Evidence{}, sharedbrowser.ErrUnavailable
+	}
+	return browser.probe(ctx, challenge)
+}
 
 func (linkUnavailableWindows) Open(context.Context, sharedbrowser.Address) (sharedbrowser.Window, error) {
 	return sharedbrowser.Window{}, sharedbrowser.ErrUnavailable
@@ -106,7 +121,14 @@ func TestKernelNodeBrowserBinding(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			agentBrowsers, err := computeragent.NewBrowserController(t.Context(), identity, store, linkBrowserFactory{}, options, func(context.Context, computer.ExecutionSession) error { return sharedbrowser.ErrDenied }, sessionLogger(), func() { t.Error("协议测试浏览器失控") })
+			probeFailed := false
+			factory := linkBrowserFactory{probe: func(ctx context.Context, challenge string) (browserprobe.Evidence, error) {
+				if probeFailed {
+					return browserprobe.Evidence{}, &browserprobe.Failure{Code: "browser_probe_sandbox_failed"}
+				}
+				return browserprobe.Evidence{ChallengeID: challenge, Sandbox: true, Windows: true, SharedStorage: true, Rendering: true, Input: true, Proxy: true, Cleanup: true}, ctx.Err()
+			}}
+			agentBrowsers, err := computeragent.NewBrowserController(t.Context(), identity, store, factory, options, func(context.Context, computer.ExecutionSession) error { return sharedbrowser.ErrDenied }, sessionLogger(), func() { t.Error("协议测试浏览器失控") })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -165,7 +187,10 @@ func TestKernelNodeBrowserBinding(t *testing.T) {
 				}
 				return ref, err
 			}
-			b.stamp, b.invoke = agentchannel.FromDeadline, b.call
+			b.node.stampDeadline = func(deadline time.Time, _ int) (agentchannel.Deadline, error) {
+				return agentchannel.FromDeadline(deadline)
+			}
+			b.invoke = b.call
 			err = b.ensure(t.Context(), r, current)
 			if reject {
 				if err == nil {
@@ -187,6 +212,15 @@ func TestKernelNodeBrowserBinding(t *testing.T) {
 			if err := b.ensure(t.Context(), r, current); err != nil {
 				t.Fatal(err)
 			}
+			b.probeInvoke = b.probeCall
+			if err := b.check(t.Context(), r, current); err != nil {
+				t.Fatal("真实通道未接受绑定的完整回执", err)
+			}
+			probeFailed = true
+			var failed *computer.Failure
+			if err := b.check(t.Context(), r, current); !errors.As(err, &failed) || failed.Code != "browser_probe_sandbox_failed" {
+				t.Fatal("探针失败分类丢失", err)
+			}
 			if err := b.retire(t.Context(), r); err != nil {
 				t.Fatal(err)
 			}
@@ -200,4 +234,8 @@ func TestKernelNodeBrowserBinding(t *testing.T) {
 			}
 		})
 	}
+}
+
+func (linkUnavailableWindows) Probe(context.Context, string) (browserprobe.Evidence, error) {
+	return browserprobe.Evidence{}, sharedbrowser.ErrUnavailable
 }

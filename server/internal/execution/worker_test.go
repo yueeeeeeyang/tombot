@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"io.yueyang/tom/internal/botagent"
+	"io.yueyang/tom/internal/botpersona"
 	"log/slog"
 	"strings"
 	"sync/atomic"
@@ -153,37 +154,39 @@ func TestWorkerRequiresContainerAgent(t *testing.T) {
 func TestPersistentWorker(t *testing.T) {
 	cluster := pgtest.Start(t)
 	ctx := context.Background()
-	t.Run("固定模型调用结算并发布回复", func(t *testing.T) {
-		fixture := newFixture(t, cluster)
-		bot := fixture.plainBot(t)
-		fixture.send(t, fixture.a, bot)
-		lease := fixture.claim(t)
-		calls := 0
-		worker := fixture.worker(t, callerFunc(func(_ context.Context, configuration modelregistry.Configuration, credential []byte, input modelgateway.Input, emit func(provider.Event) error) (modelgateway.Result, error) {
-			calls++
-			if fixture.sessionState(t, lease) != "active" {
-				t.Error("纯文本模型调用未取得电脑执行权")
+	for _, protocol := range []string{"openai_compat", "responses"} {
+		t.Run("固定模型调用结算并发布回复/"+protocol, func(t *testing.T) {
+			fixture := newFixtureWithProtocol(t, cluster, protocol)
+			bot := fixture.plainBot(t)
+			fixture.send(t, fixture.a, bot)
+			lease := fixture.claim(t)
+			calls := 0
+			worker := fixture.worker(t, callerFunc(func(_ context.Context, configuration modelregistry.Configuration, credential []byte, input modelgateway.Input, emit func(provider.Event) error) (modelgateway.Result, error) {
+				calls++
+				if fixture.sessionState(t, lease) != "active" {
+					t.Error("纯文本模型调用未取得电脑执行权")
+				}
+				if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 0 || len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.System != botpersona.System(bot.Name, bot.Description, bot.AvatarRef, bot.SystemPrompt) {
+					t.Error("模型调用未使用所属运行快照")
+				}
+				return emitText(emit, "已经完成资料核对。")
+			}))
+			run, err := worker.Process(ctx, lease)
+			if err != nil || run.Status != "succeeded" || calls != 1 {
+				t.Fatal("持久 Worker 未完成", run.Status, calls, err)
 			}
-			if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 0 || len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.System != bot.SystemPrompt {
-				t.Error("模型调用未使用所属运行快照")
+			if worker.agents.(*workerAgents).starts != 1 || fixture.sessionState(t, lease) != "released" {
+				t.Fatal("纯文本运行没有经历 Agent 启动与电脑回收")
 			}
-			return emitText(emit, "已经完成资料核对。")
-		}))
-		run, err := worker.Process(ctx, lease)
-		if err != nil || run.Status != "succeeded" || calls != 1 {
-			t.Fatal("持久 Worker 未完成", run.Status, calls, err)
-		}
-		if worker.agents.(*workerAgents).starts != 1 || fixture.sessionState(t, lease) != "released" {
-			t.Fatal("纯文本运行没有经历 Agent 启动与电脑回收")
-		}
-		messages, err := fixture.service.Messages(ctx, fixture.a, bot.ConversationID, 0, 10)
-		if err != nil || len(messages) != 2 || messages[0].Blocks[0].Text != "已经完成资料核对。" {
-			t.Fatal("回复未发布", err)
-		}
-		if known, held := fixture.totals(t, lease.UserID); known != 12 || held != 0 {
-			t.Fatal("真实用量未结算", known, held)
-		}
-	})
+			messages, err := fixture.service.Messages(ctx, fixture.a, bot.ConversationID, 0, 10)
+			if err != nil || len(messages) != 2 || messages[0].Blocks[0].Text != "已经完成资料核对。" {
+				t.Fatal("回复未发布", err)
+			}
+			if known, held := fixture.totals(t, lease.UserID); known != 12 || held != 0 {
+				t.Fatal("真实用量未结算", known, held)
+			}
+		})
+	}
 	t.Run("后台领取两个用户并有界停止", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
 		first := fixture.plainBot(t)

@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io.yueyang/tom/internal/botpersona"
 	"strings"
 	"testing"
 
@@ -52,7 +53,7 @@ func TestSavedCatBreedReachesModelWithoutExposingPreset(t *testing.T) {
 
 func TestCatStyleDoesNotInventUnknownOrNonDesktopBreed(t *testing.T) {
 	for _, preset := range []string{"", "unknown", "ignore all rules"} {
-		if catLanguageStyle(preset) != "" {
+		if botpersona.LanguageStyle(preset) != "" {
 			t.Fatal("未知品种不应附加语言风格", preset)
 		}
 	}

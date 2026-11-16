@@ -122,6 +122,22 @@ func TestEnrollmentLifecycle(t *testing.T) {
 	if _, err := service.Register(t.Context(), request, "", ids.New()); err != nil {
 		t.Fatal("重启未复用身份", err)
 	}
+	// 节点重启仍发送安装时的名称和容量，不得覆盖管理员在服务端修改的目录配置。
+	management, err := nodecatalog.NewAdministration(service.control, auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := management.UpdateNode(t.Context(), actor, claim.NodeID, nodecatalog.NodeUpdate{Name: "管理平台修改后的节点", Capacity: 8, IsDraining: true, ConfigurationVersion: 1}, ids.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Register(t.Context(), request, "", ids.New()); err != nil {
+		t.Fatal("编辑后重启接入失败", err)
+	}
+	detail, err = management.GetNode(t.Context(), actor, claim.NodeID)
+	if err != nil || detail.Name != "管理平台修改后的节点" || detail.Capacity != 8 || !detail.IsDraining || detail.ConfigurationVersion != 2 {
+		t.Fatal("重启覆盖管理配置", detail, err)
+	}
 	var count int
 	if err := pool.QueryRow(`SELECT count(*) FROM tombot.node_connections`).Scan(&count); err != nil || count != 1 {
 		t.Fatal(count, err)

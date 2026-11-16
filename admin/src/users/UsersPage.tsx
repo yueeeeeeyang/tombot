@@ -2,9 +2,9 @@ import { Select } from '../components/Select'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Users } from 'lucide-react'
 import { AdminClient, ApiError } from '../api/client'
+import { userActivationPath } from '../auth/UserActivationPage'
 import {
   activationSchema,
-  imagesSchema,
   nodesSchema,
   operationResult,
   usersSchema,
@@ -163,9 +163,10 @@ function CreateUser({
   onOperation: (operation: Operation) => void
 }) {
   const [nodeBefore, setNodeBefore] = useState('')
-  const [imageBefore, setImageBefore] = useState('')
+  const [nodeID, setNodeID] = useState('')
   const nodes = useQuery(client, pagePath('/computer-nodes', nodeBefore), nodesSchema)
-  const images = useQuery(client, pagePath('/computer-images', imageBefore), imagesSchema)
+  const selectedNode = nodes.value?.nodes.find((node) => node.id === nodeID)
+  const canCreate = Boolean(selectedNode && canUseNode(selectedNode))
   const [error, setError] = useState<unknown>()
   const [busy, setBusy] = useState(false)
   const [uncertain, setUncertain] = useState(false)
@@ -174,13 +175,13 @@ function CreateUser({
   async function submit() {
     if (busy) return
     if (!request.current) {
-      if (!form.current?.reportValidity()) return
+      if (!canCreate || !selectedNode?.image || !form.current?.reportValidity()) return
       const fields = new FormData(form.current)
       request.current = {
         username: String(fields.get('username')).trim(),
         display_name: String(fields.get('display_name')).trim(),
-        node_id: String(fields.get('node_id')),
-        image_id: String(fields.get('image_id')),
+        node_id: selectedNode.id,
+        image_id: selectedNode.image.id,
         idempotency_key: crypto.randomUUID(),
         resources: {
           cpu_millis: Number(fields.get('cpu')) * 1000,
@@ -225,6 +226,10 @@ function CreateUser({
       else {
         request.current = null
         setUncertain(false)
+        if (cause.code === 'CAPACITY_UNAVAILABLE' || cause.code === 'IMAGE_UNAVAILABLE') {
+          setNodeID('')
+          nodes.reload()
+        }
       }
     } finally {
       setBusy(false)
@@ -251,50 +256,36 @@ function CreateUser({
             <Select
               name="node_id"
               label="电脑节点"
+              value={nodeID}
+              onChange={setNodeID}
               required
               placeholder="选择可用节点"
               disabled={busy || uncertain}
               options={
                 nodes.value?.nodes.map((node) => ({
                   value: node.id,
-                  label: `${node.name} · ${node.reserved}/${node.capacity}${node.status !== 'ready' ? ' · 未就绪' : ''}`,
-                  disabled: node.status !== 'ready' || node.reserved >= node.capacity,
+                  label: `${node.name} · ${node.reserved}/${node.capacity}${node.status !== 'ready' ? ' · 未就绪' : !node.image?.is_enabled ? ' · 无可用镜像' : ''}`,
+                  disabled: !canUseNode(node),
                 })) ?? []
               }
             />
           </Field>
-          {nodes.value && (
+          {nodes.value && (nodeBefore || nodes.value.nodes.length === 50) && (
             <Pagination
               before={nodeBefore}
-              onBefore={setNodeBefore}
+              onBefore={(before) => {
+                setNodeID('')
+                setNodeBefore(before)
+              }}
               count={nodes.value.nodes.length}
               last={nodes.value.nodes.at(-1)?.id}
             />
           )}
-          <Field label="电脑镜像">
-            <Select
-              name="image_id"
-              label="电脑镜像"
-              required
-              placeholder="选择已启用镜像"
-              disabled={busy || uncertain}
-              options={
-                images.value?.images.map((image) => ({
-                  value: image.id,
-                  label: image.reference,
-                  disabled: !image.is_enabled,
-                })) ?? []
-              }
-            />
+          <Field label="电脑镜像" hint="自动使用所选节点已通过验收的镜像。">
+            <output className="selected-node-image">
+              {selectedNode?.image?.reference ?? '选择可用节点后自动确定'}
+            </output>
           </Field>
-          {images.value && (
-            <Pagination
-              before={imageBefore}
-              onBefore={setImageBefore}
-              count={images.value.images.length}
-              last={images.value.images.at(-1)?.id}
-            />
-          )}
           <div className="field-pair">
             <Field label="CPU 核数">
               <input
@@ -344,14 +335,13 @@ function CreateUser({
             </Field>
           </div>
         </fieldset>
-        <Alert error={nodes.error || images.error || error} />
-        {Boolean(nodes.error || images.error) && (
+        <Alert error={nodes.error || error} />
+        {Boolean(nodes.error) && (
           <button
             type="button"
             className="secondary-button"
             onClick={() => {
               nodes.reload()
-              images.reload()
             }}
           >
             重新读取电脑资源
@@ -366,13 +356,22 @@ function CreateUser({
           <button type="button" className="secondary-button" disabled={busy} onClick={onClose}>
             {uncertain ? '关闭并从用户列表查询' : '取消'}
           </button>
-          <button className="primary-button" disabled={busy || !nodes.value || !images.value}>
+          <button className="primary-button" disabled={busy || (!uncertain && !canCreate)}>
             {busy ? '正在创建用户与电脑…' : uncertain ? '核对原创建请求' : '创建用户与电脑'}
           </button>
         </div>
       </form>
     </Dialog>
   )
+}
+
+function canUseNode(node: {
+  status: string
+  reserved: number
+  capacity: number
+  image: { is_enabled: boolean } | null
+}) {
+  return node.status === 'ready' && node.reserved < node.capacity && node.image?.is_enabled === true
 }
 
 function OperationDialog({
@@ -513,20 +512,54 @@ function ActivationDialog({
   const [activation, setActivation] = useState<{ activation_token: string; expires_at: string }>()
   const [error, setError] = useState<unknown>()
   const [busy, setBusy] = useState(false)
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copying' | 'copied' | 'failed'>('idle')
+  const pending = useRef<AbortController | null>(null)
+  const activationURL = new URL(userActivationPath, window.location.origin).href
+  useEffect(() => {
+    const clear = () => {
+      pending.current?.abort()
+      pending.current = null
+      setActivation(undefined)
+      setError(undefined)
+      setBusy(false)
+      setCopyStatus('idle')
+    }
+    window.addEventListener('pagehide', clear)
+    return () => {
+      window.removeEventListener('pagehide', clear)
+      pending.current?.abort()
+    }
+  }, [])
   async function issue() {
+    if (pending.current) return
+    const controller = new AbortController()
+    pending.current = controller
     setBusy(true)
     setError(undefined)
     try {
-      setActivation(
-        await client.request(`/users/${userID}/activation`, activationSchema, {
-          method: 'POST',
-          body: {},
-        }),
-      )
+      const result = await client.request(`/users/${userID}/activation`, activationSchema, {
+        method: 'POST',
+        body: {},
+        signal: controller.signal,
+      })
+      if (!controller.signal.aborted) setActivation(result)
     } catch (cause) {
-      setError(cause)
+      if (!controller.signal.aborted) setError(cause)
     } finally {
-      setBusy(false)
+      if (pending.current === controller) {
+        pending.current = null
+        setBusy(false)
+      }
+    }
+  }
+  async function copyLink() {
+    if (copyStatus === 'copying') return
+    setCopyStatus('copying')
+    try {
+      await navigator.clipboard.writeText(activationURL)
+      setCopyStatus('copied')
+    } catch {
+      setCopyStatus('failed')
     }
   }
   return (
@@ -537,20 +570,58 @@ function ActivationDialog({
       <Alert error={error} />
       {activation ? (
         <>
-          <Field label="一次性激活材料">
+          <Field label="一次性激活码">
             <textarea
               readOnly
               value={activation.activation_token}
               autoComplete="off"
               spellCheck={false}
+              onFocus={(event) => event.currentTarget.select()}
             />
           </Field>
           <p className="description">
             有效期至 {new Date(activation.expires_at).toLocaleString('zh-CN')}
           </p>
-          <button className="primary-button" onClick={onClose}>
-            已保存，关闭展示
-          </button>
+          <Field
+            label="激活页面链接"
+            hint="将用户名、激活码和此链接交给用户，由用户打开页面设置密码。"
+          >
+            <input
+              value={activationURL}
+              readOnly
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          </Field>
+          {copyStatus === 'failed' && (
+            <p className="form-error" role="alert">
+              复制失败，请选中激活页面链接手动复制。
+            </p>
+          )}
+          {copyStatus === 'copied' && (
+            <p role="status" className="description">
+              激活页面链接已复制
+            </p>
+          )}
+          <div className="dialog-actions">
+            <a
+              className="secondary-button"
+              href={activationURL}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              打开激活页面
+            </a>
+            <button
+              className="secondary-button"
+              onClick={() => void copyLink()}
+              disabled={copyStatus === 'copying'}
+            >
+              {copyStatus === 'copying' ? '正在复制…' : '复制链接'}
+            </button>
+            <button className="primary-button" onClick={onClose}>
+              已保存，关闭展示
+            </button>
+          </div>
         </>
       ) : (
         <button className="primary-button" disabled={busy} onClick={() => void issue()}>

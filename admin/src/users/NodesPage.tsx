@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Server } from 'lucide-react'
+import { Link } from 'react-router'
+import { NodeStatus } from './NodeDetailPage'
+import { NodeEditDialog } from './NodeEditDialog'
 import { AdminClient } from '../api/client'
 import { nodesSchema } from '../api/schemas'
 import { z } from 'zod'
-import {
-  Alert,
-  Dialog,
-  Field,
-  LoadState,
-  Pagination,
-  Status,
-  pagePath,
-  useQuery,
-} from '../components'
+import { Alert, Dialog, Field, LoadState, Pagination, pagePath, useQuery } from '../components'
 
 const grantSchema = z.object({
   id: z.string(),
@@ -24,6 +18,7 @@ export function NodesPage({ client }: { client: AdminClient }) {
   const [before, setBefore] = useState('')
   const nodes = useQuery(client, pagePath('/computer-nodes', before), nodesSchema)
   const [registering, setRegistering] = useState(false)
+  const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
   return (
     <>
       <header className="page-heading">
@@ -47,7 +42,7 @@ export function NodesPage({ client }: { client: AdminClient }) {
         <div className="empty-state">
           <Server size={28} />
           <h2>暂无节点</h2>
-          <p>生成接入凭据并配置到节点安装文件，启动后会自动出现在这里。</p>
+          <p>生成接入凭据，在节点安装时粘贴，启动后会自动出现在这里。</p>
         </div>
       ) : (
         <div className="table-card">
@@ -59,20 +54,33 @@ export function NodesPage({ client }: { client: AdminClient }) {
                   <th>状态</th>
                   <th>容量</th>
                   <th>已预留</th>
+                  <th>操作</th>
                 </tr>
               </thead>
               <tbody>
                 {nodes.value.nodes.map((node) => (
                   <tr key={node.id}>
                     <td>
-                      <strong>{node.name}</strong>
+                      <Link className="node-name" to={`/computer-nodes/${node.id}`}>
+                        {node.name}
+                      </Link>
                       <small>{node.id}</small>
                     </td>
                     <td>
-                      <Status value={node.status} />
+                      <NodeStatus status={node.status} verification={node.verification_status} />
                     </td>
                     <td>{node.capacity}</td>
                     <td>{node.reserved}</td>
+                    <td>
+                      <div className="actions">
+                        <Link className="text-button" to={`/computer-nodes/${node.id}`}>
+                          详情
+                        </Link>
+                        <button className="text-button" onClick={() => setEditingNodeID(node.id)}>
+                          编辑
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -85,6 +93,17 @@ export function NodesPage({ client }: { client: AdminClient }) {
             last={nodes.value.nodes.at(-1)?.id}
           />
         </div>
+      )}
+      {editingNodeID && (
+        <NodeEditDialog
+          client={client}
+          nodeID={editingNodeID}
+          onClose={() => setEditingNodeID(null)}
+          onSaved={() => {
+            setEditingNodeID(null)
+            nodes.reload()
+          }}
+        />
       )}
       {registering && <EnrollmentToken client={client} onClose={() => setRegistering(false)} />}
     </>

@@ -23,7 +23,6 @@ var (
 	ErrInvalidInput     = errors.New("消息或运行参数无效")
 	ErrNotFound         = errors.New("消息或运行不存在")
 	ErrConflict         = errors.New("请求内容冲突或运行状态已变更")
-	ErrBusy             = errors.New("会话已有未完成回合")
 	ErrCapacity         = errors.New("当前用户的待执行任务已达到上限")
 	ErrOperationLimit   = errors.New("运行操作数量已达到上限")
 	ErrContextLimit     = errors.New("当前消息超过运行上下文大小限制")
@@ -99,7 +98,7 @@ func translate(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrBusy, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}
@@ -132,11 +131,11 @@ type scanner interface{ Scan(...any) error }
 
 const runColumns = `id,turn_id,conversation_id,bot_id,status,error_code,created_at,started_at,finished_at,
 	COALESCE((SELECT CASE WHEN s.status='starting' THEN 'starting_desktop' ELSE s.wait_reason END FROM tombot.computer_sessions s
-	WHERE s.user_id=runs.user_id AND s.run_id=runs.id AND s.status IN ('waiting','starting') ORDER BY s.ticket DESC LIMIT 1),'')`
+	WHERE s.user_id=runs.user_id AND s.run_id=runs.id AND s.status IN ('waiting','starting') ORDER BY s.ticket DESC LIMIT 1),''),progress_summary`
 
 func scanRun(row scanner) (Run, error) {
 	var run Run
-	err := row.Scan(&run.ID, &run.TurnID, &run.ConversationID, &run.BotID, &run.Status, &run.ErrorCode, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &run.ComputerWaitReason)
+	err := row.Scan(&run.ID, &run.TurnID, &run.ConversationID, &run.BotID, &run.Status, &run.ErrorCode, &run.CreatedAt, &run.StartedAt, &run.FinishedAt, &run.ComputerWaitReason, &run.ProgressSummary)
 	return run, err
 }
 func readRun(ctx context.Context, transaction *sql.Tx, userID, id string) (Run, error) {

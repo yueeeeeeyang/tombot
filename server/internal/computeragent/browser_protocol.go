@@ -5,12 +5,38 @@ import (
 	"errors"
 	"os"
 
+	"github.com/oklog/ulid/v2"
 	"io.yueyang/tom/internal/agentchannel"
+	"io.yueyang/tom/internal/browserprobe"
 )
 
 type browserResult struct {
 	Observation *BrowserObservation `json:"observation,omitempty"`
 	Error       string              `json:"error,omitempty"`
+}
+
+type browserProbeRequest struct {
+	Grant       BrowserGrant `json:"grant"`
+	ChallengeID string       `json:"challenge_id"`
+}
+
+// ProbeBrowser 通过受保护通道校验当前授权和随机挑战，旧回执不能提升当前电脑能力。
+func (client *Client) ProbeBrowser(ctx context.Context, grant BrowserGrant, challenge string) (BrowserObservation, error) {
+	if _, err := ulid.ParseStrict(challenge); err != nil || grant.Validate() != nil {
+		return BrowserObservation{}, errors.New("浏览器探针请求无效")
+	}
+	var result browserResult
+	if err := client.exchange(ctx, "browser_probe", browserProbeRequest{Grant: grant, ChallengeID: challenge}, nil, &result); err != nil {
+		return BrowserObservation{}, err
+	}
+	observed := result.Observation
+	if result.Observation == nil && browserprobe.ValidFailure(result.Error) {
+		return BrowserObservation{}, &browserprobe.Failure{Code: result.Error}
+	}
+	if result.Error != "" || observed == nil || observed.Grant != grant || observed.Phase != "active" || observed.Evidence == nil || observed.Evidence.Validate(challenge) != nil {
+		return BrowserObservation{}, errors.New("浏览器探针回执不完整或身份不符")
+	}
+	return *observed, nil
 }
 
 // StartBrowser 只发送一次启动请求；节点保留原入口，未知结果通过原授权查询或关闭。
@@ -38,6 +64,9 @@ func (client *Client) browserCall(ctx context.Context, method string, grant Brow
 		return BrowserObservation{}, err
 	}
 	observed := result.Observation
+	if method == "browser_start" && observed == nil && browserprobe.ValidStartFailure(result.Error) {
+		return BrowserObservation{}, &browserprobe.Failure{Code: result.Error}
+	}
 	if result.Error != "" || observed == nil || observed.Grant != grant || observed.Phase != "active" && observed.Phase != "closed" || phase != "" && observed.Phase != phase {
 		return BrowserObservation{}, errors.New("共享浏览器控制回执未确认，需要节点对账")
 	}
@@ -48,12 +77,24 @@ func (server *Server) serveBrowser(ctx context.Context, channel *agentchannel.Ch
 	defer func() { failure = errors.Join(failure, agentchannel.CloseFiles(files)) }()
 	var grant BrowserGrant
 	var observed BrowserObservation
-	err := agentchannel.Decode(request.Body, &grant)
+	var err error
+	var probe browserProbeRequest
+	if request.Method == "browser_probe" {
+		err = agentchannel.Decode(request.Body, &probe)
+		grant = probe.Grant
+	} else {
+		err = agentchannel.Decode(request.Body, &grant)
+	}
+	if err != nil && request.Method == "browser_start" {
+		err = browserprobe.StartFailure("browser_start_request_failed", err)
+	}
 	if err == nil && request.Method != "browser_start" && len(files) != 0 {
 		err = errors.New("共享浏览器控制包含意外入口")
 	}
 	if err == nil {
 		switch request.Method {
+		case "browser_probe":
+			observed, err = server.browsers.Probe(ctx, grant, probe.ChallengeID)
 		case "browser_start":
 			observed, err = server.browsers.Start(ctx, grant, files)
 			files = nil
@@ -70,6 +111,15 @@ func (server *Server) serveBrowser(ctx context.Context, channel *agentchannel.Ch
 		result.Observation = &observed
 	} else {
 		result.Error = "browser_rejected"
+		var probeFailure *browserprobe.Failure
+		if errors.As(err, &probeFailure) && (request.Method == "browser_probe" && browserprobe.ValidFailure(probeFailure.Code) || request.Method == "browser_start" && browserprobe.ValidStartFailure(probeFailure.Code)) {
+			result.Error = probeFailure.Code
+		}
+		serviceID := ""
+		if grant.Validate() == nil {
+			serviceID = grant.Request.Group.ID
+		}
+		server.logger.WarnContext(ctx, "共享浏览器控制失败", "user_id", server.controller.identity.UserID, "computer_id", server.controller.identity.ComputerID, "service_id", serviceID, "action", request.Method, "error_code", result.Error)
 	}
 	encoded, encodeErr := agentchannel.Encode(result)
 	if encodeErr != nil {

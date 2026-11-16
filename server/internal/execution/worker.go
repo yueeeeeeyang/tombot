@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io.yueyang/tom/internal/botagent"
+	"io.yueyang/tom/internal/botpersona"
 	"io.yueyang/tom/internal/bots"
 	"log/slog"
 	"strings"
@@ -99,7 +100,7 @@ func NewWorker(executor *Service, directory ModelDirectory, caller ModelCaller, 
 		}
 		schema := tool.Schema()
 		var object map[string]json.RawMessage
-		if !bots.ValidToolName(schema.Name) || worker.tools[schema.Name] != nil || !validText(schema.Description, 4096) || len(schema.InputSchema) > 16<<10 || json.Unmarshal(schema.InputSchema, &object) != nil || object == nil {
+		if !bots.ValidToolName(schema.Name) || schema.Name == "report_progress" || worker.tools[schema.Name] != nil || !validText(schema.Description, 4096) || len(schema.InputSchema) > 16<<10 || json.Unmarshal(schema.InputSchema, &object) != nil || object == nil {
 			return nil, ErrInvalidInput
 		}
 		schema.InputSchema = bytes.Clone(schema.InputSchema)
@@ -288,9 +289,32 @@ func (worker *Worker) execute(ctx context.Context, lease Lease) (string, error) 
 		}
 		schemas = append(schemas, worker.schemas[name])
 	}
-	system := work.Bot.SystemPrompt
+	if len(schemas) > 0 {
+		progress := progressTool{executor: worker.executor}
+		schema := progress.Schema()
+		allowed[schema.Name] = progress
+		schemas = append(schemas, schema)
+	}
+	system := botpersona.System(work.Bot.Name, work.Bot.Description, work.Bot.AvatarRef, work.Bot.SystemPrompt)
+	if len(schemas) > 0 {
+		system += botpersona.ProgressInstructions
+	}
 	if work.HistoryTruncated {
 		system += "\nEarlier conversation history was omitted due to context limits. Do not assume access to omitted messages."
+	}
+	// 收尾期间的新消息尚未进入上一轮模型，放在上一轮回复之后明确继续处理。
+	if work.ContinuationAfter > 0 {
+		pending := []Message{}
+		history := make([]Message, 0, len(work.Messages))
+		for _, message := range work.Messages {
+			if message.TurnID == lease.TurnID && message.SenderKind == "user" && message.Sequence > work.ContinuationAfter {
+				pending = append(pending, message)
+			} else {
+				history = append(history, message)
+			}
+		}
+		work.Messages = append(history, pending...)
+		system += "\nThe final user messages arrived while the previous response was being completed and have not been answered yet. Respond to them now and incorporate their instructions."
 	}
 	messages := make([]provider.Message, 0, len(work.Messages))
 	for _, message := range work.Messages {
@@ -347,6 +371,11 @@ type workerRelay struct {
 
 func (relay *workerRelay) Model(ctx context.Context, key string, input modelgateway.Input) (botagent.ModelOutput, error) {
 	if err := relay.worker.computers.Check(ctx, computerReference(relay.lease)); err != nil {
+		return botagent.ModelOutput{}, err
+	}
+	var err error
+	input, err = relay.worker.executor.mergeRunInputs(ctx, relay.lease, key, input)
+	if err != nil {
 		return botagent.ModelOutput{}, err
 	}
 	encoded, err := json.Marshal(input)
@@ -433,6 +462,10 @@ func (worker *Worker) callModel(ctx context.Context, lease Lease, session comput
 		}
 		operation, created, err := worker.executor.BeginOperation(callContext, lease, OperationRequest{StepKey: key, Kind: "model", RequestDigest: digest, Computer: &session, Model: &ModelCall{Configuration: configuration, Lifetime: worker.options.ModelTimeout + worker.options.RecordTimeout}})
 		if err != nil {
+			// BeginOperation 已将数据库错误收敛为固定文案和 SQLSTATE，不记录原始 SQL 或参数。
+			if failureCode(err) == "EXECUTION_FAILED" {
+				worker.logger.ErrorContext(callContext, "模型操作记账失败", "user_id", lease.UserID, "run_id", lease.RunID, "model_id", selection.ModelID, "reason", err)
+			}
 			return err
 		}
 		if !created {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/computerprobe"
@@ -215,6 +216,9 @@ func newFixture(t *testing.T) fixture {
 	storage := &fakeStorage{workspaces: map[string]Workspace{}}
 	probe := &fakeProbe{}
 	node := &Runtime{options: Options{NodeID: nodeID, StorageDirectory: t.TempDir(), StateDirectory: statePath, Socket: "/run/docker.sock", CallTimeout: time.Second, MaximumLease: 2 * time.Minute, TemporaryBytes: 64 << 20, RuntimeBytes: 128 << 20, SharedMemoryBytes: 256 << 20, Agent: testAgentOptions(), Egress: testEgressOptions(), MaximumEgressComputers: 8}, engine: engine, storage: storage, probe: probe, journal: journal, closeEngine: func() {}, egress: &fakeEgress{}}
+	node.stampDeadline = func(deadline time.Time, _ int) (agentchannel.Deadline, error) {
+		return agentchannel.FromDeadline(deadline)
+	}
 	node.agent = &fakeAgentAvailability{}
 	node.options.AgentStartup = testAgentStartupOptions()
 	node.options.Probes = testProbeOptions()

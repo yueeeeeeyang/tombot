@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
+	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/sharedbrowser"
 	"io.yueyang/tom/internal/taskprocess"
 )
@@ -89,14 +90,16 @@ func (process *browserProcess) start(ctx context.Context, request taskprocess.Br
 	if command == nil {
 		return nil, errors.New("共享浏览器引导程序缺失")
 	}
-	// Chrome 诊断可能含网页地址或内容，不转发原始输出；执行状态通过退出码和 CDP 协议确认。
-	command.Stdout, command.Stderr = io.Discard, io.Discard
+	// Chrome 诊断可能含网页地址或内容，只匹配有界前缀中的固定分类，不转发原始输出。
+	diagnostics := &browserDiagnostics{}
+	defer diagnostics.close()
+	command.Stdout, command.Stderr = io.Discard, diagnostics
 	command.WaitDelay = time.Second
 	if err = ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err = command.Start(); err != nil {
-		return nil, errors.New("启动共享浏览器引导失败")
+		return nil, browserprobe.StartFailure("browser_start_launch_failed", errors.New("启动共享浏览器引导失败"))
 	}
 	launched = true
 	go func() {
@@ -120,18 +123,37 @@ func (process *browserProcess) start(ctx context.Context, request taskprocess.Br
 	responses, send = nil, nil
 	options.Uploads, err = sharedbrowser.NewUploadStore()
 	if err != nil {
-		return nil, errors.Join(err, reader.Close(), writer.Close())
+		return nil, errors.Join(browserprobe.StartFailure("browser_start_upload_failed", err), reader.Close(), writer.Close())
 	}
 	service, err = sharedbrowser.New(process.lifetime, reader, writer, options)
 	if err != nil {
-		return nil, errors.Join(err, options.Uploads.Close())
+		// CDP 管道可先于 stderr 排空关闭；有界等待 Wait 汇合，避免丢失紧邻退出的启动分类。
+		drain, stop := context.WithTimeout(ctx, command.WaitDelay)
+		select {
+		case <-process.done:
+		case <-drain.Done():
+		}
+		stop()
+		code := diagnostics.failureCode()
+		if code == "" {
+			code = "browser_start_protocol_failed"
+			select {
+			case <-process.done:
+				code = "browser_start_process_exited"
+			default:
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				code = "browser_start_timeout"
+			}
+		}
+		return nil, errors.Join(browserprobe.StartFailure(code, err), options.Uploads.Close())
 	}
 	process.mu.Lock()
 	process.service = service
 	process.mu.Unlock()
 	select {
 	case <-process.done:
-		return nil, errors.New("共享 Chrome 在初始化期间退出")
+		return nil, browserprobe.StartFailure("browser_start_process_exited", errors.New("共享 Chrome 在初始化期间退出"))
 	default:
 	}
 	return service, ctx.Err()

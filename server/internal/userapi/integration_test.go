@@ -271,8 +271,9 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if response := call("POST", conversationPath+"/read", map[string]int{"sequence": 1}, first, nil); response.status != 204 {
 		t.Fatal("已读提交失败", response.status)
 	}
-	if response := call("POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: "下一回合"}, first, nil); response.status != 409 {
-		t.Fatal("未限制活动会话", response.status)
+	additional := decode[submissionReply](t, call("POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: "补充消息"}, first, nil), 202).Submission
+	if additional.RunID != submission.RunID {
+		t.Fatal("补充消息未进入当前运行")
 	}
 	for range 2 {
 		if run := decode[runReply](t, call("POST", runPath+"/cancel", map[string]any{}, first, nil), 200).Run; run.Status != "canceled" {
@@ -280,7 +281,7 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		}
 	}
 	next := decode[submissionReply](t, call("POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: "新的回合"}, first, nil), 202).Submission
-	if messages := decode[messagesReply](t, call("GET", messagePath+"?before=3&limit=1", nil, first, nil), 200).Messages; len(messages) != 1 || messages[0].Sequence != 2 || messages[0].ID != next.MessageID {
+	if messages := decode[messagesReply](t, call("GET", messagePath+"?before=4&limit=1", nil, first, nil), 200).Messages; len(messages) != 1 || messages[0].Sequence != 3 || messages[0].ID != next.MessageID {
 		t.Fatal("消息分页顺序错误")
 	}
 	decode[runReply](t, call("POST", "/api/v2/runs/"+next.RunID+"/cancel", map[string]any{}, first, nil), 200)
@@ -407,7 +408,7 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		{"POST", messagePath, map[string]string{"client_request_id": ids.New(), "content": "消息", "user_id": sessions[1].Principal.UserID}, 400},
 		{"POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: strings.Repeat("a", (32<<10)+1)}, 400},
 		{"POST", conversationPath + "/read", map[string]any{}, 400},
-		{"POST", conversationPath + "/read", map[string]int{"sequence": 3}, 400},
+		{"POST", conversationPath + "/read", map[string]int{"sequence": 4}, 400},
 		{"POST", runPath + "/cancel", map[string]string{"lease_owner": ids.New()}, 400},
 		{"POST", runPath + "/cancel?user_id=x", map[string]any{}, 400},
 		{"POST", "/api/v2/jobs/claim", map[string]any{}, 404},

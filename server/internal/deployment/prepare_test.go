@@ -20,7 +20,7 @@ func preparationFixture(t *testing.T) (map[string]any, account) {
 	t.Helper()
 	value, _, api := fixtureConfiguration(t)
 	// 此清单只用于解析测试，不作为宿主安装版本推荐或下载来源。
-	docker := dockerbootstrap.Manifest{EnginePackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", CLIPackageVersion: "5:29.7.2-1~ubuntu.24.04~noble", ContainerdPackageVersion: "2.3.6-1~ubuntu.24.04~noble", E2fsprogsPackageVersion: "1.47.0-test1", UtilLinuxPackageVersion: "2.39.3-test1", MountPackageVersion: "2.39.3-test1", AllowedEngineVersions: []string{"29.7.2"}, RepositoryFingerprint: strings.Repeat("A", 40), TimeoutSeconds: 300, MinimumFreeBytes: 1 << 30}
+	docker := dockerbootstrap.DefaultManifest()
 	return map[string]any{"version": 1, "node_id": value.node.NodeID, "node_name": "测试电脑节点", "computer_capacity": 4, "image_id": value.image.ImageID, "image": map[string]any{"reference": value.image.Reference}, "docker": docker, "control": map[string]any{"listen": "10.0.0.5:9443", "allow_public_listen": false, "api_certificate_fingerprint": strings.Repeat("b", 64)}, "server": map[string]any{"address": "127.0.0.1:8443", "admin_origin": "https://127.0.0.1:8443"}}, api
 }
 
@@ -133,7 +133,7 @@ func TestPreparationJSONRejectsAmbiguity(t *testing.T) {
 		bytes.Replace(valid, []byte(`"version":1`), []byte(`"Version":1`), 1),
 		bytes.Replace(valid, []byte(`"computer_capacity":4`), []byte(`"computer_capacity":null`), 1),
 		bytes.Replace(valid, []byte(`"address":"127.0.0.1:8443"`), []byte(`"address":"127.0.0.1:8443","address":"127.0.0.1:8443"`), 1),
-		bytes.Replace(valid, []byte(`"engine_package_version"`), []byte(`"ENGINE_PACKAGE_VERSION"`), 1),
+		bytes.Replace(valid, []byte(`"timeout_seconds"`), []byte(`"TIMEOUT_SECONDS"`), 1),
 		[]byte(`{"node":[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]}`),
 		bytes.Repeat([]byte(" "), (256<<10)+1),
 		[]byte{0xff},

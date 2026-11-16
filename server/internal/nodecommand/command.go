@@ -24,6 +24,7 @@ type dependencies struct {
 	image           prepareImage
 	node            startNode
 	install         installNode
+	repair          repairNode
 }
 
 // Run 处理固定子命令及受保护配置路径，返回进程退出码；未知参数不会执行部署动作。
@@ -32,6 +33,20 @@ func Run(ctx context.Context, args []string, getenv func(string) string, output 
 		configure: deployment.Prepare, checkDeployment: deployment.Check,
 		checkNode: deployment.CheckNode, bootstrap: dockerbootstrap.Install,
 		image: dockernode.PrepareImage, node: start,
+		repair: func(ctx context.Context, options deployment.NodeRepairOptions) (deployment.NodeInstallationReport, error) {
+			executable, err := os.Executable()
+			if err != nil {
+				return deployment.NodeInstallationReport{}, err
+			}
+			caller := uint64(os.Getuid())
+			if value := getenv("SUDO_UID"); value != "" {
+				caller, err = strconv.ParseUint(value, 10, 32)
+				if err != nil {
+					return deployment.NodeInstallationReport{}, errors.New("sudo 调用者身份无效")
+				}
+			}
+			return deployment.RepairNode(ctx, executable, uint32(caller), options, logger)
+		},
 		install: func(ctx context.Context, path string) (deployment.NodeInstallationReport, error) {
 			executable, err := os.Executable()
 			if err != nil {
@@ -75,6 +90,9 @@ func execute(ctx context.Context, args []string, getenv func(string) string, out
 	}
 	if len(args) >= 2 && args[1] == "install" {
 		return runInstall(ctx, args[2:], output, logger, actions.install)
+	}
+	if len(args) >= 2 && args[1] == "repair" {
+		return runRepair(ctx, args[2:], output, logger, actions.repair)
 	}
 	if len(args) != 2 {
 		logger.Error("节点命令只接受一个子命令，请运行 tomnode help")
@@ -121,6 +139,7 @@ const usage = `用法：tomnode <子命令>
 
   template          输出可选的节点高级参数模板
   install [文件]    一次完成配置、证书、程序和系统服务安装并启动
+  repair [选项]     修复已停止的节点，保留节点身份；支持 --listen、--url、--image-package
   start             检查节点配置、准备 Docker 和镜像，然后运行节点
   configure         从部署参数生成配置，不覆盖已有输出目录
   check             只检查节点配置与文件权限，不需要 API 或数据库文件

@@ -141,7 +141,10 @@ func TestKernelNodeProbeBinding(t *testing.T) {
 				}
 				return ref, err
 			}
-			probes.stamp, probes.invoke = agentchannel.FromDeadline, probes.call
+			probes.node.stampDeadline = func(deadline time.Time, _ int) (agentchannel.Deadline, error) {
+				return agentchannel.FromDeadline(deadline)
+			}
+			probes.invoke = probes.call
 			f.node.probes = probes
 			evidence, err := probes.check(t.Context(), resource, current)
 			if len(groups.drained) != 1 {

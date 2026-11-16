@@ -10,7 +10,7 @@ import (
 )
 
 func TestAccountCatalogRoutes(t *testing.T) {
-	for path, key := range map[string]string{"users": "users", "computer-nodes": "nodes", "computer-images": "images"} {
+	for path, key := range map[string]string{"users": "users", "computer-nodes": "nodes"} {
 		t.Run(path, func(t *testing.T) {
 			fixture := newFixture(t)
 			before := ids.New()
@@ -35,5 +35,13 @@ func TestAccountCatalogRoutes(t *testing.T) {
 				t.Fatal("领域拒绝被忽略", response.Code)
 			}
 		})
+	}
+}
+
+func TestHistoricalImageCatalogIsNotExposed(t *testing.T) {
+	fixture := newFixture(t)
+	response := fixture.run(fixture.request("GET", "/api/v2/admin/computer-images", ""))
+	if response.Code != http.StatusNotFound || fixture.accounts.calls != 0 {
+		t.Fatal("仍暴露未关联节点的历史镜像目录", response.Code)
 	}
 }

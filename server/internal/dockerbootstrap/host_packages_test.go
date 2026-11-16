@@ -20,16 +20,17 @@ func TestExistingDockerInstallsMissingHostPackages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(report.HostPackages, fixture.installation.hostPackages()) || !reflect.DeepEqual(fixture.state(t).Report.HostPackages, report.HostPackages) {
+	expected := []PackageReport{{Name: "e2fsprogs", Architecture: "amd64", Version: "1.47.0-test1"}, {Name: "util-linux", Architecture: "amd64", Version: "2.39.3-test1"}, {Name: "mount", Architecture: "amd64", Version: "2.39.3-test1"}}
+	if !reflect.DeepEqual(report.HostPackages, expected) || !reflect.DeepEqual(fixture.state(t).Report.HostPackages, report.HostPackages) {
 		t.Fatal("未保存实际宿主软件包验证结果")
 	}
 	commands := strings.Join(fixture.commands, "\n")
-	for _, needed := range []string{"update", "--no-remove", "--no-upgrade", "--no-install-recommends", "e2fsprogs:amd64=1.47.0-test1", "util-linux:amd64=2.39.3-test1", "mount:amd64=2.39.3-test1", "e2fsck -V", "fallocate --version", "losetup --version"} {
+	for _, needed := range []string{"update", "--no-remove", "--no-upgrade", "--no-install-recommends", "install --yes --no-remove --no-upgrade --no-install-recommends e2fsprogs", "e2fsck -V", "fallocate --version", "losetup --version"} {
 		if !strings.Contains(commands, needed) {
-			t.Fatal("已有 Docker 路径未完成固定依赖安装和可执行检查", needed)
+			t.Fatal("已有 Docker 路径未完成缺失依赖安装和可执行检查", needed)
 		}
 	}
-	if strings.Contains(commands, "docker-ce=") || fixture.downloads != 0 {
+	if strings.Contains(commands, " docker-ce") || fixture.downloads != 0 {
 		t.Fatal("补齐磁盘工具不应重新安装已有 Docker 或重写其软件源")
 	}
 	fixture.commands = nil
@@ -41,18 +42,18 @@ func TestExistingDockerInstallsMissingHostPackages(t *testing.T) {
 func TestHostPackageConflictsBeforeMutations(t *testing.T) {
 	valid := "e2fsprogs\tamd64\t1.47.0-test1\tinstall ok installed\n"
 	cases := map[string]commandResult{
-		"版本不符":  {output: []byte(strings.Replace(valid, "1.47.0-test1", "1.47.0-other", 1))},
-		"架构不符":  {output: []byte(strings.Replace(valid, "amd64", "arm64", 1))},
-		"包名不符":  {output: []byte(strings.Replace(valid, "e2fsprogs", "other", 1))},
-		"未配置":   {output: []byte(strings.Replace(valid, "ok installed", "ok unpacked", 1))},
-		"半配置":   {output: []byte(strings.Replace(valid, "ok installed", "ok half-configured", 1))},
-		"损坏":    {output: []byte(strings.Replace(valid, "ok installed", "reinstreq installed", 1))},
-		"待删除":   {output: []byte(strings.Replace(valid, "install ok", "deinstall ok", 1))},
-		"持有但缺失": {output: []byte(strings.Replace(valid, "install ok installed", "hold ok not-installed", 1))},
-		"重复记录":  {output: []byte(valid + valid)},
-		"空记录":   {},
-		"查询失败":  {exitCode: 2},
-		"部分失败":  {output: []byte(valid), exitCode: 1},
+		"版本记录无效": {output: []byte(strings.Replace(valid, "1.47.0-test1", "invalid version", 1))},
+		"架构不符":   {output: []byte(strings.Replace(valid, "amd64", "arm64", 1))},
+		"包名不符":   {output: []byte(strings.Replace(valid, "e2fsprogs", "other", 1))},
+		"未配置":    {output: []byte(strings.Replace(valid, "ok installed", "ok unpacked", 1))},
+		"半配置":    {output: []byte(strings.Replace(valid, "ok installed", "ok half-configured", 1))},
+		"损坏":     {output: []byte(strings.Replace(valid, "ok installed", "reinstreq installed", 1))},
+		"待删除":    {output: []byte(strings.Replace(valid, "install ok", "deinstall ok", 1))},
+		"持有但缺失":  {output: []byte(strings.Replace(valid, "install ok installed", "hold ok not-installed", 1))},
+		"重复记录":   {output: []byte(valid + valid)},
+		"空记录":    {},
+		"查询失败":   {exitCode: 2},
+		"部分失败":   {output: []byte(valid), exitCode: 1},
 	}
 	for name, result := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -124,19 +125,19 @@ func TestHostToolsVerifiedOnEveryStart(t *testing.T) {
 }
 
 func TestHostPackageInstallRecheckedAndRecovered(t *testing.T) {
-	for _, scenario := range []string{"未落盘", "版本漂移", "安装结果未知"} {
+	for _, scenario := range []string{"未落盘", "版本记录无效", "安装结果未知"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := newFixture(t, true)
 			delete(fixture.packages, "e2fsprogs")
 			runner := fixture.installation.host.run
 			fixture.installation.host.run = func(ctx context.Context, program string, arguments ...string) (commandResult, error) {
 				result, err := runner(ctx, program, arguments...)
-				if filepath.Base(program) == "apt-get" && strings.Contains(strings.Join(arguments, " "), "e2fsprogs:") {
+				if filepath.Base(program) == "apt-get" && strings.Contains(strings.Join(arguments, " "), "install --yes --no-remove --no-upgrade --no-install-recommends e2fsprogs") {
 					switch scenario {
 					case "未落盘":
 						delete(fixture.packages, "e2fsprogs")
-					case "版本漂移":
-						fixture.packages["e2fsprogs"] = commandResult{output: []byte("e2fsprogs\tamd64\t1.47.0-other\tinstall ok installed\n")}
+					case "版本记录无效":
+						fixture.packages["e2fsprogs"] = commandResult{output: []byte("e2fsprogs\tamd64\tinvalid version\tinstall ok installed\n")}
 					case "安装结果未知":
 						return commandResult{}, context.DeadlineExceeded
 					}
@@ -171,7 +172,7 @@ func TestHostPackageRemovedAndHeldStates(t *testing.T) {
 			if _, err := fixture.installation.run(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			installed := strings.Contains(strings.Join(fixture.commands, "\n"), "e2fsprogs:amd64=")
+			installed := strings.Contains(strings.Join(fixture.commands, "\n"), "install --yes --no-remove --no-upgrade --no-install-recommends e2fsprogs")
 			if installed == strings.HasPrefix(status, "hold") {
 				t.Fatal("未区分移除残留与已持有安装包")
 			}

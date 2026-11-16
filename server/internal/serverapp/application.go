@@ -20,6 +20,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/modelregistry"
+	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/nodeenrollment"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userapi"
@@ -206,7 +207,11 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	management, err := adminapi.New(users, authentication, bootstrap, models, gate, logger)
+	nodeAdministration, err := nodecatalog.NewAdministration(databases[postgres.ControlRole], authentication)
+	if err != nil {
+		return nil, err
+	}
+	management, err := adminapi.New(users, authentication, nodeManagement{bootstrap, nodeAdministration}, models, gate, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -231,10 +236,15 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	router.Handle(nodeenrollment.BootstrapPath, bootstrap)
 	router.Handle("/api/v2/auth/", gate)
 	router.Handle("/api/v2/admin/auth/", gate)
+	router.Handle("/api/v2/web/auth/", gate)
 	router.Handle("/api/v2/admin/", management)
 	router.Handle("/api/v2/", user)
 	router.Handle("/admin/", page)
 	router.Handle("/admin", page)
+	router.Handle("/activate", page)
+	router.Handle("/login", gate)
+	router.Handle("/authorize", gate)
+	router.Handle("/account", gate)
 	router.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -243,9 +253,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 		}
 	})
 	router.HandleFunc("GET /health/ready", application.ready)
-	router.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin/", http.StatusTemporaryRedirect)
-	})
+	router.Handle("/{$}", gate)
 	application.handler = router
 	return application, nil
 }

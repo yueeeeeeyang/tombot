@@ -17,6 +17,7 @@ import (
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/nodeenrollment"
 )
 
@@ -55,10 +56,6 @@ func (stub *accountsStub) ListUsers(_ context.Context, principal identity.Princi
 func (stub *accountsStub) ListNodes(ctx context.Context, principal identity.Principal, before string, limit int) ([]accounts.NodeSummary, error) {
 	_, err := stub.ListUsers(ctx, principal, before, limit)
 	return []accounts.NodeSummary{}, err
-}
-func (stub *accountsStub) ListImages(ctx context.Context, principal identity.Principal, before string, limit int) ([]accounts.ImageSummary, error) {
-	_, err := stub.ListUsers(ctx, principal, before, limit)
-	return []accounts.ImageSummary{}, err
 }
 
 func (stub *accountsStub) Create(_ context.Context, principal identity.Principal, request accounts.CreateRequest) (accounts.Operation, error) {
@@ -114,6 +111,30 @@ type nodesStub struct {
 	grant     nodeenrollment.Grant
 	err       error
 	principal identity.Principal
+	detail    nodecatalog.NodeDetail
+	update    nodecatalog.NodeUpdate
+	nodeID    string
+	requestID string
+	token     int64
+}
+
+func (stub *nodesStub) GetNode(_ context.Context, principal identity.Principal, nodeID string) (nodecatalog.NodeDetail, error) {
+	stub.principal, stub.nodeID = principal, nodeID
+	if stub.err != nil {
+		return nodecatalog.NodeDetail{}, stub.err
+	}
+	if stub.detail.ID == "" {
+		return nodecatalog.NodeDetail{}, nodecatalog.ErrNotFound
+	}
+	return stub.detail, nil
+}
+func (stub *nodesStub) UpdateNode(ctx context.Context, principal identity.Principal, nodeID string, update nodecatalog.NodeUpdate, requestID string) (nodecatalog.NodeDetail, error) {
+	stub.update, stub.requestID = update, requestID
+	return stub.GetNode(ctx, principal, nodeID)
+}
+func (stub *nodesStub) RetryNodeVerification(ctx context.Context, principal identity.Principal, nodeID string, token int64, requestID string) (nodecatalog.NodeDetail, error) {
+	stub.token, stub.requestID = token, requestID
+	return stub.GetNode(ctx, principal, nodeID)
 }
 
 func (stub *nodesStub) Issue(_ context.Context, principal identity.Principal, _ string) (nodeenrollment.Grant, error) {

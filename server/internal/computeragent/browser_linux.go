@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/processgroup"
 	"io.yueyang/tom/internal/sharedbrowser"
 	"io.yueyang/tom/internal/taskprocess"
@@ -34,11 +35,11 @@ func (factory *kernelScopes) OpenBrowser(request taskprocess.BrowserRequest, fil
 	}
 	control, err := factory.openService(request.Group, files)
 	if err != nil {
-		return nil, err
+		return nil, browserprobe.StartFailure("browser_start_group_failed", err)
 	}
 	directory, err := newBrowserDirectory(request)
 	if err != nil {
-		return nil, err
+		return nil, browserprobe.StartFailure("browser_start_directory_failed", err)
 	}
 	return &kernelBrowserScope{control: control, request: request, directory: directory, grace: grace, done: make(chan struct{})}, nil
 }

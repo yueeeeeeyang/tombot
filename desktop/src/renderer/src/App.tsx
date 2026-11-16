@@ -1,5 +1,6 @@
+import { ulid } from '../../shared/ulid'
 import type { GroupSummary } from './features/desktop/backend'
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useState, type CSSProperties } from 'react'
 import { installAgentActivityEvents } from './features/avatars/activity'
 import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
@@ -14,10 +15,8 @@ import {
 } from './features/chat/ConversationPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
 import {
-  addAgent,
   saveMessage,
   setAgentComputerUrl,
-  setAgentModel,
   toggleReaction,
   updateDraft,
   type NewAgent,
@@ -49,12 +48,10 @@ import { removeSidebarAgent, setSidebarFlag } from './features/workspace/sidebar
 
 import { SearchDialog } from './features/search/SearchDialog'
 import { SettingsDialog } from './features/settings/SettingsDialog'
-import { ModelInitPage } from './features/settings/ModelInitPage'
 import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
 import { type SettingsSection } from './features/settings/settings'
-import { useServerSettings } from './features/settings/useServerSettings'
-import { getModelOptions } from './features/models/modelOptions'
+import { useLanguage } from './features/settings/useLanguage'
 import { useConnectionStatus } from './features/session/useConnectionStatus'
 import { useSession } from './features/session/useSession'
 import { SessionFrame, SessionGate } from './features/session/SessionGate'
@@ -72,7 +69,21 @@ export default function App() {
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
 function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
-  const { workspace, commit, deliver, receive, error, isBlocked, ready } = useWorkspace()
+  const { workStates, receiveActivity, clearActivity } = useWorkActivity()
+  const {
+    workspace,
+    commit,
+    create,
+    deliver,
+    receive,
+    error,
+    isBlocked,
+    ready,
+    historyPages,
+    loadEarlier,
+    hasUnsavedChanges,
+    dismissError,
+  } = useWorkspace(receiveActivity, clearActivity)
   const connectionStatus = useConnectionStatus()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
@@ -84,35 +95,19 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const [renamingAgentId, setRenamingAgentId] = useState<string>()
   const [editingGroupName, setEditingGroupName] = useState<string>()
   const [deletingAgentId, setDeletingAgentId] = useState<string>()
-  const {
-    draft: settingsDraft,
-    setDraft: setSettingsDraft,
-    apiKey,
-    setApiKey,
-    hasApiKey,
-    error: settingsError,
-  } = useServerSettings()
+  const { language, setLanguage, error: languageError } = useLanguage()
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
   const [chatGroups, setChatGroups] = useState<GroupSummary[]>([])
   const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
   const [liveReplies, setLiveReplies] = useState<Record<string, string>>({})
-  const { workStates, receiveActivity, clearActivity } = useWorkActivity()
   const [pendingMessages, setPendingMessages] = useState<Record<string, string>>({})
-  const pendingAgents = useRef(new Set<string>())
 
-  function startDelivery(
-    agentId: string,
-    content: string,
-    messageId: string,
-    quietWhenUnconfigured: boolean,
-  ): void {
-    if (pendingAgents.current.has(agentId)) return
-    pendingAgents.current.add(agentId)
+  function startDelivery(agentId: string, content: string, messageId: string): void {
     const source = crypto.randomUUID()
     setPendingMessages((current) => ({ ...current, [agentId]: messageId }))
     let reply = ''
-    void deliver(agentId, content, (streamEvent) => {
+    void deliver(agentId, content, messageId, (streamEvent) => {
       receiveActivity(source, streamEvent)
       if (streamEvent.type === 'delta') {
         reply += streamEvent.text
@@ -120,13 +115,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       }
     })
       .then((result) => {
-        if (!(result.code === 'MODEL_NOT_READY' && quietWhenUnconfigured) && result.message)
-          setNotice(result.message)
+        if (result.message) setNotice(result.message)
         refreshRooms()
       })
       .catch((failure: Error) => setNotice(failure.message))
       .finally(() => {
-        pendingAgents.current.delete(agentId)
         setLiveReplies((current) => {
           const next = { ...current }
           delete next[agentId]
@@ -134,17 +127,13 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         })
         setPendingMessages((current) => {
           const next = { ...current }
-          delete next[agentId]
+          if (next[agentId] === messageId) delete next[agentId]
           return next
         })
         clearActivity(source)
       })
   }
-  const [recruitProfile, setRecruitProfile] = useState<NewAgent>()
-  const [returnToRecruit, setReturnToRecruit] = useState(false)
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('general')
-  // 有密钥和模型名称才离开初始化页。自定义地址没填时服务仍拒绝投递，消息保持未发送。
-  const modelConfigured = hasApiKey && settingsDraft.modelName.trim() !== ''
   const agent = workspace.agents.find((candidate) => candidate.id === workspace.activeAgentId)
   const agentIds = workspace.agents.map((item) => item.id)
   const menuAgent = menuAnchor
@@ -156,7 +145,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const hiddenAgents = workspace.agents.filter((candidate) =>
     preferences.hiddenIds.includes(candidate.id),
   )
-  const bannerMessage = error || themeError || sidebarError || settingsError || notice
+  const bannerMessage = error || themeError || sidebarError || languageError || notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
@@ -181,7 +170,6 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setMenuAnchor(undefined)
-        setReturnToRecruit(false)
         setOpenDialog('search')
       }
     }
@@ -190,13 +178,13 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   }, [])
 
   useEffect(() => {
-    if (!error || isBlocked) return
+    if (!hasUnsavedChanges || isBlocked) return
     function preventLoss(event: BeforeUnloadEvent): void {
       event.preventDefault()
     }
     window.addEventListener('beforeunload', preventLoss)
     return () => window.removeEventListener('beforeunload', preventLoss)
-  }, [error, isBlocked])
+  }, [hasUnsavedChanges, isBlocked])
 
   function runAction(action: () => void): void {
     try {
@@ -219,19 +207,15 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       }
     })
   }
-  function openSettings(section: SettingsSection = 'general', fromRecruit = false): void {
-    setReturnToRecruit(fromRecruit)
+  function openSettings(section: SettingsSection = 'general'): void {
     setSettingsSection(section)
     setOpenDialog('settings')
   }
-  function createAgent(profile: NewAgent, model: { label: string }): void {
-    const id = crypto.randomUUID()
-    const saved = commit((previous) => addAgent(previous, profile, id, model.label))
-    if (!saved) throw new Error('猫咪资料尚未保存，请重试保存。')
+  async function createAgent(profile: NewAgent, requestId: string): Promise<void> {
+    const id = await create(profile, requestId)
     setSurface({ kind: 'agent', id })
     setCatPanelOpen(false)
     // v2 没有独立的欢迎语回合：新建机器人后直接进入空会话，由用户发起第一句。
-    setRecruitProfile(undefined)
     setOpenDialog(null)
   }
   async function copyConversationId(target: { id: string; name: string }): Promise<void> {
@@ -371,18 +355,15 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     <SettingsDialog
       onClose={() => {
         setOpenDialog(null)
-        setReturnToRecruit(false)
       }}
       theme={theme}
       onThemeChange={setTheme}
       themeError={themeError}
       section={settingsSection}
       onSectionChange={setSettingsSection}
-      draft={settingsDraft}
-      onChange={setSettingsDraft}
-      apiKey={apiKey}
-      hasApiKey={hasApiKey}
-      onApiKeyChange={setApiKey}
+      language={language}
+      onLanguageChange={setLanguage}
+      languageError={languageError}
     />
   )
   if (!ready) {
@@ -392,33 +373,12 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       </SessionFrame>
     )
   }
-  if (!modelConfigured) {
-    return (
-      <>
-        <ModelInitPage
-          draft={settingsDraft}
-          onChange={setSettingsDraft}
-          apiKey={apiKey}
-          hasApiKey={hasApiKey}
-          onApiKeyChange={setApiKey}
-          error={settingsError}
-        />
-        {settingsDialog}
-      </>
-    )
-  }
   if (!agent) {
     return (
       <>
         <FirstCatPage
           onCreate={createAgent}
-          initialProfile={recruitProfile}
-          onModelSettings={(profile) => {
-            setRecruitProfile(profile)
-            openSettings('models', false)
-          }}
           groups={[...new Set(workspace.agents.map((item) => item.group))]}
-          modelOptions={getModelOptions(settingsDraft)}
         />
         {settingsDialog}
       </>
@@ -502,6 +462,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
             isBlocked={isBlocked}
             workSummary={workStates[agent.id]?.summary}
             pendingMessageId={pendingMessages[agent.id]}
+            hasEarlierMessages={historyPages[agent.id]?.hasMore}
+            isLoadingEarlier={historyPages[agent.id]?.loading}
+            onLoadEarlier={() => {
+              void loadEarlier(agent.id)
+            }}
             isDetailsOpen={isCatPanelOpen}
             onDraft={(draft) =>
               runAction(() => {
@@ -509,9 +474,8 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               })
             }
             onSave={(replyToId, attachments) => {
-              if (pendingAgents.current.has(agent.id)) return false
               try {
-                const messageId = crypto.randomUUID()
+                const messageId = ulid()
                 // 保存会清空草稿，投递内容必须在提交前取出。
                 const content =
                   agent.draft.trim() || attachments?.map((item) => item.name).join('、') || ''
@@ -526,7 +490,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
                   ),
                 )
                 if (!saved) return false
-                startDelivery(agent.id, content, messageId, true)
+                startDelivery(agent.id, content, messageId)
                 return true
               } catch (failure) {
                 setNotice((failure as Error).message)
@@ -559,7 +523,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
                 setNotice('找不到这条消息，请重新输入。')
                 return
               }
-              startDelivery(agent.id, failed.content, messageId, false)
+              startDelivery(agent.id, failed.content, messageId)
             }}
             onDetails={() => setCatPanelOpen((open) => !open)}
             onNotice={setNotice}
@@ -596,11 +560,6 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
             agent={agent}
             isLead={agent.id === workspace.leadAgentId}
             onClose={() => setCatPanelOpen(false)}
-            onModelChange={(modelId) =>
-              runAction(() => {
-                commit((previous) => setAgentModel(previous, agent.id, modelId))
-              })
-            }
             onComputerUrl={(computerUrl) =>
               runAction(() => {
                 commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
@@ -645,7 +604,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         <div role="alert" className="error-banner">
           <AlertCircle size={16} />
           <span>{bannerMessage}</span>
-          {error && !isBlocked ? (
+          {error && !isBlocked && hasUnsavedChanges ? (
             <button
               onClick={() =>
                 runAction(() => {
@@ -656,10 +615,16 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               重试保存
             </button>
           ) : (
-            !error &&
+            !isBlocked &&
             !themeError &&
             !sidebarError && (
-              <button aria-label="关闭提示" onClick={() => setNotice('')}>
+              <button
+                aria-label="关闭提示"
+                onClick={() => {
+                  setNotice('')
+                  dismissError()
+                }}
+              >
                 <X size={16} />
               </button>
             )
@@ -670,16 +635,9 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         <RecruitCatDialog
           onClose={() => {
             setOpenDialog(null)
-            setRecruitProfile(undefined)
           }}
           onCreate={createAgent}
-          initialProfile={recruitProfile}
-          onModelSettings={(profile) => {
-            setRecruitProfile(profile)
-            openSettings('models', true)
-          }}
           groups={[...new Set(workspace.agents.map((item) => item.group))]}
-          modelOptions={getModelOptions(settingsDraft)}
         />
       )}
       {openDialog === 'search' && (
@@ -693,24 +651,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
           onSelect={selectAgent}
         />
       )}
-      {openDialog === 'settings' && (
-        <SettingsDialog
-          onClose={() => {
-            setOpenDialog(returnToRecruit ? 'create' : null)
-            setReturnToRecruit(false)
-          }}
-          theme={theme}
-          onThemeChange={setTheme}
-          themeError={themeError}
-          section={settingsSection}
-          onSectionChange={setSettingsSection}
-          draft={settingsDraft}
-          onChange={setSettingsDraft}
-          apiKey={apiKey}
-          hasApiKey={hasApiKey}
-          onApiKeyChange={setApiKey}
-        />
-      )}
+      {settingsDialog}
       {openDialog === 'workspace' && (
         <WorkspaceDialog
           workspace={workspace}

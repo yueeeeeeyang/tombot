@@ -1,5 +1,12 @@
-import { createSettingsDraft, type SettingsDraft } from '../settings/settings'
-import { createWorkspace, type AppWorkspace, type ChatMessage } from '../workspace/model'
+import {
+  addAgent,
+  createWorkspace,
+  type Agent,
+  type NewAgent,
+  type AppWorkspace,
+  type ChatMessage,
+} from '../workspace/model'
+import { ulid } from '../../../../shared/ulid'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
   DeliveryResult,
@@ -7,12 +14,11 @@ import type {
   LoginCredentials,
   SessionPhase,
   SessionSnapshot,
-  SettingsView,
   UserEvent,
   WorkspaceSnapshot,
 } from './backend'
 
-const modelNotReady = '尚未配置可用模型，请先在设置中填写 API 地址和模型名称。'
+const modelNotReady = '当前模型策略不可用，请联系管理员检查服务端模型配置。'
 
 /** 测试里代替服务端的内存实现。它遵守同一套会话、保存和投递规则，不写 localStorage。 */
 export class MemoryBackend implements DesktopBackend {
@@ -27,14 +33,8 @@ export class MemoryBackend implements DesktopBackend {
   sessionError: Error | null = null
   private workspace = createWorkspace()
   private pristine = true
-  private settings: SettingsDraft = {
-    ...createSettingsDraft(),
-    provider: 'custom',
-    providerName: '测试供应商',
-    baseUrl: '',
-    modelName: '内存模型',
-  }
-  private apiKey = 'memory-key'
+  private isModelPolicyAvailable = false
+  private creations = new Map<string, { profile: string; agent: Agent }>()
 
   /** 地址与密码优先；其余阶段直接反映已登录状态。 */
   private gatePhase(): SessionPhase {
@@ -89,6 +89,10 @@ export class MemoryBackend implements DesktopBackend {
     return this.trySessionSync()
   }
 
+  async trustServerCertificate(): Promise<void> {
+    throw new Error('内存服务不支持证书验证。')
+  }
+
   async logout(): Promise<void> {
     this.phase = 'login'
   }
@@ -109,6 +113,22 @@ export class MemoryBackend implements DesktopBackend {
 
   loadWorkspace(): Promise<WorkspaceSnapshot> {
     return Promise.resolve(this.tryWorkspaceSync())
+  }
+
+  async createAgent(profile: NewAgent, requestId: string): Promise<Agent> {
+    if (this.failSave) throw this.failSave
+    const encoded = JSON.stringify(profile)
+    const previous = this.creations.get(requestId)
+    if (previous) {
+      if (previous.profile !== encoded) throw new Error('创建请求的资料发生冲突。')
+      return previous.agent
+    }
+    const workspace = addAgent(this.workspace, profile, ulid())
+    const agent = workspace.agents.at(-1)!
+    this.creations.set(requestId, { profile: encoded, agent })
+    this.workspace = workspace
+    this.pristine = false
+    return agent
   }
 
   saveWorkspace(workspace: AppWorkspace): void {
@@ -153,12 +173,13 @@ export class MemoryBackend implements DesktopBackend {
   async deliverMessage(
     agentId: string,
     content: string,
+    clientRequestId: string,
     onEvent?: (event: { type: string; text: string }) => void,
   ): Promise<DeliveryResult> {
     const agent = this.workspace.agents.find((item) => item.id === agentId)
     if (!agent) return { code: 'AGENT_NOT_FOUND', message: '助手不存在' }
     if (!content.trim()) return { code: 'INPUT_INVALID', message: '消息不能为空' }
-    if (!this.settings.baseUrl.trim() || !this.settings.modelName.trim()) {
+    if (!this.isModelPolicyAvailable) {
       return { code: 'MODEL_NOT_READY', message: modelNotReady }
     }
     onEvent?.({ type: 'process', text: '正在思考' })
@@ -180,7 +201,12 @@ export class MemoryBackend implements DesktopBackend {
     }
     // 内存实现返回服务端视角的完整列表，与真实服务端一致，由调用方整体替换。
     return {
-      messages: [...agent.messages, sent, reply].map((message, index) => ({
+      acceptedMessageId: sent.id,
+      messages: [
+        ...agent.messages.filter((message) => message.id !== clientRequestId),
+        sent,
+        reply,
+      ].map((message, index) => ({
         id: message.id,
         sequence: index + 1,
         role: message.role,
@@ -193,49 +219,15 @@ export class MemoryBackend implements DesktopBackend {
     }
   }
 
-  trySettingsSync(): SettingsView {
-    return { ...this.settings, hasApiKey: this.apiKey.length > 0 }
-  }
-
-  loadSettings(): Promise<SettingsView> {
-    return Promise.resolve(this.trySettingsSync())
-  }
-
-  listBuiltinProviders(): Promise<Array<{ id: string; name: string }>> {
-    return Promise.resolve([{ id: 'deepseek', name: 'DeepSeek' }])
-  }
-
-  listProviderModels(
-    _providerId: string,
-    apiKey: string,
-  ): Promise<Array<{ id: string; name: string }>> {
-    if (!apiKey.trim() && !this.apiKey) {
-      return Promise.reject(new Error('请填写 API Key。'))
-    }
-    if (apiKey === 'bad-key') {
-      return Promise.reject(new Error('API Key 验证失败，请检查后重试。'))
-    }
-    return Promise.resolve([{ id: 'deepseek-chat', name: 'DeepSeek Chat' }])
-  }
-
-  saveSettings(draft: SettingsDraft, apiKey: string): SettingsView {
-    this.settings = { ...draft }
-    if (apiKey) this.apiKey = apiKey
-    return this.trySettingsSync()
-  }
-
-  /** 测试切换到尚未配置模型或空工作空间。调用方结束时要 reset。 */
-  loadFixture(input: {
-    workspace?: AppWorkspace
-    settings?: Partial<SettingsDraft>
-    apiKey?: string
-  }): void {
+  /** 测试模拟服务端策略可用性或空工作空间，客户端不参与模型配置。 */
+  loadFixture(input: { workspace?: AppWorkspace; isModelPolicyAvailable?: boolean }): void {
     if (input.workspace) this.workspace = input.workspace
-    if (input.settings) this.settings = { ...createSettingsDraft(), ...input.settings }
-    if (input.apiKey !== undefined) this.apiKey = input.apiKey
+    if (input.isModelPolicyAvailable !== undefined)
+      this.isModelPolicyAvailable = input.isModelPolicyAvailable
   }
 
   reset(): void {
+    this.creations.clear()
     this.phase = 'ready'
     this.serverUrl = ''
     this.connectError = null
@@ -245,14 +237,7 @@ export class MemoryBackend implements DesktopBackend {
     this.eventListeners.clear()
     this.workspace = createWorkspace()
     this.pristine = true
-    this.settings = {
-      ...createSettingsDraft(),
-      provider: 'custom',
-      providerName: '测试供应商',
-      baseUrl: '',
-      modelName: '内存模型',
-    }
-    this.apiKey = 'memory-key'
+    this.isModelPolicyAvailable = false
   }
 }
 

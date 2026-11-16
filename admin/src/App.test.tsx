@@ -19,6 +19,7 @@ describe('管理界面', () => {
     const user = userEvent.setup()
     render(<App client={client} />)
     await user.type(await screen.findByLabelText('管理员用户名'), 'administrator')
+    expect(screen.getByRole('link', { name: '普通用户登录' })).toHaveAttribute('href', '/login')
     await user.type(screen.getByLabelText('密码'), crypto.randomUUID())
     await user.type(
       screen.getByLabelText('动态验证码'),
@@ -60,10 +61,17 @@ describe('管理界面', () => {
     const fixture = makeClient((path, options) => {
       if (path.startsWith('/computer-nodes'))
         return json({
-          nodes: [{ id: id(7), name: '节点甲', status: 'ready', capacity: 20, reserved: 1 }],
+          nodes: [
+            {
+              id: id(7),
+              name: '节点甲',
+              status: 'ready',
+              capacity: 20,
+              reserved: 1,
+              image: { id: id(8), reference: '测试镜像', is_enabled: true },
+            },
+          ],
         })
-      if (path.startsWith('/computer-images'))
-        return json({ images: [{ id: id(8), reference: '测试镜像', is_enabled: true }] })
       if (path === '/users' && options.method === 'POST') {
         creations++
         return json({ code: 'CREATE_PENDING', message: '仍在创建', operation: operation() }, 504)
@@ -80,7 +88,7 @@ describe('管理界面', () => {
     await user.type(screen.getByLabelText('用户名'), 'new-user')
     await user.type(screen.getByLabelText('显示名称'), '新用户')
     await chooseOption(user, '电脑节点', /^节点/)
-    await chooseOption(user, '电脑镜像', /镜像/)
+    expect(screen.getByLabelText('电脑镜像')).toHaveTextContent('测试镜像')
     await user.click(screen.getByRole('button', { name: '创建用户与电脑' }))
     expect(await screen.findByRole('dialog', { name: '用户创建进度' })).toHaveTextContent(
       '正在读取进度',
@@ -95,10 +103,17 @@ describe('管理界面', () => {
     const fixture = makeClient((path, options) => {
       if (path.startsWith('/computer-nodes'))
         return json({
-          nodes: [{ id: id(7), name: '节点', status: 'ready', capacity: 2, reserved: 0 }],
+          nodes: [
+            {
+              id: id(7),
+              name: '节点',
+              status: 'ready',
+              capacity: 2,
+              reserved: 0,
+              image: { id: id(8), reference: '镜像', is_enabled: true },
+            },
+          ],
         })
-      if (path.startsWith('/computer-images'))
-        return json({ images: [{ id: id(8), reference: '镜像', is_enabled: true }] })
       if (path === '/users') {
         bodies.push(JSON.parse(String(options.body)))
         if (bodies.length === 1) throw new TypeError('连接断开')
@@ -114,7 +129,7 @@ describe('管理界面', () => {
     await user.type(screen.getByLabelText('用户名'), 'new-user')
     await user.type(screen.getByLabelText('显示名称'), '新用户')
     await chooseOption(user, '电脑节点', /^节点/)
-    await chooseOption(user, '电脑镜像', /镜像/)
+    expect(screen.getByLabelText('电脑镜像')).toHaveTextContent('镜像')
     await user.click(screen.getByRole('button', { name: '创建用户与电脑' }))
     expect(await screen.findByText(/创建结果尚未确认/)).toBeInTheDocument()
     expect(bodies).toHaveLength(1)

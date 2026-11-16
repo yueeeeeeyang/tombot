@@ -51,6 +51,7 @@ type Execution interface {
 	Messages(context.Context, identity.Principal, string, int64, int) ([]execution.Message, error)
 	MarkRead(context.Context, identity.Principal, string, int64) error
 	GetRun(context.Context, identity.Principal, string) (execution.Run, error)
+	Activity(context.Context, identity.Principal, string) ([]execution.Run, error)
 	Cancel(context.Context, identity.Principal, string) (execution.Run, error)
 }
 
@@ -119,6 +120,7 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Post("/api/v2/conversations/{conversationID}/messages", handler.sendMessage)
 	router.Post("/api/v2/conversations/{conversationID}/read", handler.markRead)
 	router.Get("/api/v2/runs/{runID}", handler.getRun)
+	router.Get("/api/v2/conversations/{conversationID}/activity", handler.conversationActivity)
 	router.Post("/api/v2/runs/{runID}/cancel", handler.cancelRun)
 	router.Get("/api/v2/events", handler.streamEvents)
 	protected, err := gate.Protect("desktop", func(w http.ResponseWriter, r *http.Request, principal identity.Principal, attempt identity.Attempt) {
@@ -195,8 +197,6 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		status, code, message = 404, "RESOURCE_NOT_FOUND", execution.ErrNotFound.Error()
 	case errors.Is(err, execution.ErrConflict):
 		status, code, message = 409, "EXECUTION_CONFLICT", execution.ErrConflict.Error()
-	case errors.Is(err, execution.ErrBusy):
-		status, code, message = 409, "CONVERSATION_BUSY", execution.ErrBusy.Error()
 	case errors.Is(err, execution.ErrCapacity):
 		status, code, message = 409, "QUEUE_CAPACITY", execution.ErrCapacity.Error()
 	case errors.Is(err, execution.ErrUnavailable):
