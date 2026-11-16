@@ -590,7 +590,7 @@ test('桌面布局、沙盒、招聘猫咪和草稿恢复', async () => {
     'undefined',
   )
   await expect(window.getByText('本地模式')).toHaveCount(0)
-  await expect(window.getByRole('button', { name: '我的工作空间' })).toContainText(
+  await expect(window.getByRole('button', { name: '用户信息' })).toContainText(
     new URL(companion.url).host,
   )
 
@@ -1034,13 +1034,13 @@ test('侧栏拖动上限、收缩阈值、头像栏操作及重新展开', async
   })
   await collapsedNameInput.press('Escape')
   await expect(window.getByRole('button', { name: '游戏程序', exact: true })).toBeVisible()
-  await window.getByRole('button', { name: '我的工作空间' }).click()
+  await window.getByRole('button', { name: '用户信息' }).click()
   const workspace = window.getByRole('dialog', { name: '我的工作空间' })
   await expect(workspace).toContainText('8')
   await expect(workspace).toContainText('服务端连接')
   await expect(window.getByRole('combobox', { name: '主题' })).toHaveCount(0)
   await window.keyboard.press('Escape')
-  await expect(window.getByRole('button', { name: '我的工作空间' })).toBeFocused()
+  await expect(window.getByRole('button', { name: '用户信息' })).toBeFocused()
   await window.getByRole('button', { name: '打开设置' }).click()
   await expect(window.getByRole('dialog', { name: '设置' })).toBeVisible()
   await window.keyboard.press('Escape')
@@ -1367,7 +1367,7 @@ for (const modal of [
 }
 
 test('工作空间头像是静止图片，悬停不播放猫咪动画', async () => {
-  const button = window.getByRole('button', { name: '我的工作空间' })
+  const button = window.getByRole('button', { name: '用户信息' })
   const image = button.locator('.profile-avatar img')
   await expect(button.locator('.avatar')).toHaveCount(0)
   await expect(image).toHaveAttribute('src', /workspace-cat/)
@@ -1438,9 +1438,7 @@ test('猫咪静息、悬停与工作中姿态', async () => {
   await expect(window.locator('.sidebar .avatar[data-pose="working"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .avatar[data-ear="perk"]')).toHaveCount(8)
   await expect(window.locator('.sidebar .cat-work-mark')).toHaveCount(8)
-  await expect(window.getByRole('button', { name: '我的工作空间' }).locator('.avatar')).toHaveCount(
-    0,
-  )
+  await expect(window.getByRole('button', { name: '用户信息' }).locator('.avatar')).toHaveCount(0)
   await expect(header).toHaveAttribute('data-pose', 'working')
   await expect(window.getByRole('button', { name: '未发送，点击重试' })).toBeVisible()
   expect(await window.locator('.assistant-bubble').count()).toBe(repliesBefore)

@@ -19,6 +19,27 @@ import (
 func TestLiveChatInputs(t *testing.T) {
 	cluster := pgtest.Start(t)
 	ctx := context.Background()
+
+	t.Run("历史携带每条用户消息的请求标识并保持租户隔离", func(t *testing.T) {
+		f := newFixture(t, cluster)
+		first := SendRequest{ClientRequestID: ids.New(), Content: "第一条"}
+		second := SendRequest{ClientRequestID: ids.New(), Content: "第二条"}
+		for _, request := range []SendRequest{first, second} {
+			if _, err := f.service.Send(ctx, f.a, f.first.ConversationID, request); err != nil {
+				t.Fatal("发送失败", err)
+			}
+		}
+		messages, err := f.service.Messages(ctx, f.a, f.first.ConversationID, 0, 10)
+		if err != nil || len(messages) != 2 || messages[0].ClientRequestID != second.ClientRequestID || messages[1].ClientRequestID != first.ClientRequestID {
+			t.Fatal("历史未保留各自的发送标识", err)
+		}
+		older, err := f.service.Messages(ctx, f.a, f.first.ConversationID, messages[0].Sequence, 1)
+		if err != nil || len(older) != 1 || older[0].ClientRequestID != first.ClientRequestID {
+			t.Fatal("分页丢失发送标识", err)
+		}
+		_, err = f.service.Messages(ctx, f.b, f.first.ConversationID, 0, 10)
+		expect(t, err, ErrNotFound)
+	})
 	t.Run("工具间隙读取新消息且恢复批次不变", func(t *testing.T) {
 		f := newFixture(t, cluster)
 		initial := f.send(t, f.a, f.first)
@@ -29,7 +50,7 @@ func TestLiveChatInputs(t *testing.T) {
 		if err != nil || len(first.Messages) != 1 {
 			t.Fatal("初始上下文错误", err)
 		}
-		request := SendRequest{ids.New(), "改为只检查第二份文件"}
+		request := SendRequest{ClientRequestID: ids.New(), Content: "改为只检查第二份文件"}
 		added, err := f.service.Send(ctx, f.a, f.first.ConversationID, request)
 		if err != nil || added.RunID != initial.RunID {
 			t.Fatal("补充消息受理失败", err)
@@ -38,7 +59,7 @@ func TestLiveChatInputs(t *testing.T) {
 		if err != nil || repeat.IsCreated || repeat.MessageID != added.MessageID {
 			t.Fatal("补充消息幂等失败", err)
 		}
-		_, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{request.ClientRequestID, "变更正文"})
+		_, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{ClientRequestID: request.ClientRequestID, Content: "变更正文"})
 		expect(t, err, ErrConflict)
 		replay, err := f.service.mergeRunInputs(ctx, lease, "model.1", base)
 		if err != nil || len(replay.Messages) != 1 {
@@ -60,11 +81,11 @@ func TestLiveChatInputs(t *testing.T) {
 		_, err = f.service.mergeRunInputs(ctx, lease, "model.0", base)
 		expect(t, err, ErrInvalidInput)
 		for i := 1; i < f.service.options.ContextMessages-1; i++ {
-			if _, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{ids.New(), "追加"}); err != nil {
+			if _, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "追加"}); err != nil {
 				t.Fatal(err)
 			}
 		}
-		_, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{ids.New(), "超出容量"})
+		_, err = f.service.Send(ctx, f.a, f.first.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "超出容量"})
 		expect(t, err, ErrCapacity)
 	})
 	t.Run("最终模型调用期间到达的消息自动继续执行", func(t *testing.T) {
@@ -76,7 +97,7 @@ func TestLiveChatInputs(t *testing.T) {
 		worker := f.worker(t, callerFunc(func(_ context.Context, _ modelregistry.Configuration, _ []byte, input modelgateway.Input, emit func(provider.Event) error) (modelgateway.Result, error) {
 			calls++
 			if calls == 1 {
-				added, err := f.service.Send(ctx, f.a, bot.ConversationID, SendRequest{ids.New(), "再告诉我核对方法"})
+				added, err := f.service.Send(ctx, f.a, bot.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "再告诉我核对方法"})
 				if err != nil || added.RunID != initial.RunID {
 					t.Error("运行中无法接收", err)
 				}

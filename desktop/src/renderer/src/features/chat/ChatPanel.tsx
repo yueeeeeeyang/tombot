@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { ReplyPreview } from './ReplyPreview'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowUp, ChevronRight, Mic, Plus, X } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import {
@@ -14,12 +15,14 @@ import { pasteFiles } from './pasteFiles'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
 import { messageTimeSeparator } from './messageTime'
+import { useMessageScroll } from './useMessageScroll'
 
 type ChatPanelProps = {
   agent: Agent
+  composerNotice?: ReactNode
   isBlocked: boolean
   workSummary?: string
-  pendingMessageId?: string
+  pendingMessageIds?: string[]
   hasEarlierMessages?: boolean
   isLoadingEarlier?: boolean
   onLoadEarlier?: () => void
@@ -41,9 +44,10 @@ type ChatPanelProps = {
 /** 渲染当前助手的消息、工作状态和输入区。 */
 export function ChatPanel({
   agent,
+  composerNotice,
   isBlocked,
   workSummary,
-  pendingMessageId,
+  pendingMessageIds,
   hasEarlierMessages,
   isLoadingEarlier,
   onLoadEarlier,
@@ -61,7 +65,7 @@ export function ChatPanel({
   peers = [],
   onOpenDm,
 }: ChatPanelProps) {
-  const messagesEnd = useRef<HTMLDivElement>(null)
+  const { viewportRef, contentRef, onScroll } = useMessageScroll(agent.messages)
   const composer = useRef<HTMLTextAreaElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
@@ -80,17 +84,15 @@ export function ChatPanel({
   const [replyToId, setReplyToId] = useState<string>()
   const [highlightedId, setHighlightedId] = useState('')
   const closeMenu = useCallback(() => setMenu(undefined), [])
-  const replyMessage = agent.messages.find((message) => message.id === replyToId)
+  const replyMessage = replyToId
+    ? agent.messages.find((message) => message.id === replyToId || message.requestId === replyToId)
+    : undefined
   const menuMessage = menu
     ? agent.messages.find((message) => message.id === menu.messageId)
     : undefined
   const now = new Date()
-  const lastMessageId = agent.messages.at(-1)?.id
 
   useEffect(() => () => clearTimeout(highlightTimer.current), [])
-  useEffect(() => {
-    messagesEnd.current?.scrollIntoView({ behavior: 'instant', block: 'end' })
-  }, [agent.id, lastMessageId])
   useEffect(() => {
     if (composer.current) {
       composer.current.style.height = 'auto'
@@ -166,8 +168,13 @@ export function ChatPanel({
           <ChevronRight className="pill-chevron" size={14} aria-hidden="true" />
         </button>
       </header>
-      <section className="messages-scroll" aria-label={`与${agent.name}的会话`}>
-        <div className="conversation">
+      <section
+        ref={viewportRef}
+        onScroll={onScroll}
+        className="messages-scroll"
+        aria-label={`与${agent.name}的会话`}
+      >
+        <div ref={contentRef} className="conversation">
           {hasEarlierMessages && (
             <button
               type="button"
@@ -186,7 +193,7 @@ export function ChatPanel({
                 now,
               )
               return (
-                <div className="message-entry" key={message.id}>
+                <div className="message-entry" key={message.requestId ?? message.id}>
                   {label && (
                     <div className="time-separator">
                       <time dateTime={message.createdAt}>{label}</time>
@@ -220,7 +227,10 @@ export function ChatPanel({
                   ) : (
                     <ChatMessage
                       message={message}
-                      isPending={message.id === pendingMessageId}
+                      isPending={
+                        message.status !== 'sent' &&
+                        pendingMessageIds?.includes(message.requestId ?? message.id)
+                      }
                       isHighlighted={highlightedId === message.id}
                       onOpenMenu={openMenu}
                       onReply={startReply}
@@ -234,7 +244,6 @@ export function ChatPanel({
               )
             })}
           </div>
-          <div ref={messagesEnd} />
         </div>
       </section>
       {menu && menuMessage && (
@@ -264,7 +273,9 @@ export function ChatPanel({
           void addFiles([...event.dataTransfer.files])
         }}
       >
-        {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
+        <div className="work-status-slot">
+          {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
+        </div>
         {pendingAttachments.length > 0 && (
           <div className="composer-files">
             {pendingAttachments.map((item) => (
@@ -285,16 +296,13 @@ export function ChatPanel({
             ))}
           </div>
         )}
+        {composerNotice}
         {replyMessage && (
-          <div className="composer-reply">
-            <div>
-              <strong>回复</strong>
-              <p>{replyExcerpt(replyMessage.content)}</p>
-            </div>
-            <button type="button" aria-label="取消回复" onClick={() => setReplyToId(undefined)}>
-              <X size={14} />
-            </button>
-          </div>
+          <ReplyPreview
+            author={replyMessage.role === 'user' ? '自己' : agent.name}
+            excerpt={replyExcerpt(replyMessage.content)}
+            onCancel={() => setReplyToId(undefined)}
+          />
         )}
         <form className="composer" onSubmit={handleSubmit}>
           <input

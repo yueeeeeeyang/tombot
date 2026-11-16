@@ -72,7 +72,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
 			return err
 		}
-		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1)
+		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1, true)
 		if err != nil {
 			return err
 		}
@@ -83,7 +83,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 				work.HistoryTruncated = true
 				break
 			}
-			encoded, err := json.Marshal(message.Blocks)
+			encoded, err := json.Marshal(messageForModel(message).Blocks)
 			if err != nil {
 				return err
 			}

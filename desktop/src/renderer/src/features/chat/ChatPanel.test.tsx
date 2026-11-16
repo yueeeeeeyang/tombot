@@ -57,8 +57,8 @@ function renderPanel(
     onError: vi.fn(),
     ...overrides,
   }
-  render(<ChatPanel {...props} />)
-  return props
+  const view = render(<ChatPanel {...props} />)
+  return { ...props, rerender: view.rerender }
 }
 
 function StatefulPanel({ agent }: { agent: Agent }) {
@@ -280,11 +280,32 @@ describe('消息气泡操作', () => {
       <StatefulPanel agent={createAgent([createMessage({ content: '原来的想法' })], '接着说')} />,
     )
     await user.click(screen.getAllByRole('button', { name: '回复' })[0]!)
+    expect(screen.getByRole('region', { name: '正在回复自己' })).toHaveTextContent('原来的想法')
     await user.click(screen.getAllByRole('button', { name: '发送' })[0]!)
     const quote = screen.getByRole('button', { name: '查看原消息：原来的想法' })
+    expect(quote).toHaveTextContent('引用消息')
     await user.click(quote)
     expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
     expect(document.getElementById('message-message-one')).toHaveClass('is-highlighted')
+  })
+
+  it('编辑引用时原消息获服务端确认，预览仍保留且发送使用确认后的标识', async () => {
+    const user = userEvent.setup()
+    const original = createMessage()
+    const props = renderPanel(createAgent([original], '接着说'))
+    await user.click(screen.getByRole('button', { name: '回复' }))
+    props.rerender(
+      <ChatPanel
+        {...props}
+        agent={createAgent(
+          [{ ...original, id: 'confirmed', requestId: original.id, status: 'sent' }],
+          '接着说',
+        )}
+      />,
+    )
+    expect(screen.getByRole('region', { name: '正在回复自己' })).toHaveTextContent('你好')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(props.onSave).toHaveBeenCalledWith('confirmed', [])
   })
 
   it('数量大于 1 时显示计数，原消息不在时说明原因', async () => {
@@ -341,7 +362,7 @@ describe('消息气泡操作', () => {
 it('工作动画和真实任务摘要显示时仍可发送补充消息', async () => {
   const props = renderPanel(createAgent([], '补充一个要求'), {
     workSummary: '正在检查第二份文件',
-    pendingMessageId: 'previous',
+    pendingMessageIds: ['previous'],
   })
   const summary = screen.getByText('正在检查第二份文件')
   expect(summary.closest('.composer-area')).not.toBeNull()

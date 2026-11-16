@@ -62,7 +62,7 @@ describe('客户端交互', () => {
     expect(
       screen.getByRole('button', { name: /^游戏程序/ }).querySelector('.avatar'),
     ).toHaveAttribute('data-pose', 'idle')
-    const workspaceButton = screen.getByRole('button', { name: '我的工作空间' })
+    const workspaceButton = screen.getByRole('button', { name: '用户信息' })
     const workspaceCat = workspaceButton.querySelector('.profile-avatar img')
     expect(workspaceCat?.tagName).toBe('IMG')
     expect(workspaceCat).toHaveAttribute('src', expect.stringContaining('workspace-cat'))
@@ -82,6 +82,27 @@ describe('客户端交互', () => {
     first.unmount()
     render(<App />)
     expect(within(screen.getByRole('log')).getByText('一起设计客户端')).toBeInTheDocument()
+  })
+
+  it('左下角显示真实昵称和头像，资料更新同步替换，昵称为空时显示用户名', async () => {
+    memoryBackend.userProfile = {
+      username: 'owner',
+      displayName: '真实昵称',
+      avatar: 'data:image/png;base64,cG5n',
+    }
+    render(<App />)
+    const profile = screen.getByRole('button', { name: '用户信息' })
+    await waitFor(() => expect(profile).toHaveTextContent('真实昵称'))
+    expect(profile).toHaveAttribute('title', '真实昵称')
+    expect(profile.querySelector('img')).toHaveAttribute('src', memoryBackend.userProfile.avatar)
+    expect(profile).not.toHaveTextContent('我的工作空间')
+    memoryBackend.userProfile = { username: 'owner', displayName: '', avatar: '' }
+    act(() => window.dispatchEvent(new Event('focus')))
+    await waitFor(() => expect(profile).toHaveTextContent('owner'))
+    expect(profile.querySelector('img')).toHaveAttribute(
+      'src',
+      expect.stringContaining('workspace-cat'),
+    )
   })
 
   it('切换助手保留各自尚未提交的输入', async () => {
@@ -312,7 +333,7 @@ describe('客户端交互', () => {
     render(<App />)
     expect(screen.queryByRole('button', { name: '分享' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '切换侧边栏' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '我的工作空间' }))
+    await user.click(screen.getByRole('button', { name: '用户信息' }))
     expect(screen.getByRole('dialog', { name: '我的工作空间' })).toHaveTextContent('服务端连接')
     expect(screen.queryByRole('combobox', { name: '主题' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '关闭弹窗' }))
@@ -365,7 +386,7 @@ describe('客户端交互', () => {
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('')
     expect(screen.queryByText('服务端已有工作空间，本机旧档没有导入。')).not.toBeInTheDocument()
     expect(screen.queryByText('本地模式')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '我的工作空间' })).toHaveTextContent(
+    expect(screen.getByRole('button', { name: '用户信息' })).toHaveTextContent(
       'tom.example.com:8443',
     )
     expect(memoryBackend.tryWorkspaceSync().workspace.agents[0]?.draft).toBe('')
@@ -588,7 +609,7 @@ describe('客户端交互', () => {
     expect(loadSidebarPreferences(localStorage).hiddenIds).toEqual(['developer'])
     expect(screen.getByRole('alert')).toHaveTextContent('已从侧边栏隐藏')
 
-    await user.click(screen.getByRole('button', { name: '我的工作空间' }))
+    await user.click(screen.getByRole('button', { name: '用户信息' }))
     const workspaceDialog = screen.getByRole('dialog', { name: '我的工作空间' })
     expect(
       within(workspaceDialog).getByRole('region', { name: '已隐藏的助手' }),

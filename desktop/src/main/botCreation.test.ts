@@ -104,7 +104,97 @@ async function invoke(name: string, ...args: unknown[]) {
   return handler(...args)
 }
 
+it('当前用户资料经主进程读取，只把昵称、用户名和头像交给界面', async () => {
+  const fetchProfile = vi.fn(async () =>
+    Response.json({ profile: { username: 'owner', display_name: '真实昵称', avatar: png } }),
+  )
+  vi.stubGlobal('fetch', fetchProfile)
+  expect(await invoke('desktop:user-profile')).toEqual({
+    ok: true,
+    value: { username: 'owner', displayName: '真实昵称', avatar: png },
+  })
+  expect(fetchProfile.mock.calls).toHaveLength(1)
+  expect(fetchProfile).toHaveBeenCalledWith(
+    'https://desktop.example.test/api/v2/auth/profile',
+    expect.objectContaining({ method: 'GET' }),
+  )
+})
+
+it.each([
+  {
+    profile: {
+      username: 'owner',
+      display_name: '昵称',
+      avatar: 'https://foreign.example.test/avatar.png',
+    },
+  },
+  { profile: { username: 'owner', display_name: '昵称', avatar: 123 } },
+  {},
+])('用户资料不完整或包含远程头像时明确拒绝', async (response) => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => Response.json(response)),
+  )
+  expect(await invoke('desktop:user-profile')).toMatchObject({
+    ok: false,
+    code: 'RESPONSE_INVALID',
+  })
+})
+
 describe('服务端创建猫咪与投递', () => {
+  it('表情请求携带明确状态与幂等标识，并返回服务端版本和历史标记', async () => {
+    const messageId = ulid()
+    const clientRequestId = ulid()
+    const change = vi.fn(async (_url: string, options: RequestInit) => {
+      expect(options.method).toBe('PUT')
+      expect(JSON.parse(String(options.body))).toEqual({
+        client_request_id: clientRequestId,
+        emoji: '👍',
+        is_active: false,
+      })
+      return Response.json({
+        message: {
+          id: messageId,
+          sender_kind: 'bot',
+          blocks: [{ kind: 'text', text: '完成了' }],
+          created_at: new Date().toISOString(),
+          sequence: 2,
+          reactions: [{ emoji: '❤️', count: 1 }],
+          reaction_revision: 3,
+        },
+      })
+    })
+    vi.stubGlobal('fetch', change)
+    expect(
+      await invoke(
+        'desktop:reaction',
+        {},
+        { messageId, emoji: '👍', isActive: false, clientRequestId },
+      ),
+    ).toMatchObject({
+      ok: true,
+      value: { id: messageId, reactions: [{ emoji: '❤️', count: 1 }], reactionRevision: 3 },
+    })
+    expect(change).toHaveBeenCalledWith(
+      `https://desktop.example.test/api/v2/messages/${messageId}/reaction`,
+      expect.anything(),
+    )
+  })
+
+  it('表情接口返回空消息时明确报错，不能当作更新成功', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => Response.json({})),
+    )
+    expect(
+      await invoke(
+        'desktop:reaction',
+        {},
+        { messageId: ulid(), emoji: '👍', isActive: true, clientRequestId: ulid() },
+      ),
+    ).toMatchObject({ ok: false, code: 'RESPONSE_INVALID' })
+  })
+
   it.each([
     ['failed', 'EXECUTION_FAILED', '消息已接收，但服务端执行失败'],
     ['canceled', 'CANCELED', '这次运行已取消'],
@@ -113,7 +203,8 @@ describe('服务端创建猫咪与投递', () => {
     const botId = ulid(),
       conversationId = ulid(),
       runId = ulid(),
-      messageId = ulid()
+      messageId = ulid(),
+      replyToId = ulid()
     const paths: string[] = []
     vi.stubGlobal(
       'fetch',
@@ -132,15 +223,23 @@ describe('服务端创建猫咪与投递', () => {
         if (path === `/conversations/${conversationId}/activity`) return Response.json({ runs: [] })
         if (path === `/runs/${runId}`) return Response.json({ run: { status, error_code: code } })
         if (path === `/conversations/${conversationId}/messages`) {
-          if (options.method === 'POST')
+          if (options.method === 'POST') {
+            expect(JSON.parse(String(options.body))).toEqual({
+              client_request_id: messageId,
+              content: '你好',
+              reply_to_id: replyToId,
+            })
             return Response.json(
               { submission: { run_id: runId, message_id: messageId } },
               { status: 202 },
             )
+          }
           return Response.json({
             messages: [
               {
                 id: messageId,
+                client_request_id: messageId,
+                reply_to: { message_id: replyToId, excerpt: '之前的消息' },
                 sender_kind: 'user',
                 blocks: [{ kind: 'text', text: '你好' }],
                 created_at: new Date().toISOString(),
@@ -160,6 +259,7 @@ describe('服务端创建猫咪与投递', () => {
           content: '你好',
           requestId: ulid(),
           clientRequestId: messageId,
+          replyToId,
         },
       ),
     ).toMatchObject({
@@ -172,7 +272,18 @@ describe('服务端创建猫咪与投递', () => {
     expect(paths).not.toContain(`GET /runs/${runId}`)
     expect(await invoke('desktop:agent-conversation', {}, botId)).toMatchObject({
       ok: true,
-      value: { messages: [{ id: messageId, role: 'user', content: '你好' }], runs: [] },
+      value: {
+        messages: [
+          {
+            id: messageId,
+            requestId: messageId,
+            role: 'user',
+            content: '你好',
+            replyTo: { messageId: replyToId, excerpt: '之前的消息' },
+          },
+        ],
+        runs: [],
+      },
     })
   })
 

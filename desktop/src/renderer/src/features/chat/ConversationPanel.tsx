@@ -1,6 +1,8 @@
+import { ReplyPreview } from './ReplyPreview'
 import { GroupAvatar } from '../../components/GroupAvatar'
+import { ulid } from '../../../../shared/ulid'
 import { GroupComposer } from './GroupComposer'
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { ArrowLeftRight, ArrowUp, Check, ChevronRight, Plus, Users, X } from 'lucide-react'
@@ -23,6 +25,7 @@ import { messageTimeSeparator } from './messageTime'
 /** 群聊复用原来的气泡，可以发言和管理成员。猫咪之间的私信不在这里打开。 */
 export function ConversationPanel({
   id,
+  composerNotice,
   agents,
   onNotice,
   onError,
@@ -33,6 +36,7 @@ export function ConversationPanel({
   onExecutionEnd,
 }: {
   id: string
+  composerNotice?: ReactNode
   workStates: WorkStates
   onExecutionEvent: (source: string, event: StreamEvent) => void
   onExecutionEnd: (source: string) => void
@@ -139,9 +143,6 @@ export function ConversationPanel({
   }, [messages, live])
 
   function bubbleMessage(item: ServerBubble) {
-    const reply = item.replyToId
-      ? messages.find((message) => message.id === item.replyToId)
-      : undefined
     return {
       id: item.id,
       role: item.role,
@@ -152,7 +153,7 @@ export function ConversationPanel({
         reaction.emoji ? [{ emoji: reaction.emoji as never, count: reaction.count }] : [],
       ),
       attachments: item.attachments,
-      ...(reply ? { replyTo: { messageId: reply.id, excerpt: replyExcerpt(reply.content) } } : {}),
+      replyTo: item.replyTo,
     }
   }
 
@@ -220,6 +221,24 @@ export function ConversationPanel({
   }
 
   const reply = messages.find((message) => message.id === replyToId)
+  async function reactToMessage(messageId: string, emoji: string): Promise<void> {
+    const message = messages.find((item) => item.id === messageId)
+    if (!message) {
+      onError('消息不存在')
+      return
+    }
+    try {
+      await getBackend().setReaction(
+        messageId,
+        emoji,
+        !message.reactions.some((reaction) => reaction.emoji === emoji),
+        ulid(),
+      )
+      await reload()
+    } catch (failure) {
+      onError(`表情更新失败：${(failure as Error).message}`)
+    }
+  }
   const shown = [
     ...messages,
     ...live.filter((item) => !messages.some((saved) => saved.id === item.id)),
@@ -285,10 +304,7 @@ export function ConversationPanel({
                       onReply={setReplyToId}
                       onRetry={() => undefined}
                       onReact={(messageId, emoji) => {
-                        void getBackend()
-                          .toggleReaction?.(messageId, emoji)
-                          .then(reload)
-                          .catch((failure: Error) => onError(failure.message))
+                        void reactToMessage(messageId, emoji)
                       }}
                       onReveal={() => undefined}
                       onPreview={(attachment) =>
@@ -306,7 +322,7 @@ export function ConversationPanel({
             anchor={menu}
             message={bubbleMessage(menuMessage)}
             onReact={(emoji) => {
-              void getBackend().toggleReaction?.(menuMessage.id, emoji).then(reload)
+              void reactToMessage(menuMessage.id, emoji)
             }}
             onReply={() => setReplyToId(menuMessage.id)}
             onCopy={() =>
@@ -335,16 +351,13 @@ export function ConversationPanel({
               agents={workingAgents}
             />
           )}
+          {composerNotice}
           {reply && (
-            <div className="composer-reply">
-              <div>
-                <strong>回复</strong>
-                <p>{replyExcerpt(reply.content)}</p>
-              </div>
-              <button type="button" aria-label="取消回复" onClick={() => setReplyToId(undefined)}>
-                <X size={14} />
-              </button>
-            </div>
+            <ReplyPreview
+              author={reply.role === 'user' ? '自己' : (names.get(reply.speaker) ?? '猫咪')}
+              excerpt={replyExcerpt(reply.content)}
+              onCancel={() => setReplyToId(undefined)}
+            />
           )}
           {pending.length > 0 && (
             <div className="composer-files">

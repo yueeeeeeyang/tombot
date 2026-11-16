@@ -104,6 +104,7 @@ func New(service Identity, options Options, logger *slog.Logger) (*Handler, erro
 	router.Post("/api/v2/auth/admin-setup", handler.createFirstAdministrator)
 	router.Post("/api/v2/auth/browser/start", handler.browserStart)
 	router.Post("/api/v2/auth/browser/exchange", handler.browserExchange)
+	router.Get("/api/v2/auth/profile", handler.withPrincipal("desktop", handler.desktopProfile))
 	router.Get("/api/v2/admin/auth/refresh-context", handler.refreshContext)
 	// 授权页由系统浏览器直接访问，来源是服务自身而非管理站点；表单提交走同一路径。
 	router.Get("/login", handler.loginPage)

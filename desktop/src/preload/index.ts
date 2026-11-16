@@ -32,6 +32,12 @@ contextBridge.exposeInMainWorld(
     platform: process.platform,
     backend: Object.freeze({
       session: () => invoke('desktop:session'),
+      loadUserProfile: () => invoke('desktop:user-profile'),
+      watchWindowFocus: (onFocus: () => void) => {
+        const listener = () => onFocus()
+        ipcRenderer.on('desktop:window-focus', listener)
+        return () => ipcRenderer.removeListener('desktop:window-focus', listener)
+      },
       connect: (serverUrl: string) => invoke('desktop:connect', serverUrl),
       browserLogin: async (): Promise<SessionSnapshot> => {
         // contextBridge 传递异常时不保留自定义 code；状态必须用普通对象跨越隔离边界。
@@ -75,6 +81,7 @@ contextBridge.exposeInMainWorld(
         content: string,
         clientRequestId: string,
         onEvent?: (event: StreamEvent) => void,
+        replyToId?: string,
       ) => {
         const requestId = crypto.randomUUID()
         const listener = (
@@ -84,11 +91,15 @@ contextBridge.exposeInMainWorld(
           if (payload.requestId === requestId) onEvent?.(payload)
         }
         ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:deliver', { agentId, content, requestId, clientRequestId }).finally(
-          () => {
-            ipcRenderer.removeListener('desktop:stream-event', listener)
-          },
-        )
+        return invoke('desktop:deliver', {
+          agentId,
+          content,
+          requestId,
+          clientRequestId,
+          replyToId,
+        }).finally(() => {
+          ipcRenderer.removeListener('desktop:stream-event', listener)
+        })
       },
       openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
       startBootstrap: () => invoke('desktop:bootstrap'),
@@ -156,8 +167,8 @@ contextBridge.exposeInMainWorld(
       ) => invoke('desktop:upload', { ...file, ...destination }),
       previewAttachment: (path: string, botId?: string) =>
         invoke('desktop:preview', { path, botId }),
-      toggleReaction: (messageId: string, emoji: string) =>
-        invoke('desktop:reaction', { messageId, emoji }),
+      setReaction: (messageId: string, emoji: string, isActive: boolean, clientRequestId: string) =>
+        invoke('desktop:reaction', { messageId, emoji, isActive, clientRequestId }),
       ensureAgent: (agentId: string) => invoke('desktop:ensure-agent', agentId),
     }),
   }),

@@ -1,6 +1,7 @@
 package authapi
 
 import (
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -8,6 +9,24 @@ import (
 
 	"io.yueyang/tom/internal/identity"
 )
+
+// desktopProfile 只读取当前桌面会话用户的资料，头像内嵌以避免向渲染进程暴露访问凭据。
+func (handler *Handler) desktopProfile(w http.ResponseWriter, r *http.Request, principal identity.Principal) {
+	content, err := handler.identity.UserAvatar(r.Context(), principal)
+	if err != nil {
+		handler.serviceError(w, r, err)
+		return
+	}
+	avatar := ""
+	if len(content) > 0 {
+		avatar = "data:image/png;base64," + base64.StdEncoding.EncodeToString(content)
+	}
+	handler.respond(w, r, http.StatusOK, map[string]any{"profile": struct {
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Avatar      string `json:"avatar"`
+	}{principal.Username, principal.DisplayName, avatar}})
+}
 
 // webProfile 限制整个上传体积和字段数量，头像内容的可信校验交给身份领域。
 func (handler *Handler) webProfile(w http.ResponseWriter, r *http.Request) {

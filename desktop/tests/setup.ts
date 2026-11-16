@@ -18,6 +18,11 @@ afterEach(() => {
 
 // jsdom 没有布局引擎和模态框实现；真实窗口行为由 Electron 端到端测试验证。
 Element.prototype.scrollIntoView = vi.fn()
+globalThis.ResizeObserver = class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 HTMLDialogElement.prototype.showModal = function () {
   this.setAttribute('open', '')
 }

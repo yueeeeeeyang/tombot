@@ -28,6 +28,13 @@ export interface SessionSnapshot {
   username?: string
 }
 
+/** 当前登录用户的公开资料；头像为空表示尚未设置自定义头像。 */
+export interface UserProfile {
+  username: string
+  displayName: string
+  avatar: string
+}
+
 /** 桌面登录凭据只在本进程提交；动态验证码只在管理员账户要求时填写。 */
 export interface LoginCredentials {
   username: string
@@ -42,14 +49,17 @@ export interface WorkspaceSnapshot {
 
 export type ServerBubble = {
   id: string
+  /** 用户发送时的幂等键，用于合并先于回执到达的服务端消息。 */
+  requestId?: string
   /** 会话内单调递增序号；向前翻页时作为 before 游标。 */
   sequence: number
   role: 'user' | 'assistant'
   speaker: string
   content: string
   createdAt: string
-  replyToId?: string
+  replyTo?: { messageId: string; excerpt: string }
   reactions: Array<{ emoji: string; count: number }>
+  reactionRevision?: number
   attachments: Array<{
     name: string
     path: string
@@ -65,9 +75,9 @@ export interface MessagePage {
   hasMore: boolean
 }
 
-/** 投递结果。服务端整段返回助手消息，客户端按身份替换本地未发送状态。 */
+/** 投递受理结果；受理不代表执行完成，后续回复通过事件和历史同步合并。 */
 export interface DeliveryResult {
-  /** 服务端已持久化的会话消息；缺省时不改动本地记录。 */
+  /** 本次返回的已持久化消息；按标识合并，不替换整段历史。 */
   messages?: ServerBubble[]
   acceptedMessageId?: string
   code?: string
@@ -87,6 +97,8 @@ export interface DesktopBackend {
   savesSynchronously?: boolean
   trySessionSync?: () => SessionSnapshot
   session: () => Promise<SessionSnapshot>
+  loadUserProfile: () => Promise<UserProfile>
+  watchWindowFocus: (onFocus: () => void) => () => void
   /** 保存用户确认的服务地址并检查登录状态。地址不合法时抛出。 */
   connect: (serverUrl: string) => Promise<SessionSnapshot>
   /** 用系统浏览器完成登录：桌面端只接收一次性授权码，口令不经过本进程。 */
@@ -108,6 +120,7 @@ export interface DesktopBackend {
     content: string,
     clientRequestId: string,
     onEvent?: (event: StreamEvent) => void,
+    replyToId?: string,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
   loadIntroduction: (agentId: string) => Promise<{ text: string }>
@@ -151,7 +164,12 @@ export interface DesktopBackend {
     destination: { botId?: string; shared?: boolean },
   ) => Promise<{ path: string; sha256: string }>
   previewAttachment?: (path: string, botId?: string) => Promise<string>
-  toggleReaction?: (messageId: string, emoji: string) => Promise<void>
+  setReaction: (
+    messageId: string,
+    emoji: string,
+    isActive: boolean,
+    clientRequestId: string,
+  ) => Promise<ServerBubble>
   ensureAgent?: (agentId: string) => Promise<void>
   startBootstrap?: () => Promise<void>
 }

@@ -72,6 +72,14 @@ func testUserProfile(t *testing.T, fixture identityFixture) {
 	if err != nil || !bytes.Equal(stored, avatar) {
 		t.Fatal("头像没有保存", err)
 	}
+	stored, err = service.UserAvatar(ctx, desktop.Principal)
+	if err != nil || !bytes.Equal(stored, avatar) {
+		t.Fatal("桌面会话未读取到本人头像", err)
+	}
+	forgedDesktop := desktop.Principal
+	forgedDesktop.UserID = other.id
+	_, err = service.UserAvatar(ctx, forgedDesktop)
+	requireError(t, err, ErrInvalidSession)
 	for _, invalid := range []string{"", "  ", strings.Repeat("字", 121), "昵称\n换行", "昵称\x00", string([]byte{0xff})} {
 		requireError(t, save(ctx, session.Principal, invalid, nil, attempt().RequestID), ErrInvalidInput)
 	}
@@ -128,6 +136,8 @@ func testUserProfile(t *testing.T, fixture identityFixture) {
 	forged = session.Principal
 	forged.Scope = "admin"
 	requireError(t, save(ctx, forged, "管理员", nil, attempt().RequestID), ErrInvalidSession)
+	_, err = service.UserAvatar(ctx, forged)
+	requireError(t, err, ErrInvalidSession)
 	next := randomValue(t)
 	requireError(t, service.ChangePassword(ctx, session.Principal, randomValue(t), next, "", attempt()), ErrInvalidCredentials)
 	if err := service.ChangePassword(ctx, session.Principal, owner.password, next, "", attempt()); err != nil {
@@ -135,6 +145,8 @@ func testUserProfile(t *testing.T, fixture identityFixture) {
 	}
 	for _, current := range []Session{session, desktop} {
 		_, err := service.Authenticate(ctx, string(current.AccessToken), current.Principal.Scope)
+		requireError(t, err, ErrInvalidSession)
+		_, err = service.UserAvatar(ctx, current.Principal)
 		requireError(t, err, ErrInvalidSession)
 	}
 	requireError(t, save(ctx, session.Principal, "撤销后写入", nil, attempt().RequestID), ErrInvalidSession)

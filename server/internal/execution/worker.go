@@ -16,7 +16,6 @@ import (
 
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computercontrol"
-	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/modelregistry"
@@ -318,18 +317,7 @@ func (worker *Worker) execute(ctx context.Context, lease Lease) (string, error) 
 	}
 	messages := make([]provider.Message, 0, len(work.Messages))
 	for _, message := range work.Messages {
-		role := "user"
-		if message.SenderKind == "bot" {
-			role = "assistant"
-		}
-		if message.SenderKind == "system" {
-			role = "system"
-		}
-		blocks := make([]domain.MessageBlock, 0, len(message.Blocks))
-		for _, block := range message.Blocks {
-			blocks = append(blocks, domain.MessageBlock{Kind: block.Kind, Text: block.Text})
-		}
-		messages = append(messages, provider.Message{Role: role, Blocks: blocks})
+		messages = append(messages, messageForModel(message))
 	}
 	previous := map[string]Operation{}
 	for _, operation := range work.Operations {

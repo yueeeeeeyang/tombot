@@ -63,7 +63,11 @@ export type Workspace = z.infer<typeof workspaceSchema>
 
 const replySchema = z.object({
   messageId: z.string().min(1),
-  excerpt: z.string().trim().min(1).max(REPLY_EXCERPT_LENGTH),
+  excerpt: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((excerpt) => [...excerpt].length <= REPLY_EXCERPT_LENGTH),
 })
 
 const reactionSchema = z.object({
@@ -97,6 +101,7 @@ const messageSchema = z
     requestId: z.string().trim().min(1).max(128).optional(),
     replyTo: replySchema.optional(),
     reactions: z.array(reactionSchema).max(REACTION_EMOJIS.length),
+    reactionRevision: z.number().int().nonnegative().optional(),
     attachments: z.array(attachmentSchema).max(4).optional(),
     dmNotice: dmNoticeSchema.optional(),
   })

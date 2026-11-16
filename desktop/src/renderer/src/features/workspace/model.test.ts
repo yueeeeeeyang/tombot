@@ -245,6 +245,26 @@ describe('工作空间领域规则', () => {
     expect(replyExcerpt('😀'.repeat(REPLY_EXCERPT_LENGTH + 1))).toBe(
       `${'😀'.repeat(REPLY_EXCERPT_LENGTH - 1)}…`,
     )
+    const withEmoji = createWorkspace()
+    const originalEmoji: ChatMessage = {
+      id: 'emoji',
+      role: 'assistant',
+      content: '🐈'.repeat(100),
+      createdAt: timestamp,
+      status: 'sent',
+      reactions: [],
+    }
+    withEmoji.agents[0]!.messages = [originalEmoji]
+    const savedEmoji = saveMessage(
+      updateDraft(withEmoji, withEmoji.agents[0]!.id, '收到'),
+      withEmoji.agents[0]!.id,
+      'emoji-reply',
+      timestamp,
+      'emoji',
+    )
+    expect(savedEmoji.agents[0]!.messages.at(-1)?.replyTo?.excerpt).toBe(
+      '🐈'.repeat(REPLY_EXCERPT_LENGTH - 1) + '…',
+    )
     const original: ChatMessage = {
       id: 'origin',
       role: 'assistant',

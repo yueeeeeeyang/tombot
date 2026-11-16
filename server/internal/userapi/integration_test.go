@@ -271,9 +271,13 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if response := call("POST", conversationPath+"/read", map[string]int{"sequence": 1}, first, nil); response.status != 204 {
 		t.Fatal("已读提交失败", response.status)
 	}
-	additional := decode[submissionReply](t, call("POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: "补充消息"}, first, nil), 202).Submission
+	additional := decode[submissionReply](t, call("POST", messagePath, execution.SendRequest{ClientRequestID: ids.New(), Content: "补充消息", ReplyToID: submission.MessageID}, first, nil), 202).Submission
 	if additional.RunID != submission.RunID {
 		t.Fatal("补充消息未进入当前运行")
+	}
+	quoted := decode[messagesReply](t, call("GET", messagePath+"?limit=1", nil, first, nil), 200).Messages
+	if len(quoted) != 1 || quoted[0].ReplyTo == nil || quoted[0].ReplyTo.MessageID != submission.MessageID || quoted[0].ReplyTo.Excerpt != messageRequest.Content {
+		t.Fatal("单条历史分页丢失引用摘要")
 	}
 	for range 2 {
 		if run := decode[runReply](t, call("POST", runPath+"/cancel", map[string]any{}, first, nil), 200).Run; run.Status != "canceled" {
@@ -427,6 +431,22 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		if response := call(test.method, test.path, test.body, first, nil); response.status != test.status {
 			t.Fatal("边界响应错误", test.method, test.path, response.status, test.status)
 		}
+	}
+	reactionPath := "/api/v2/messages/" + submission.MessageID + "/reaction"
+	reactionRequest := execution.ReactionRequest{ClientRequestID: ids.New(), Emoji: "👍", IsActive: true}
+	marked := decode[struct {
+		Message execution.Message `json:"message"`
+	}](t, call("PUT", reactionPath, reactionRequest, first, nil), 200).Message
+	if marked.ReactionRevision != 1 || len(marked.Reactions) != 1 || marked.Reactions[0].Emoji != "👍" {
+		t.Fatal("表情接口未返回持久化状态")
+	}
+	for _, invalid := range []map[string]any{{"client_request_id": ids.New(), "emoji": "👍"}, {"client_request_id": ids.New(), "emoji": "not-an-emoji", "is_active": true}} {
+		if response := call("PUT", reactionPath, invalid, first, nil); response.status != 400 {
+			t.Fatal("非法表情请求未拒绝", response.status)
+		}
+	}
+	if response := call("PUT", reactionPath, reactionRequest, second, nil); response.status != 404 {
+		t.Fatal("跨用户表情未隔离", response.status)
 	}
 	if response := call("GET", "/api/v2/bots", nil, "", nil); response.status != 401 {
 		t.Fatal("未登录读取目录")

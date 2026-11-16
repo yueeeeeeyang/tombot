@@ -176,7 +176,7 @@ func (fixture fixture) publish(t *testing.T) modelregistry.Version {
 }
 func (fixture fixture) send(t *testing.T, principal identity.Principal, bot bots.Bot) Submission {
 	t.Helper()
-	submission, err := fixture.service.Send(context.Background(), principal, bot.ConversationID, SendRequest{ids.New(), "请检查这项任务。"})
+	submission, err := fixture.service.Send(context.Background(), principal, bot.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "请检查这项任务。"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +231,7 @@ func TestDurableExecution(t *testing.T) {
 	ctx := context.Background()
 	t.Run("消息事务幂等与隔离", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
-		request := SendRequest{ids.New(), "同一条消息"}
+		request := SendRequest{ClientRequestID: ids.New(), Content: "同一条消息"}
 		first, err := fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, request)
 		if err != nil || !first.IsCreated {
 			t.Fatal(err)
@@ -240,9 +240,9 @@ func TestDurableExecution(t *testing.T) {
 		if err != nil || again.IsCreated || again.RunID != first.RunID || again.MessageID != first.MessageID {
 			t.Fatal("重复消息未合并", err)
 		}
-		_, err = fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{request.ClientRequestID, "不同正文"})
+		_, err = fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{ClientRequestID: request.ClientRequestID, Content: "不同正文"})
 		expect(t, err, ErrConflict)
-		additional, err := fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{ids.New(), "补充消息"})
+		additional, err := fixture.service.Send(ctx, fixture.a, fixture.first.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "补充消息"})
 		if err != nil || additional.RunID != first.RunID || additional.MessageID == first.MessageID {
 			t.Fatal("执行中未受理补充消息", err)
 		}
@@ -270,7 +270,7 @@ func TestDurableExecution(t *testing.T) {
 			t.Fatal("已读位置倒退", err)
 		}
 		execute(t, fixture.pool, `UPDATE tombot.user_limits SET queued_runs=1 WHERE user_id=$1`, fixture.a.UserID)
-		_, err = fixture.service.Send(ctx, fixture.a, fixture.second.ConversationID, SendRequest{ids.New(), "队列满"})
+		_, err = fixture.service.Send(ctx, fixture.a, fixture.second.ConversationID, SendRequest{ClientRequestID: ids.New(), Content: "队列满"})
 		expect(t, err, ErrCapacity)
 	})
 	t.Run("公平领取与并发互斥", func(t *testing.T) {
@@ -376,6 +376,9 @@ func TestDurableExecution(t *testing.T) {
 		messages, err := fixture.service.Messages(ctx, fixture.a, fixture.first.ConversationID, 0, 10)
 		if err != nil || len(messages) != 2 || messages[0].Sequence != 2 || messages[0].RunID == nil || *messages[0].RunID != submitted.RunID {
 			t.Fatal("回复或序号不完整", err)
+		}
+		if messages[0].ClientRequestID != "" || messages[1].ClientRequestID == "" {
+			t.Fatal("助手回复不能沿用用户消息的请求标识")
 		}
 		older, err := fixture.service.Messages(ctx, fixture.a, fixture.first.ConversationID, 2, 10)
 		if err != nil || len(older) != 1 || older[0].SenderKind != "user" {

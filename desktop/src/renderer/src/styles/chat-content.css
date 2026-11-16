@@ -82,6 +82,13 @@
 .message-markdown input {
   margin-right: 6px;
 }
+.work-status-slot {
+  min-height: 32px;
+}
+.message-status.message-pending {
+  background: transparent;
+  color: var(--muted);
+}
 .work-status {
   display: flex;
   align-items: center;

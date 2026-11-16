@@ -2,6 +2,7 @@ package authapi
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"mime/multipart"
@@ -12,6 +13,41 @@ import (
 
 	"io.yueyang/tom/internal/identity"
 )
+
+func TestDesktopProfileRequiresCurrentUser(t *testing.T) {
+	handler, stub, _ := fixture(t)
+	stub.session.Principal.Username = "profile-owner"
+	stub.session.Principal.DisplayName = "本人昵称"
+	requireStatus(t, run(handler, request("GET", "/api/v2/auth/profile", "")), http.StatusUnauthorized)
+	r := request("GET", "/api/v2/auth/profile?user_id=untrusted", "")
+	r.Header.Set("Authorization", "Bearer "+string(stub.session.AccessToken))
+	for _, content := range [][]byte{nil, []byte("PNG")} {
+		stub.avatar = content
+		result := run(handler, r)
+		requireStatus(t, result, http.StatusOK)
+		var response struct {
+			Profile struct {
+				Username, Avatar string
+				DisplayName      string `json:"display_name"`
+			} `json:"profile"`
+		}
+		if err := json.Unmarshal(result.Body.Bytes(), &response); err != nil {
+			t.Fatal("资料响应无效", err)
+		}
+		expected := ""
+		if len(content) > 0 {
+			expected = "data:image/png;base64," + base64.StdEncoding.EncodeToString(content)
+		}
+		if response.Profile.Username != "profile-owner" || response.Profile.DisplayName != "本人昵称" || response.Profile.Avatar != expected || stub.principal.UserID != stub.session.Principal.UserID || stub.principal.Scope != "desktop" || result.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("资料未绑定当前用户或缺少缓存限制")
+		}
+		if strings.Contains(result.Body.String(), string(stub.session.AccessToken)) {
+			t.Fatal("资料响应泄露凭据")
+		}
+	}
+	stub.profileErr = errors.New("测试数据库故障")
+	requireStatus(t, run(handler, r), http.StatusServiceUnavailable)
+}
 
 func TestWebProfileForm(t *testing.T) {
 	for _, mode := range []string{"valid", "nickname-only", "avatar-only", "duplicate", "wrong-csrf", "foreign-csrf", "invalid-name", "invalid-image", "too-large", "unavailable"} {

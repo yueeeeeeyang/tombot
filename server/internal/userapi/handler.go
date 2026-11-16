@@ -48,6 +48,7 @@ var _ Catalog = (*bots.Service)(nil)
 // Execution 只暴露用户消息和运行查询，不把调度租约、模型绑定或操作写入权交给客户端。
 type Execution interface {
 	Send(context.Context, identity.Principal, string, execution.SendRequest) (execution.Submission, error)
+	SetReaction(context.Context, identity.Principal, string, execution.ReactionRequest) (execution.Message, error)
 	Messages(context.Context, identity.Principal, string, int64, int) ([]execution.Message, error)
 	MarkRead(context.Context, identity.Principal, string, int64) error
 	GetRun(context.Context, identity.Principal, string) (execution.Run, error)
@@ -118,6 +119,7 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Get("/api/v2/conversations/{conversationID}", handler.getConversation)
 	router.Get("/api/v2/conversations/{conversationID}/messages", handler.listMessages)
 	router.Post("/api/v2/conversations/{conversationID}/messages", handler.sendMessage)
+	router.Put("/api/v2/messages/{messageID}/reaction", handler.setReaction)
 	router.Post("/api/v2/conversations/{conversationID}/read", handler.markRead)
 	router.Get("/api/v2/runs/{runID}", handler.getRun)
 	router.Get("/api/v2/conversations/{conversationID}/activity", handler.conversationActivity)

@@ -16,6 +16,8 @@ import {
   type ChatMessage,
 } from './model'
 import { isReactionEmoji } from './reactions'
+import { mergeMessages } from './messageTimeline'
+import { ulid } from '../../../../shared/ulid'
 
 interface WorkspaceState {
   workspace: AppWorkspace
@@ -28,11 +30,14 @@ interface WorkspaceState {
 function toChatMessage(bubble: ServerBubble): ChatMessage {
   return {
     id: bubble.id,
+    ...(bubble.requestId ? { requestId: bubble.requestId } : {}),
     sequence: bubble.sequence,
     role: bubble.role,
     content: bubble.content,
     createdAt: bubble.createdAt,
     status: 'sent',
+    replyTo: bubble.replyTo,
+    reactionRevision: bubble.reactionRevision,
     reactions: bubble.reactions.flatMap((reaction) =>
       isReactionEmoji(reaction.emoji) ? [{ emoji: reaction.emoji, count: reaction.count }] : [],
     ),
@@ -52,25 +57,15 @@ function toChatMessage(bubble: ServerBubble): ChatMessage {
 
 /** 只合并已落库的通知和直接回复，不回写服务，也不覆盖正在编辑的草稿与资料。 */
 export function mergeIncoming(local: AppWorkspace, incoming: IncomingMessages): AppWorkspace {
-  return {
-    ...local,
-    agents: local.agents.map((agent) => {
-      const received = incoming.find((item) => item.id === agent.id)
-      if (!received) return agent
-      const messages = [...agent.messages]
-      for (const message of received.messages) {
-        const index = messages.findIndex((item) => item.id === message.id)
-        if (index < 0) messages.push(message)
-        else messages[index] = message
-      }
-      messages.sort((left, right) =>
-        left.sequence && right.sequence
-          ? left.sequence - right.sequence
-          : left.createdAt.localeCompare(right.createdAt),
-      )
-      return { ...agent, messages }
-    }),
-  }
+  const agents = local.agents.map((agent) => {
+    const received = incoming.find((item) => item.id === agent.id)
+    if (!received) return agent
+    const messages = mergeMessages(agent.messages, received.messages)
+    return messages === agent.messages ? agent : { ...agent, messages }
+  })
+  return agents.every((agent, index) => agent === local.agents[index])
+    ? local
+    : { ...local, agents }
 }
 
 function readInitial(backend: DesktopBackend): WorkspaceState {
@@ -96,6 +91,8 @@ export function useWorkspace(
   const blocked = useRef(initial.isBlocked)
   const chain = useRef(Promise.resolve())
   const pendingTasks = useRef(0)
+  const reactionChain = useRef(Promise.resolve())
+  const reactionRequests = useRef(new Map<string, { clientRequestId: string; isActive: boolean }>())
 
   useEffect(() => {
     document.documentElement.dataset.workspaceSave = saveState
@@ -129,6 +126,7 @@ export function useWorkspace(
   >({})
   const paging = useRef(new Set<string>())
   const refreshing = useRef(new Map<string, { dirty: boolean }>())
+  const activityRevisions = useRef(new Map<string, number>())
   const refreshConversation = useCallback(
     async (agentId: string) => {
       if (!backend.loadAgentConversation || !agentId) return
@@ -142,6 +140,7 @@ export function useWorkspace(
       try {
         do {
           request.dirty = false
+          const activityRevision = activityRevisions.current.get(agentId)
           const page = await backend.loadAgentConversation(agentId)
           const firstSequence = page.messages[0]?.sequence ?? 0
           setHistoryPages((previous) => {
@@ -161,6 +160,8 @@ export function useWorkspace(
             { id: agentId, messages: page.messages.map(toChatMessage) },
           ])
           setWorkspace(current.current)
+          // 请求期间到达的运行事件更新，旧快照不能把刚开始的动画关闭或把已结束的任务重新点亮。
+          if (activityRevision !== activityRevisions.current.get(agentId)) continue
           const source = `server:${agentId}`
           clearActivity?.(source)
           for (const run of page.runs) {
@@ -212,6 +213,7 @@ export function useWorkspace(
       (event) => {
         const botId = typeof event.payload.bot_id === 'string' ? event.payload.bot_id : ''
         if (botId && event.kind.startsWith('run.')) {
+          activityRevisions.current.set(botId, (activityRevisions.current.get(botId) ?? 0) + 1)
           const source = `server:${botId}`
           receiveActivity?.(source, {
             type: 'activity',
@@ -234,8 +236,9 @@ export function useWorkspace(
           }
         }
         if (
-          event.kind.startsWith('run.') ||
+          event.kind === 'run.finished' ||
           event.kind === 'message.created' ||
+          event.kind === 'message.reactions_changed' ||
           event.kind === 'workspace.refresh'
         ) {
           void refreshConversation(current.current.activeAgentId)
@@ -357,6 +360,52 @@ export function useWorkspace(
     setWorkspace(current.current)
   }
 
+  /** 表情只在服务确认后更新；失败保留请求标识供显式重试，不能将网络失败当成保存失败。 */
+  function react(agentId: string, messageId: string, emoji: string): Promise<void> {
+    const task = async () => {
+      if (!isReactionEmoji(emoji)) throw new Error('不支持这个表情')
+      const target = current.current.agents
+        .find((agent) => agent.id === agentId)
+        ?.messages.find((message) => message.id === messageId || message.requestId === messageId)
+      if (!target) throw new Error('消息不存在')
+      if (target.status !== 'sent') throw new Error('请等待消息发送成功后再添加表情。')
+      const key = JSON.stringify([target.id, emoji])
+      const isActive = !target.reactions.some((reaction) => reaction.emoji === emoji)
+      const previous = reactionRequests.current.get(key)
+      if (previous && previous.isActive !== isActive) {
+        // 推送已确认旧操作但回执丢失时，先核实旧请求，再执行用户当前看到的取消或添加。
+        const confirmed = await backend.setReaction(
+          target.id,
+          emoji,
+          previous.isActive,
+          previous.clientRequestId,
+        )
+        reactionRequests.current.delete(key)
+        receive([{ id: agentId, messages: [toChatMessage(confirmed)] }])
+      }
+      const request = reactionRequests.current.get(key) ?? {
+        clientRequestId: ulid(),
+        isActive,
+      }
+      reactionRequests.current.set(key, request)
+      const message = await backend.setReaction(
+        target.id,
+        emoji,
+        request.isActive,
+        request.clientRequestId,
+      )
+      reactionRequests.current.delete(key)
+      receive([{ id: agentId, messages: [toChatMessage(message)] }])
+    }
+    const pending = reactionChain.current.then(task, task)
+    // 队列只负责恢复后续操作；当前错误由返回的 Promise 交给界面提示。
+    reactionChain.current = pending.then(
+      () => undefined,
+      () => undefined,
+    )
+    return pending
+  }
+
   /**
    * 把一条用户消息交给服务端执行。
    * 受理后按消息标识合并，保留同时新增的草稿和待发消息。
@@ -375,27 +424,42 @@ export function useWorkspace(
           if (event.type === 'incoming' && event.incoming) receive(event.incoming)
           else onEvent?.(event)
         }
-        const result = await backend.deliverMessage(agentId, content, clientRequestId, receiveEvent)
+        const messages =
+          current.current.agents.find((agent) => agent.id === agentId)?.messages ?? []
+        const outgoing = messages.find(
+          (message) => (message.requestId ?? message.id) === clientRequestId,
+        )
+        const replyToId = outgoing?.replyTo?.messageId
+        const target = messages.find((message) => message.id === replyToId)
+        if (target && target.status !== 'sent') throw new Error('请等待原消息发送成功后再回复。')
+        const result = await backend.deliverMessage(
+          agentId,
+          content,
+          clientRequestId,
+          receiveEvent,
+          replyToId,
+        )
         if (result.acceptedMessageId || result.messages) {
           const acceptedId = result.acceptedMessageId
-          current.current = {
-            ...current.current,
-            agents: current.current.agents.map((agent) => {
-              if (agent.id !== agentId) return agent
-              const alreadyReceived =
-                acceptedId && agent.messages.some((message) => message.id === acceptedId)
-              return {
-                ...agent,
-                messages: agent.messages.flatMap((message) => {
-                  if (message.id !== clientRequestId) return [message]
-                  if (alreadyReceived || result.messages) return []
-                  return [{ ...message, id: acceptedId!, status: 'sent' as const }]
-                }),
-              }
-            }),
-          }
+          const local = current.current.agents.find((agent) => agent.id === agentId)?.messages
+          const pending = local?.find(
+            (message) => (message.requestId ?? message.id) === clientRequestId,
+          )
+          const confirmed = local?.find((message) => message.id === acceptedId)
+          const accepted: ChatMessage[] =
+            acceptedId && pending
+              ? [
+                  {
+                    ...pending,
+                    ...confirmed,
+                    id: acceptedId,
+                    requestId: clientRequestId,
+                    status: 'sent',
+                  },
+                ]
+              : []
           current.current = mergeIncoming(current.current, [
-            { id: agentId, messages: (result.messages ?? []).map(toChatMessage) },
+            { id: agentId, messages: [...accepted, ...(result.messages ?? []).map(toChatMessage)] },
           ])
           setWorkspace(current.current)
           if (backend.savesSynchronously) backend.saveWorkspace(current.current)
@@ -417,6 +481,7 @@ export function useWorkspace(
     create,
     deliver,
     receive,
+    react,
     historyPages,
     loadEarlier,
     hasUnsavedChanges: saveState === 'error',

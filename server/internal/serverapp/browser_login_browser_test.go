@@ -72,6 +72,21 @@ try {
   application = await _electron.launch({ executablePath: electronPath, args: [process.argv[2], '--user-data-dir=' + settings.profile], env, timeout: 15000 });
   let window = await application.firstWindow();
   window.setDefaultTimeout(10000);
+  const verifyComposerCards = async (expectedCount) => {
+    const fits = await window.evaluate(expectedCount => {
+      const area = document.querySelector('.composer-area');
+      const input = area.querySelector('.composer').getBoundingClientRect();
+      const cards = [...area.querySelectorAll('.error-banner, .composer-reply')];
+      return cards.length === expectedCount && document.documentElement.scrollWidth <= innerWidth && cards.every((element, index) => {
+        const card = element.getBoundingClientRect();
+        const next = cards[index + 1]?.getBoundingClientRect() ?? input;
+        const close = element.querySelector('button')?.getBoundingClientRect();
+        return Math.abs(card.left - input.left) <= 1 && Math.abs(card.right - input.right) <= 1 && Math.abs(next.top - card.bottom - 6) <= 1 && card.right <= innerWidth && (!close || close.left >= card.left && close.right <= card.right) && element.scrollWidth <= element.clientWidth;
+      });
+    }, expectedCount);
+    if (!fits) throw new Error('提示或回复卡片未与输入框对齐，或间距与关闭按钮越界');
+  };
+
   await application.evaluate(({ shell }) => { shell.openExternal = async address => { Reflect.set(globalThis, '__loginTestURL', address); }; });
   stage = '填写服务地址';
   await window.getByLabel('服务地址', { exact: true }).fill(settings.url);
@@ -198,6 +213,41 @@ try {
   await window.getByRole('textbox', { name: '助手名称', exact: true }).fill('联调猫咪');
   await window.getByRole('button', { name: '招聘猫咪', exact: true }).click();
   await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).waitFor();
+  stage = '客户端读取本人昵称并在网页修改资料后同步';
+  await window.getByRole('button', { name: '用户信息', exact: true }).getByText('浏览器登录用户', { exact: true }).waitFor();
+  stage = '网页修改用户昵称';
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide());
+  if (await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())) throw new Error('测试窗口没有隐藏');
+  await page.bringToFront();
+  await page.goto(settings.url + '/account');
+  await page.getByRole('button', { name: '编辑昵称', exact: true }).click();
+  await page.getByRole('textbox', { name: '昵称', exact: true }).fill('桌面资料联调用户');
+  await page.getByRole('textbox', { name: '昵称', exact: true }).press('Enter');
+  await page.getByRole('heading', { name: '桌面资料联调用户', exact: true }).waitFor();
+  stage = '网页裁剪并更换用户头像';
+  const avatarPNG = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 64;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#257956'; context.fillRect(0, 0, 64, 64);
+    return canvas.toDataURL('image/png').split(',')[1];
+  });
+  await page.getByLabel('选择头像图片', { exact: true }).setInputFiles({ name: 'profile.png', mimeType: 'image/png', buffer: Buffer.from(avatarPNG, 'base64') });
+  const crop = page.getByRole('dialog', { name: '裁剪头像', exact: true });
+  await crop.getByText('点击“确认更换”立即保存头像。', { exact: true }).waitFor();
+  await crop.getByRole('button', { name: '确认更换', exact: true }).click();
+  await crop.waitFor({ state: 'hidden' });
+  stage = '切回客户端同步用户资料';
+  await application.evaluate(({ app, BrowserWindow }) => { const main = BrowserWindow.getAllWindows()[0]; main.show(); app.focus({ steal: true }); main.focus(); });
+  await window.getByRole('button', { name: '用户信息', exact: true }).getByText('桌面资料联调用户', { exact: true }).waitFor();
+  stage = '客户端头像与服务端资料一致';
+  const profileMatches = await window.evaluate(async () => {
+    const profile = await window.desktop.backend.loadUserProfile();
+    const avatar = document.querySelector('.profile-avatar img');
+    return profile.avatar.startsWith('data:image/png;base64,') && avatar.getAttribute('src') === profile.avatar && avatar.complete && avatar.naturalWidth > 0;
+  });
+  if (!profileMatches) throw new Error('客户端头像与本人资料不一致');
+  if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'desktop-user-profile.png') });
   stage = '刷新后恢复服务端猫咪';
   await window.reload();
   await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).waitFor();
@@ -233,14 +283,67 @@ try {
     return closing.defaultPrevented;
   });
   if (preventsClosing) throw new Error();
+  stage = '错误提示浅深色与窄窗口布局';
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await verifyComposerCards(1);
+      if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'error-banner-' + theme + '-' + width + '.png'), animations: 'disabled' });
+    }
+  }
+  stage = '错误与回复并存及资料栏布局';
+  await window.getByRole('log').locator('.message-text').filter({ hasText: /^你好，验证消息入库$/ }).click({ button: 'right' });
+  await window.getByRole('menuitem', { name: '回复', exact: true }).click();
+  await window.getByRole('button', { name: '查看联调猫咪资料', exact: true }).click();
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await verifyComposerCards(2);
+      if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'composer-cards-' + theme + '-' + width + '.png'), animations: 'disabled' });
+    }
+  }
+  await window.getByRole('button', { name: '关闭猫咪面板', exact: true }).click();
+  await verifyComposerCards(2);
+  await window.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  if (settings.screenshots) await window.locator('.composer-area').screenshot({ path: join(settings.screenshots, 'composer-cards-preview.png'), animations: 'disabled' });
   await window.getByRole('button', { name: '关闭提示', exact: true }).click();
   await window.getByRole('alert').waitFor({ state: 'hidden' });
+  stage = '关闭提示后保留回复，多行输入仍然对齐';
+  await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).fill('第一行\n第二行\n第三行');
+  await verifyComposerCards(1);
+  if (settings.screenshots) await window.locator('.composer-area').screenshot({ path: join(settings.screenshots, 'reply-multiline-preview.png'), animations: 'disabled' });
+  await window.getByRole('button', { name: '取消回复', exact: true }).click();
+  if (await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).inputValue() !== '第一行\n第二行\n第三行') throw new Error('取消回复丢失了草稿');
+  await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).fill('');
   if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'chat-before-reload.png') });
   stage = '刷新后自动加载历史';
   await window.reload();
-  await window.getByRole('log').getByText('你好，验证消息入库', { exact: true }).waitFor();
+  await window.getByRole('log').locator('.message-text').filter({ hasText: /^你好，验证消息入库$/ }).waitFor();
   stage = '再次提交并恢复消息';
   await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).fill('补充：请简短回答');
+  // 观察真实发送过程：回执、工作事件和历史同步均不能移除原来的消息节点。
+  await window.evaluate(() => {
+    const log = document.querySelector('.saved-messages');
+    const viewport = document.querySelector('.messages-scroll');
+    const history = [...log.querySelectorAll('.message-entry')];
+    // 提示卡片会占用真实输入区高度；扣除这部分后，消息与工作事件仍不能改变视口。
+    const availableHeight = () => {
+      const banner = document.querySelector('.error-banner');
+      return viewport.getBoundingClientRect().height + (banner ? banner.getBoundingClientRect().height + parseFloat(getComputedStyle(banner).marginBottom) : 0);
+    };
+    const height = availableHeight();
+    const state = { outgoing: null, isStable: true, height };
+    const observer = new MutationObserver(() => {
+      const outgoing = [...log.querySelectorAll('.message-entry')].find(entry => entry.textContent.includes('补充：请简短回答'));
+      if (outgoing && !state.outgoing) state.outgoing = outgoing;
+      if (history.some(entry => !entry.isConnected) || (state.outgoing && outgoing !== state.outgoing)) state.isStable = false;
+      if (Math.abs(availableHeight() - height) > 1) state.isStable = false;
+    });
+    observer.observe(document.querySelector('.chat-panel'), { subtree: true, childList: true });
+    Reflect.set(window, '__timelineCheck', { state, observer });
+  });
   await window.getByRole('button', { name: '发送', exact: true }).click();
   await window.getByRole('log').getByText('补充：请简短回答', { exact: true }).waitFor();
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -249,22 +352,91 @@ try {
     if (attempt === 99) throw new Error();
     await new Promise(resolve => setTimeout(resolve, 50));
   }
+  await window.getByLabel('发送中', { exact: true }).waitFor({ state: 'hidden' });
+  const stableTimeline = await window.evaluate(() => {
+    const { state, observer } = Reflect.get(window, '__timelineCheck');
+    observer.disconnect();
+    return state.isStable && state.outgoing?.isConnected;
+  });
+  if (!stableTimeline) throw new Error('发送期间消息节点或视口发生跳变');
   await window.reload();
   await window.getByRole('log').getByText('补充：请简短回答', { exact: true }).waitFor();
-  stage = '退出并重启客户端后自动恢复登录及两条历史消息';
+  stage = '回复消息预览与真实发送';
+  await window.getByRole('log').locator('.message-text').filter({ hasText: /^你好，验证消息入库$/ }).click({ button: 'right' });
+  await window.getByRole('menuitem', { name: '回复', exact: true }).click();
+  await window.getByRole('region', { name: '正在回复自己', exact: true }).waitFor();
+  await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).fill('这是对第一条消息的回复');
+  for (const theme of ['light', 'dark']) {
+    await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await verifyComposerCards(await window.locator('.error-banner').count() + 1);
+    if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'reply-composer-' + theme + '.png'), animations: 'disabled' });
+  }
+  await window.getByRole('button', { name: '发送', exact: true }).click();
+  await window.getByRole('button', { name: '查看原消息：你好，验证消息入库', exact: true }).waitFor();
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const history = await window.evaluate(async (id) => window.desktop.backend.loadAgentConversation(id), snapshot.workspace.activeAgentId);
+    const reply = history.messages.find(message => message.content === '这是对第一条消息的回复');
+    if (reply?.replyTo?.excerpt === '你好，验证消息入库') break;
+    if (attempt === 99) throw new Error('服务端未保存引用摘要');
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  await window.getByLabel('发送中', { exact: true }).waitFor({ state: 'hidden' });
+  await window.reload();
+  await window.getByRole('button', { name: '查看原消息：你好，验证消息入库', exact: true }).waitFor();
+  const waitForIdle = async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const history = await window.evaluate(async id => window.desktop.backend.loadAgentConversation(id), snapshot.workspace.activeAgentId);
+      if (history.runs.length === 0) return history;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    throw new Error('服务端任务未收尾');
+  };
+  await waitForIdle();
+  stage = '真实表情发送、刷新与重启恢复';
+  await window.getByRole('log').locator('.message-text').filter({ hasText: /^你好，验证消息入库$/ }).click({ button: 'right' });
+  await window.getByRole('button', { name: '回应👍', exact: true }).click();
+  await window.getByRole('button', { name: '👍，点击取消', exact: true }).waitFor();
+  const marked = await waitForIdle();
+  if (marked.messages.length !== 3 || !marked.messages.some(message => message.content === '你好，验证消息入库' && message.reactionRevision === 1 && message.reactions.some(reaction => reaction.emoji === '👍'))) throw new Error('表情未持久化或显示了内部交互');
+  await window.reload();
+  await window.getByRole('button', { name: '👍，点击取消', exact: true }).waitFor();
+  stage = '退出并重启客户端后自动恢复登录、历史、引用和表情';
   await application.close();
   application = undefined;
   application = await _electron.launch({ executablePath: electronPath, args: [process.argv[2], '--user-data-dir=' + settings.profile], env, timeout: 15000 });
   window = await application.firstWindow();
   window.setDefaultTimeout(10000);
-  await window.getByRole('log').getByText('你好，验证消息入库', { exact: true }).waitFor();
+  await window.getByRole('log').locator('.message-text').filter({ hasText: /^你好，验证消息入库$/ }).waitFor();
   await window.getByRole('log').getByText('补充：请简短回答', { exact: true }).waitFor();
+  await window.getByRole('button', { name: '👍，点击取消', exact: true }).waitFor();
+  const quote = window.getByRole('button', { name: '查看原消息：你好，验证消息入库', exact: true });
+  await quote.waitFor();
+  await quote.click();
+  if (!await window.locator('.message-line.is-highlighted').count()) throw new Error('引用无法定位原消息');
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      const layout = await quote.evaluate(element => ({ width: element.getBoundingClientRect().width, overflow: document.documentElement.scrollWidth > innerWidth }));
+      if (layout.overflow || layout.width > 440) throw new Error('引用气泡超出可读宽度');
+      if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'reply-bubble-' + theme + '-' + width + '.png'), animations: 'disabled' });
+    }
+  }
   if (await window.getByRole('button', { name: '在浏览器中登录', exact: true }).count()) throw new Error();
+  await window.getByRole('button', { name: '用户信息', exact: true }).getByText('桌面资料联调用户', { exact: true }).waitFor();
   if (await window.getByText('机器人或群组参数无效', { exact: true }).count()) throw new Error();
   if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'desktop-message.png') });
+  stage = '取消表情后刷新仍保持撤销';
+  await window.getByRole('button', { name: '👍，点击取消', exact: true }).click();
+  await window.getByRole('button', { name: '👍，点击取消', exact: true }).waitFor({ state: 'hidden' });
+  const removed = await waitForIdle();
+  if (removed.messages.length !== 3 || !removed.messages.some(message => message.content === '你好，验证消息入库' && message.reactionRevision === 2 && message.reactions.length === 0)) throw new Error('取消表情没有落库');
+  await window.reload();
+  await window.getByRole('log').getByText('补充：请简短回答', { exact: true }).waitFor();
+  if (await window.getByRole('button', { name: '👍，点击取消', exact: true }).count()) throw new Error('重载恢复了已取消的表情');
   process.stdout.write('真实登录、招聘和发送操作已完成，继续核对数据库记录\n');
 } catch {
-  if (application && stage.includes('刷新后')) await application.firstWindow().then(window => window.screenshot({ path: join(settings.screenshots, 'chat-failure.png') }));
+  if (application && settings.screenshots) await application.firstWindow().then(window => window.screenshot({ path: join(settings.screenshots, 'chat-failure.png') }));
   process.stderr.write('浏览器联合验证失败：' + stage + '，授权响应=' + approvalStatus + '，CSP 拒绝数=' + violations.length + '\n');
   process.exitCode = 1;
 } finally {
@@ -278,14 +450,16 @@ try {
 	if err != nil {
 		t.Fatalf("真实浏览器登录未通过：%v\n%s", err, output)
 	}
-	var bots, messages, runs int
+	var bots, messages, runs, reactions, interactions int
 	err = fixture.pool.QueryRow(`SELECT
         (SELECT count(*) FROM tombot.bots WHERE user_id=u.id AND name='联调猫咪'),
         (SELECT count(*) FROM tombot.messages m JOIN tombot.conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id WHERE m.user_id=u.id AND b.name='联调猫咪' AND m.sender_kind='user' AND m.blocks @> '[{"kind":"text","text":"你好，验证消息入库"}]'),
-        (SELECT count(*) FROM tombot.runs WHERE user_id=u.id)
-        FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs)
-	if err != nil || bots != 1 || messages != 1 || runs != 2 {
-		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 错误=%v", bots, messages, runs, err)
+        (SELECT count(*) FROM tombot.runs WHERE user_id=u.id),
+        (SELECT count(*) FROM tombot.message_reactions WHERE user_id=u.id),
+        (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]')
+        FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions)
+	if err != nil || bots != 1 || messages != 1 || runs != 5 || reactions != 0 || interactions != 2 {
+		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 错误=%v", bots, messages, runs, reactions, interactions, err)
 	}
 	t.Log(string(output))
 }

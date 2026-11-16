@@ -17,7 +17,6 @@ import { useWorkspace } from './features/workspace/useWorkspace'
 import {
   saveMessage,
   setAgentComputerUrl,
-  toggleReaction,
   updateDraft,
   type NewAgent,
 } from './features/workspace/model'
@@ -53,6 +52,7 @@ import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResiz
 import { type SettingsSection } from './features/settings/settings'
 import { useLanguage } from './features/settings/useLanguage'
 import { useConnectionStatus } from './features/session/useConnectionStatus'
+import { useUserProfile } from './features/session/useUserProfile'
 import { useSession } from './features/session/useSession'
 import { SessionFrame, SessionGate } from './features/session/SessionGate'
 
@@ -76,6 +76,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     create,
     deliver,
     receive,
+    react,
     error,
     isBlocked,
     ready,
@@ -85,6 +86,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     dismissError,
   } = useWorkspace(receiveActivity, clearActivity)
   const connectionStatus = useConnectionStatus()
+  const {
+    profile: userProfile,
+    error: profileError,
+    dismissError: dismissProfileError,
+  } = useUserProfile()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_WIDTH.default)
@@ -101,11 +107,14 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const [chatGroups, setChatGroups] = useState<GroupSummary[]>([])
   const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
   const [liveReplies, setLiveReplies] = useState<Record<string, string>>({})
-  const [pendingMessages, setPendingMessages] = useState<Record<string, string>>({})
+  const [pendingMessages, setPendingMessages] = useState<Record<string, string[]>>({})
 
   function startDelivery(agentId: string, content: string, messageId: string): void {
     const source = crypto.randomUUID()
-    setPendingMessages((current) => ({ ...current, [agentId]: messageId }))
+    setPendingMessages((current) => ({
+      ...current,
+      [agentId]: [...(current[agentId] ?? []), messageId],
+    }))
     let reply = ''
     void deliver(agentId, content, messageId, (streamEvent) => {
       receiveActivity(source, streamEvent)
@@ -127,7 +136,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
         })
         setPendingMessages((current) => {
           const next = { ...current }
-          if (next[agentId] === messageId) delete next[agentId]
+          next[agentId] = next[agentId]?.filter((id) => id !== messageId) ?? []
           return next
         })
         clearActivity(source)
@@ -145,7 +154,8 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
   const hiddenAgents = workspace.agents.filter((candidate) =>
     preferences.hiddenIds.includes(candidate.id),
   )
-  const bannerMessage = error || themeError || sidebarError || languageError || notice
+  const bannerMessage =
+    error || profileError || themeError || sidebarError || languageError || notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
@@ -385,12 +395,47 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
     )
   }
 
+  const composerNotice = bannerMessage && openDialog !== 'settings' && (
+    <div role="alert" className="error-banner">
+      <span className="error-banner-icon" aria-hidden="true">
+        <AlertCircle size={16} />
+      </span>
+      <span className="error-banner-text">{bannerMessage}</span>
+      {error && !isBlocked && hasUnsavedChanges ? (
+        <button
+          onClick={() =>
+            runAction(() => {
+              commit((previous) => previous)
+            })
+          }
+        >
+          重试保存
+        </button>
+      ) : (
+        !isBlocked &&
+        (error || profileError || (!themeError && !sidebarError && !languageError)) && (
+          <button
+            aria-label="关闭提示"
+            onClick={() => {
+              if (error) dismissError()
+              else if (profileError) dismissProfileError()
+              else setNotice('')
+            }}
+          >
+            <X size={16} />
+          </button>
+        )
+      )}
+    </div>
+  )
+
   return (
     <div
       className={`app-shell ${sidebarWidth === SIDEBAR_WIDTH.collapsed ? 'sidebar-is-collapsed' : ''} ${isResizing ? 'is-resizing' : ''}`}
       style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}
     >
       <Sidebar
+        userProfile={userProfile}
         workspace={workspace}
         preferences={preferences}
         isCollapsed={sidebarWidth === SIDEBAR_WIDTH.collapsed}
@@ -423,6 +468,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
       <div className="chat-stage">
         {surface.kind !== 'agent' ? (
           <ConversationPanel
+            composerNotice={composerNotice}
             onIncoming={receive}
             workStates={workStates}
             onExecutionEvent={receiveActivity}
@@ -440,6 +486,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
           />
         ) : (
           <ChatPanel
+            composerNotice={composerNotice}
             key={agent.id}
             agent={
               liveReplies[agent.id]
@@ -461,7 +508,7 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
             }
             isBlocked={isBlocked}
             workSummary={workStates[agent.id]?.summary}
-            pendingMessageId={pendingMessages[agent.id]}
+            pendingMessageIds={pendingMessages[agent.id]}
             hasEarlierMessages={historyPages[agent.id]?.hasMore}
             isLoadingEarlier={historyPages[agent.id]?.loading}
             onLoadEarlier={() => {
@@ -513,9 +560,11 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
               })
             }
             onReact={(messageId, emoji) =>
-              runAction(() => {
-                commit((previous) => toggleReaction(previous, agent.id, messageId, emoji))
-              })
+              void react(agent.id, messageId, emoji).then(
+                () =>
+                  setNotice((previous) => (previous.startsWith('表情更新失败：') ? '' : previous)),
+                (failure: Error) => setNotice(`表情更新失败：${failure.message}`),
+              )
             }
             onRetry={(messageId) => {
               const failed = agent.messages.find((message) => message.id === messageId)
@@ -599,37 +648,6 @@ function WorkspaceApp({ serverUrl }: { serverUrl: string }) {
           onCreateGroup={handleCreateGroup}
           onClose={closeMenu}
         />
-      )}
-      {bannerMessage && openDialog !== 'settings' && (
-        <div role="alert" className="error-banner">
-          <AlertCircle size={16} />
-          <span>{bannerMessage}</span>
-          {error && !isBlocked && hasUnsavedChanges ? (
-            <button
-              onClick={() =>
-                runAction(() => {
-                  commit((previous) => previous)
-                })
-              }
-            >
-              重试保存
-            </button>
-          ) : (
-            !isBlocked &&
-            !themeError &&
-            !sidebarError && (
-              <button
-                aria-label="关闭提示"
-                onClick={() => {
-                  setNotice('')
-                  dismissError()
-                }}
-              >
-                <X size={16} />
-              </button>
-            )
-          )}
-        </div>
       )}
       {openDialog === 'create' && (
         <RecruitCatDialog

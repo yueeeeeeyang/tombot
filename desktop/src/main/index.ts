@@ -65,6 +65,8 @@ async function createWindow(): Promise<void> {
     if (choice === 1) event.preventDefault()
   })
   window.once('ready-to-show', () => window.show())
+  // Electron 的网页焦点不总随原生窗口切换，资料刷新以原生窗口激活为准。
+  window.on('focus', () => window.webContents.send('desktop:window-focus'))
   window.webContents.on('render-process-gone', (_event, details) => {
     console.error(`客户端渲染进程退出，窗口 ID=${window.id}，原因=${details.reason}`)
     dialog.showErrorBox('客户端意外退出', '请重新打开 TomBot。已保存到服务的内容会保留。')

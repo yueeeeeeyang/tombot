@@ -15,6 +15,7 @@ import (
 type SendRequest struct {
 	ClientRequestID string `json:"client_request_id"`
 	Content         string `json:"content"`
+	ReplyToID       string `json:"reply_to_id,omitempty"`
 }
 type Submission struct {
 	TurnID    string `json:"turn_id"`
@@ -23,20 +24,50 @@ type Submission struct {
 	IsCreated bool   `json:"is_created"`
 }
 type Block struct {
-	Kind string `json:"kind"`
-	Text string `json:"text"`
+	Kind     string          `json:"kind"`
+	Text     string          `json:"text"`
+	Reaction *ReactionChange `json:"reaction,omitempty"`
+}
+
+// ReactionChange 记录一次不可变的表情交互，目标由消息的 reply_to_id 绑定。
+type ReactionChange struct {
+	Emoji    string `json:"emoji"`
+	IsActive bool   `json:"is_active"`
+}
+
+type ReactionRequest struct {
+	ClientRequestID string `json:"client_request_id"`
+	Emoji           string `json:"emoji"`
+	IsActive        bool   `json:"is_active"`
+}
+
+type Reaction struct {
+	Emoji string `json:"emoji"`
+	Count int    `json:"count"`
 }
 type Message struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversation_id"`
-	TurnID         string    `json:"turn_id"`
-	RunID          *string   `json:"run_id"`
-	Sequence       int64     `json:"sequence"`
-	SenderKind     string    `json:"sender_kind"`
-	SenderBotID    *string   `json:"sender_bot_id"`
-	Blocks         []Block   `json:"blocks"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
+	ID               string        `json:"id"`
+	ClientRequestID  string        `json:"client_request_id,omitempty"`
+	ConversationID   string        `json:"conversation_id"`
+	TurnID           string        `json:"turn_id"`
+	RunID            *string       `json:"run_id"`
+	Sequence         int64         `json:"sequence"`
+	SenderKind       string        `json:"sender_kind"`
+	SenderBotID      *string       `json:"sender_bot_id"`
+	Blocks           []Block       `json:"blocks"`
+	Status           string        `json:"status"`
+	CreatedAt        time.Time     `json:"created_at"`
+	ReplyTo          *MessageReply `json:"reply_to,omitempty"`
+	ReactionRevision int64         `json:"reaction_revision"`
+	Reactions        []Reaction    `json:"reactions"`
+}
+
+// MessageReply 的摘要供界面使用；原文只在服务端组装模型上下文，不递归展开引用。
+type MessageReply struct {
+	MessageID  string `json:"message_id"`
+	Excerpt    string `json:"excerpt"`
+	senderKind string
+	blocks     []Block
 }
 type Run struct {
 	ID                 string     `json:"id"`

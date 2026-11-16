@@ -9,6 +9,23 @@ import (
 	"io.yueyang/tom/internal/execution"
 )
 
+func (handler *Handler) setReaction(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ClientRequestID string `json:"client_request_id"`
+		Emoji           string `json:"emoji"`
+		IsActive        *bool  `json:"is_active"`
+	}
+	if !handler.decode(w, r, &request, 4096) {
+		return
+	}
+	if request.IsActive == nil {
+		handler.serviceError(w, r, execution.ErrInvalidInput)
+		return
+	}
+	message, err := handler.executor.SetReaction(r.Context(), current(r).principal, chi.URLParam(r, "messageID"), execution.ReactionRequest{ClientRequestID: request.ClientRequestID, Emoji: request.Emoji, IsActive: *request.IsActive})
+	handler.result(w, r, "message", message, err)
+}
+
 func (handler *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	var request execution.SendRequest
 	if !handler.decode(w, r, &request, 64<<10) {

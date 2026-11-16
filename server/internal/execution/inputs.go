@@ -8,24 +8,27 @@ import (
 	"strconv"
 	"strings"
 
-	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/provider"
 )
 
 // appendInput 在持有会话锁时追加消息；每回合有界，受理后即使客户端退出也不会丢失。
-func (service *Service) appendInput(ctx context.Context, tx *sql.Tx, userID, conversationID, turnID, runID string, request SendRequest, digest []byte, submitted *Submission) error {
-	blocks, err := json.Marshal([]Block{{Kind: "text", Text: request.Content}})
+func (service *Service) appendInput(ctx context.Context, tx *sql.Tx, userID, conversationID, turnID, runID string, request SendRequest, input []Block, reply *MessageReply, digest []byte, submitted *Submission) error {
+	blocks, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}
 	var count, used int
-	if err := tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(octet_length(m.blocks::text)),0) FROM tombot.run_inputs i JOIN tombot.messages m ON m.user_id=i.user_id AND m.id=i.message_id WHERE i.user_id=$1 AND i.turn_id=$2`, userID, turnID).Scan(&count, &used); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT count(*),COALESCE(sum(octet_length(m.blocks::text)+COALESCE(octet_length(target.blocks::text),0)),0) FROM tombot.run_inputs i JOIN tombot.messages m ON m.user_id=i.user_id AND m.id=i.message_id LEFT JOIN tombot.messages target ON target.user_id=m.user_id AND target.id=m.reply_to_id WHERE i.user_id=$1 AND i.turn_id=$2`, userID, turnID).Scan(&count, &used); err != nil {
+		return err
+	}
+	contextBlocks, err := json.Marshal(messageForModel(Message{SenderKind: "user", Blocks: input, ReplyTo: reply}).Blocks)
+	if err != nil {
 		return err
 	}
 	// 给上一轮回复保留上下文空间，避免续跑时截断已经受理的补充消息。
-	if count >= service.options.ContextMessages-1 || used+len(blocks) > service.options.ContextBytes/2 {
+	if count >= service.options.ContextMessages-1 || used+len(contextBlocks) > service.options.ContextBytes/2 {
 		return ErrCapacity
 	}
 	var sequence int64
@@ -33,7 +36,7 @@ func (service *Service) appendInput(ctx context.Context, tx *sql.Tx, userID, con
 		return err
 	}
 	*submitted = Submission{TurnID: turnID, RunID: runID, MessageID: ids.New(), IsCreated: true}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.messages(user_id,id,conversation_id,turn_id,sequence,sender_kind,blocks,status) VALUES($1,$2,$3,$4,$5,'user',$6,'complete')`, userID, submitted.MessageID, conversationID, turnID, sequence, blocks); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.messages(user_id,id,conversation_id,turn_id,sequence,sender_kind,blocks,status,reply_to_id) VALUES($1,$2,$3,$4,$5,'user',$6,'complete',NULLIF($7,''))`, userID, submitted.MessageID, conversationID, turnID, sequence, blocks, request.ReplyToID); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.run_inputs(user_id,client_request_id,request_digest,run_id,turn_id,conversation_id,message_id) VALUES($1,$2,$3,$4,$5,$6,$7)`, userID, request.ClientRequestID, digest, runID, turnID, conversationID, submitted.MessageID); err != nil {
@@ -60,21 +63,18 @@ func (service *Service) mergeRunInputs(ctx context.Context, lease Lease, key str
 			if err := tx.QueryRowContext(ctx, `SELECT input_sequence FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&cursor); err != nil {
 				return err
 			}
-			rows, err := tx.QueryContext(ctx, `SELECT m.sequence,m.blocks FROM tombot.messages m JOIN tombot.run_inputs i ON i.user_id=m.user_id AND i.message_id=m.id WHERE m.user_id=$1 AND m.turn_id=$2 AND m.sequence>$3 ORDER BY m.sequence LIMIT $4`, lease.UserID, lease.TurnID, cursor, service.options.ContextMessages)
+			rows, err := tx.QueryContext(ctx, `SELECT `+messageColumns+` FROM `+messageSource+` JOIN tombot.run_inputs i ON i.user_id=messages.user_id AND i.message_id=messages.id WHERE messages.user_id=$1 AND messages.turn_id=$2 AND messages.sequence>$3 ORDER BY messages.sequence LIMIT $4`, lease.UserID, lease.TurnID, cursor, service.options.ContextMessages)
 			if err != nil {
 				return err
 			}
 			messages := []provider.Message{}
 			for rows.Next() {
-				var blocks []byte
-				if err = rows.Scan(&cursor, &blocks); err != nil {
+				message, err := scanMessage(rows)
+				if err != nil {
 					return errors.Join(err, rows.Close())
 				}
-				var parsed []domain.MessageBlock
-				if err = json.Unmarshal(blocks, &parsed); err != nil {
-					return errors.Join(err, rows.Close())
-				}
-				messages = append(messages, provider.Message{Role: "user", Blocks: parsed})
+				cursor = message.Sequence
+				messages = append(messages, messageForModel(message))
 			}
 			if err = errors.Join(rows.Err(), rows.Close()); err != nil {
 				return err

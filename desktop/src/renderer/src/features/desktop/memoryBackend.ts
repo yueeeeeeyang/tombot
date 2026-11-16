@@ -1,6 +1,8 @@
+import { replyExcerpt } from '../workspace/model'
 import {
   addAgent,
   createWorkspace,
+  toggleReaction,
   type Agent,
   type NewAgent,
   type AppWorkspace,
@@ -10,10 +12,12 @@ import { ulid } from '../../../../shared/ulid'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
   DeliveryResult,
+  ServerBubble,
   DesktopBackend,
   LoginCredentials,
   SessionPhase,
   SessionSnapshot,
+  UserProfile,
   UserEvent,
   WorkspaceSnapshot,
 } from './backend'
@@ -22,12 +26,14 @@ const modelNotReady = '当前模型策略不可用，请联系管理员检查服
 
 /** 测试里代替服务端的内存实现。它遵守同一套会话、保存和投递规则，不写 localStorage。 */
 export class MemoryBackend implements DesktopBackend {
+  private reactionRequests = new Map<string, string>()
   readonly savesSynchronously = true
   phase: SessionPhase = 'ready'
   serverUrl = ''
   connectError: string | null = null
   /** 测试用账号：用户名与密码都匹配才进入工作空间。 */
   username = 'owner'
+  userProfile: UserProfile = { username: 'owner', displayName: '测试用户', avatar: '' }
   password = ''
   failSave: Error | null = null
   sessionError: Error | null = null
@@ -61,6 +67,15 @@ export class MemoryBackend implements DesktopBackend {
   session(): Promise<SessionSnapshot> {
     if (this.sessionError) return Promise.reject(this.sessionError)
     return Promise.resolve(this.trySessionSync())
+  }
+
+  loadUserProfile(): Promise<UserProfile> {
+    return Promise.resolve({ ...this.userProfile })
+  }
+
+  watchWindowFocus(onFocus: () => void): () => void {
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
   }
 
   async connect(input: string): Promise<SessionSnapshot> {
@@ -170,11 +185,46 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve('')
   }
 
+  async setReaction(
+    messageId: string,
+    emoji: string,
+    isActive: boolean,
+    clientRequestId: string,
+  ): Promise<ServerBubble> {
+    const agent = this.workspace.agents.find((candidate) =>
+      candidate.messages.some((message) => message.id === messageId),
+    )
+    const target = agent?.messages.find((message) => message.id === messageId)
+    if (!agent || !target || target.status !== 'sent') throw new Error('消息尚未发送或不存在')
+    const digest = JSON.stringify([messageId, emoji, isActive])
+    const previous = this.reactionRequests.get(clientRequestId)
+    if (previous && previous !== digest) throw new Error('表情请求内容冲突')
+    if (!previous && target.reactions.some((reaction) => reaction.emoji === emoji) !== isActive) {
+      this.workspace = toggleReaction(this.workspace, agent.id, target.id, emoji)
+      const updated = this.workspace.agents
+        .find((candidate) => candidate.id === agent.id)!
+        .messages.find((message) => message.id === target.id)!
+      updated.reactionRevision = (target.reactionRevision ?? 0) + 1
+    }
+    this.reactionRequests.set(clientRequestId, digest)
+    const message = this.workspace.agents
+      .find((candidate) => candidate.id === agent.id)!
+      .messages.find((message) => message.id === target.id)!
+    return {
+      ...message,
+      sequence: message.sequence ?? 1,
+      speaker: message.role === 'assistant' ? agent.id : '',
+      reactions: message.reactions,
+      attachments: message.attachments ?? [],
+    }
+  }
+
   async deliverMessage(
     agentId: string,
     content: string,
     clientRequestId: string,
     onEvent?: (event: { type: string; text: string }) => void,
+    replyToId?: string,
   ): Promise<DeliveryResult> {
     const agent = this.workspace.agents.find((item) => item.id === agentId)
     if (!agent) return { code: 'AGENT_NOT_FOUND', message: '助手不存在' }
@@ -182,9 +232,15 @@ export class MemoryBackend implements DesktopBackend {
     if (!this.isModelPolicyAvailable) {
       return { code: 'MODEL_NOT_READY', message: modelNotReady }
     }
+    const replyTarget = agent.messages.find((message) => message.id === replyToId)
+    if (replyToId && !replyTarget) return { code: 'INPUT_INVALID', message: '回复的消息不存在' }
     onEvent?.({ type: 'process', text: '正在思考' })
     const sent: ChatMessage = {
       id: `sent-${Date.now()}`,
+      requestId: clientRequestId,
+      ...(replyTarget
+        ? { replyTo: { messageId: replyTarget.id, excerpt: replyExcerpt(replyTarget.content) } }
+        : {}),
       role: 'user',
       content,
       createdAt: new Date().toISOString(),
@@ -199,7 +255,7 @@ export class MemoryBackend implements DesktopBackend {
       status: 'sent',
       reactions: [],
     }
-    // 内存实现返回服务端视角的完整列表，与真实服务端一致，由调用方整体替换。
+    // 内存实现同时返回持久化消息，由调用方按消息和请求标识增量合并。
     return {
       acceptedMessageId: sent.id,
       messages: [
@@ -208,6 +264,8 @@ export class MemoryBackend implements DesktopBackend {
         reply,
       ].map((message, index) => ({
         id: message.id,
+        requestId: message.requestId,
+        replyTo: message.replyTo,
         sequence: index + 1,
         role: message.role,
         speaker: message.role === 'assistant' ? agentId : '',
@@ -221,6 +279,7 @@ export class MemoryBackend implements DesktopBackend {
 
   /** 测试模拟服务端策略可用性或空工作空间，客户端不参与模型配置。 */
   loadFixture(input: { workspace?: AppWorkspace; isModelPolicyAvailable?: boolean }): void {
+    this.reactionRequests.clear()
     if (input.workspace) this.workspace = input.workspace
     if (input.isModelPolicyAvailable !== undefined)
       this.isModelPolicyAvailable = input.isModelPolicyAvailable
@@ -234,6 +293,7 @@ export class MemoryBackend implements DesktopBackend {
     this.password = ''
     this.failSave = null
     this.sessionError = null
+    this.userProfile = { username: 'owner', displayName: '测试用户', avatar: '' }
     this.eventListeners.clear()
     this.workspace = createWorkspace()
     this.pristine = true

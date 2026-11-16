@@ -20,6 +20,7 @@
 | `GET /api/v2/conversations` | 分页读取所属用户会话目录 |
 | `GET /api/v2/conversations/{conversationID}` | 会话目录详情，不返回消息正文 |
 | `GET/POST /api/v2/conversations/{conversationID}/messages` | 分页消息或幂等受理单聊消息与持久任务 |
+| `PUT /api/v2/messages/{messageID}/reaction` | 幂等设置单聊表情，原子保存标记并受理模型交互 |
 | `GET /api/v2/conversations/{conversationID}/activity` | 当前活动运行及最近工作摘要，仅所属用户可读 |
 | `POST /api/v2/conversations/{conversationID}/read` | 按 `sequence` 推进已读位置，成功返回 `204` |
 | `GET /api/v2/runs/{runID}` | 当前用户的运行状态与固定错误码 |
@@ -34,6 +35,8 @@
 机器人响应中的 `desktop_id` 由服务器登记，同键重试、归档恢复和电脑重建都保持稳定。创建或修改请求不能提供该字段，也不能指定 `linux_uid`、`shared_gid` 或 `display_number`。桌面 ID 仅标识资源，不能替代执行授权。
 
 发送消息使用 `client_request_id` 和 `content`，整个 JSON 上限 64 KiB，文本上限 32 KiB。首次持久入队返回 `202`，原请求重试返回 `200`，响应 `submission` 包含回合、运行、消息 ID 与 `is_created`，`Location` 指向运行。受理不表示模型已经执行。活动会话、队列满和同键不同内容返回明确 `409`；群聊和 Bot 私信需要各自编排入口，当前发送接口明确拒绝。已读必须显式提交 `sequence`，不接受未来序号。
+
+表情请求使用 `client_request_id`、`emoji` 和必填布尔值 `is_active`，JSON 上限 4 KiB；返回 `200` 与更新后的 `message`，包括 `reactions` 和 `reaction_revision`。相同幂等键重放返回当前状态，不覆盖后续取消；目标状态未变不重复触发模型。只支持当前用户的单聊完整文本消息；隐藏交互或跨用户目标返回 `404`，非法表情、缺失状态返回 `400`，容量失败整体回滚。具体执行、迁移和回滚见[表情说明](../execution/README.md#消息表情)。
 
 运行响应只包含状态元数据，不包含模型选择、机器人提示词或操作账本。`computer_wait_reason` 为最近一次桌面调度观测：空字符串表示当前没有桌面等待记录，`desktop_busy` 表示所属桌面被占用，`user_capacity` 表示用户并发额度或较早的可执行桌面排队，`starting_desktop` 表示节点启动尚待确认。取消排队任务返回 `canceled`；在途任务返回 `canceling`，之后继续查询实际终态，不能在取消请求返回时假定外部操作已停止。客户端没有领取任务、提交模型结果或自行构造租约的接口，具体约束见 [execution](../execution/README.md)。
 

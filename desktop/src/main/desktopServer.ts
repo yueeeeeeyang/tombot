@@ -17,7 +17,7 @@ import {
   type ServerSnapshot,
 } from './workspaceSnapshot'
 import type { AppWorkspace, NewAgent } from '../renderer/src/features/workspace/model'
-import type { UserEvent } from '../renderer/src/features/desktop/backend'
+import type { UserEvent, UserProfile } from '../renderer/src/features/desktop/backend'
 import {
   normalizeServerAddress,
   parseStoredSession,
@@ -662,6 +662,7 @@ export function registerDesktopIpc(): void {
   )
   ipcMain.handle('desktop:logout', () => handle(() => logout()))
   ipcMain.handle('desktop:load-workspace', () => handle(() => loadWorkspace()))
+  ipcMain.handle('desktop:user-profile', () => handle(() => loadUserProfile()))
   ipcMain.handle('desktop:create-agent', (_event, profile: NewAgent, requestId: string) =>
     handle(async () => {
       const id = await createBot(call, profile, requestId)
@@ -714,7 +715,13 @@ export function registerDesktopIpc(): void {
     'desktop:deliver',
     (
       event,
-      input: { agentId: string; content: string; requestId: string; clientRequestId: string },
+      input: {
+        agentId: string
+        content: string
+        requestId: string
+        clientRequestId: string
+        replyToId?: string
+      },
     ) =>
       handle(async () => {
         try {
@@ -883,12 +890,29 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:preview', (_event, input: { path: string; botId?: string }) =>
     handle(() => previewFile(input.path, input.botId)),
   )
-  ipcMain.handle('desktop:reaction', (_event, input: { messageId: string; emoji: string }) =>
-    handle(() =>
-      call('PUT', `/messages/${encodeURIComponent(input.messageId)}/reaction`, {
-        emoji: input.emoji,
+  ipcMain.handle(
+    'desktop:reaction',
+    (
+      _event,
+      input: { messageId: string; emoji: string; isActive: boolean; clientRequestId: string },
+    ) =>
+      handle(async () => {
+        const response = (await call(
+          'PUT',
+          `/messages/${encodeURIComponent(input.messageId)}/reaction`,
+          {
+            emoji: input.emoji,
+            is_active: input.isActive,
+            client_request_id: input.clientRequestId,
+          },
+        )) as { message?: ServerMessage }
+        const message = response.message && toBubble(response.message)
+        if (!message)
+          throw Object.assign(new Error('服务没有返回表情更新后的消息。'), {
+            code: 'RESPONSE_INVALID',
+          })
+        return message
       }),
-    ),
   )
   ipcMain.handle('desktop:ensure-agent', (_event, agentId: string) =>
     handle(() => call('POST', `/workspace/agents/${encodeURIComponent(agentId)}/ready`)),
@@ -901,10 +925,37 @@ export function registerDesktopIpc(): void {
   )
 }
 
+/** 只把公开资料交给界面；不接受远程头像地址，避免图片绕过主进程连接和认证边界。 */
+async function loadUserProfile(): Promise<UserProfile> {
+  const response = (await call('GET', '/auth/profile')) as {
+    profile?: { username?: unknown; display_name?: unknown; avatar?: unknown }
+  }
+  const profile = response.profile
+  const maxAvatarLength = Math.ceil((2 << 20) / 3) * 4 + 'data:image/png;base64,'.length
+  if (
+    !profile ||
+    typeof profile.username !== 'string' ||
+    !profile.username.trim() ||
+    typeof profile.display_name !== 'string' ||
+    typeof profile.avatar !== 'string' ||
+    profile.avatar.length > maxAvatarLength ||
+    (profile.avatar !== '' && !/^data:image\/png;base64,[A-Za-z0-9+/]+={0,2}$/.test(profile.avatar))
+  ) {
+    throw Object.assign(new Error('服务没有返回有效的用户资料。'), { code: 'RESPONSE_INVALID' })
+  }
+  return { username: profile.username, displayName: profile.display_name, avatar: profile.avatar }
+}
+
 /** 受理后立即返回；运行和回复通过用户事件刷新，不占用客户端发送通道。 */
 async function deliverMessage(
   _event: IpcMainInvokeEvent,
-  input: { agentId: string; content: string; requestId: string; clientRequestId: string },
+  input: {
+    agentId: string
+    content: string
+    requestId: string
+    clientRequestId: string
+    replyToId?: string
+  },
 ): Promise<unknown> {
   const conversationID = await conversationFor(input.agentId)
   const accepted = (await call(
@@ -913,6 +964,7 @@ async function deliverMessage(
     {
       client_request_id: input.clientRequestId,
       content: input.content,
+      ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
     },
   )) as { submission?: { run_id?: string; message_id?: string } }
   if (!accepted.submission?.run_id || !accepted.submission.message_id) {
@@ -1000,6 +1052,7 @@ function botName(botID: string): string {
 
 type ServerMessage = {
   id: string
+  client_request_id?: string
   sequence: number
   sender_kind: string
   sender_bot_id?: string
@@ -1009,19 +1062,22 @@ type ServerMessage = {
     text?: string
     artifact?: { path?: string; sha256?: string; media_type?: string }
   }>
-  reply_to_id?: string
+  reply_to?: { message_id: string; excerpt: string }
   reactions?: Array<{ emoji: string; count: number }>
+  reaction_revision?: number
 }
 
 function toBubble(message: ServerMessage): {
   id: string
+  requestId?: string
   sequence: number
   role: 'user' | 'assistant'
   speaker: string
   content: string
   createdAt: string
-  replyToId?: string
+  replyTo?: { messageId: string; excerpt: string }
   reactions: Array<{ emoji: string; count: number }>
+  reactionRevision: number
   attachments: Array<{
     name: string
     path: string
@@ -1054,13 +1110,17 @@ function toBubble(message: ServerMessage): {
   if (!content.trim() && attachments.length === 0) return null
   return {
     id: message.id,
+    ...(message.client_request_id ? { requestId: message.client_request_id } : {}),
     sequence: message.sequence,
     role: message.sender_kind === 'user' ? 'user' : 'assistant',
     speaker: message.sender_bot_id ?? '',
     content: content.trim() || attachments.map((item) => item.name).join('、'),
     createdAt: message.created_at,
-    ...(message.reply_to_id ? { replyToId: message.reply_to_id } : {}),
+    ...(message.reply_to
+      ? { replyTo: { messageId: message.reply_to.message_id, excerpt: message.reply_to.excerpt } }
+      : {}),
     reactions: message.reactions ?? [],
+    reactionRevision: message.reaction_revision ?? 0,
     attachments,
   }
 }

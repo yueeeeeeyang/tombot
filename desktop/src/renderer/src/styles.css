@@ -314,11 +314,17 @@ button:disabled {
   -webkit-user-drag: none;
 }
 .profile-copy {
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 13px;
   color: var(--text-secondary);
+}
+.profile-copy > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .profile-copy small {
   display: flex;
@@ -439,6 +445,7 @@ button:disabled {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+  overflow-anchor: none;
   scroll-padding-top: 80px;
 }
 .conversation {
@@ -518,6 +525,7 @@ button:disabled {
   white-space: pre-wrap;
 }
 .composer-area {
+  --composer-card-gap: 6px;
   padding: 8px 16px 16px;
   flex-shrink: 0;
   position: relative;
@@ -629,34 +637,56 @@ button:disabled {
   padding: 5px;
 }
 .error-banner {
-  position: fixed;
-  bottom: 78px;
-  left: calc(var(--sidebar-width) + 16px);
-  right: 16px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: var(--warning-background);
-  color: var(--warning-text);
+  gap: 10px;
+  margin: 0 0 var(--composer-card-gap);
   padding: 10px 12px;
-  border: 1px solid var(--warning-border);
-  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text-secondary);
   font-size: 12px;
-  z-index: 20;
-  box-shadow: 0 4px 20px #00000009;
+  line-height: 1.5;
+  box-shadow: 0 4px 20px #0000000c;
 }
-.error-banner svg {
-  flex-shrink: 0;
+.error-banner-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  color: var(--warning-text);
+}
+.error-banner-text {
+  flex: 1;
+  min-width: 0;
+  max-height: 120px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
 }
 .error-banner button {
-  margin-left: auto;
-  flex-shrink: 0;
-  background: transparent;
-  border: 0;
-  color: var(--warning-text);
-  font-size: 12px;
-  display: flex;
+  display: inline-flex;
   align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 28px;
+  flex: 0 0 auto;
+  margin-left: 2px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+}
+.error-banner button:hover,
+.error-banner button:focus-visible {
+  background: var(--hover);
+  color: var(--text);
 }
 .fatal-error {
   padding: 80px 24px;

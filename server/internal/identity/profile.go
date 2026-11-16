@@ -106,7 +106,7 @@ func (service *Service) UpdateProfile(ctx context.Context, principal Principal, 
 
 // UserAvatar 只返回当前会话用户的头像；nil 表示使用默认头像，失效会话或数据库故障返回错误。
 func (service *Service) UserAvatar(ctx context.Context, principal Principal) ([]byte, error) {
-	if principal.Scope != "web" {
+	if principal.Scope != "web" && principal.Scope != "desktop" {
 		return nil, ErrInvalidSession
 	}
 	var content []byte

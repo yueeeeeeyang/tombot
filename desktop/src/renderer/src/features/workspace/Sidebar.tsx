@@ -1,4 +1,4 @@
-import type { GroupSummary } from '../desktop/backend'
+import type { GroupSummary, UserProfile } from '../desktop/backend'
 import { GroupAvatar } from '../../components/GroupAvatar'
 import { ChevronRight, MessageSquarePlus, Plus, Search, Settings, UserPlus } from 'lucide-react'
 import {
@@ -19,6 +19,7 @@ import type { SidebarPreferences } from './sidebarPreferences'
 
 /** 显示置顶区、分组助手与当前会话入口；右键菜单只上报目标与坐标。 */
 export function Sidebar({
+  userProfile,
   workspace,
   preferences,
   isCollapsed,
@@ -42,6 +43,7 @@ export function Sidebar({
   connectionStatus,
   onError,
 }: {
+  userProfile?: UserProfile
   workspace: Workspace
   preferences: SidebarPreferences
   isCollapsed: boolean
@@ -67,6 +69,7 @@ export function Sidebar({
 }) {
   const { collapsed, toggle, error: collapseError } = useCollapsedGroups(onError)
   const serverHost = hostOf(serverUrl)
+  const displayName = userProfile?.displayName || userProfile?.username || '用户信息'
   // 主猫由服务端 leadAgentId 固定。当前会话不能顶上去，否则点击会和置顶位交换。
   const lead = workspace.agents.find((agent) => agent.id === workspace.leadAgentId)
   const { hiddenIds, pinnedIds, unreadIds } = preferences
@@ -249,14 +252,14 @@ export function Sidebar({
         <button
           className="profile-button"
           onClick={onWorkspace}
-          aria-label="我的工作空间"
-          title="我的工作空间"
+          aria-label="用户信息"
+          title={displayName}
         >
           <span className="profile-avatar">
-            <img src={workspaceCat} alt="" draggable={false} />
+            <img src={userProfile?.avatar || workspaceCat} alt="" draggable={false} />
           </span>
           <span className="profile-copy">
-            <span>我的工作空间</span>
+            <span>{displayName}</span>
             {serverHost && (
               <small>
                 <i

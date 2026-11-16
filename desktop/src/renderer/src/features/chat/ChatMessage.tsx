@@ -1,5 +1,5 @@
 import { MarkdownMessage } from './MarkdownMessage'
-import { Ellipsis, FileText, Reply, Smile } from 'lucide-react'
+import { Clock3, Ellipsis, FileText, Reply, Smile } from 'lucide-react'
 import {
   useEffect,
   useState,
@@ -63,7 +63,11 @@ export function ChatMessage({
       </button>
     </div>
   )
-  const status = needsStatus ? (
+  const status = isPending ? (
+    <span className="message-status message-pending" role="status" aria-label="发送中">
+      <Clock3 size={14} aria-hidden="true" />
+    </span>
+  ) : needsStatus ? (
     <button
       type="button"
       className="message-status"
@@ -87,7 +91,7 @@ export function ChatMessage({
           {message.role === 'user' && actions}
           {message.role === 'user' && status}
           <div
-            className={`message-bubble ${message.role === 'user' ? 'user-bubble' : 'assistant-bubble'}`}
+            className={`message-bubble ${message.role === 'user' ? 'user-bubble' : 'assistant-bubble'}${message.replyTo ? ' has-quote' : ''}`}
           >
             {message.replyTo && (
               <button
@@ -96,7 +100,13 @@ export function ChatMessage({
                 aria-label={`查看原消息：${message.replyTo.excerpt}`}
                 onClick={() => onReveal(message.replyTo!.messageId)}
               >
-                <span aria-hidden="true">{message.replyTo.excerpt}</span>
+                <span className="message-quote-heading" aria-hidden="true">
+                  <Reply size={12} />
+                  引用消息
+                </span>
+                <span className="message-quote-excerpt" aria-hidden="true">
+                  {message.replyTo.excerpt}
+                </span>
               </button>
             )}
             {speaker && message.role === 'assistant' ? (
