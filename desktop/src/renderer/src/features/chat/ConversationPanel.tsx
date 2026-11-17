@@ -1,3 +1,4 @@
+import { parseGroupFilePath } from '../../../../shared/groupFiles'
 import { readGroupHistory } from './groupHistory'
 import { ReplyPreview } from './ReplyPreview'
 import { GroupAvatar } from '../../components/GroupAvatar'
@@ -48,12 +49,20 @@ export function ConversationPanel({
   const [messages, setMessages] = useState<ServerBubble[]>([])
   const [draft, setDraft] = useState('')
   const [mentions, setMentions] = useState<string[]>([])
+  const uploadIds = useRef(new WeakMap<File, string>())
   const { pending, setPending, addFiles, isUploading, uploading } = useAttachments(async (file) => {
     const upload = getBackend().uploadAttachment
     if (!upload) throw new Error('还不能添加附件。')
+    const requestId = uploadIds.current.get(file) ?? ulid()
+    uploadIds.current.set(file, requestId)
     const uploaded = await upload(
-      { name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) },
-      { shared: true },
+      {
+        name: file.name,
+        type: file.type,
+        bytes: new Uint8Array(await file.arrayBuffer()),
+        requestId,
+      },
+      { groupId: id },
     )
     return {
       name: file.name,
@@ -366,6 +375,17 @@ export function ConversationPanel({
                           void reactToMessage(messageId, emoji)
                         }}
                         onReveal={(messageId) => void reveal(messageId)}
+                        onDownload={(attachment) => {
+                          void (async () => {
+                            try {
+                              const { groupId, fileId } = parseGroupFilePath(attachment.path)
+                              if (await getBackend().downloadGroupFile(groupId, fileId))
+                                onNotice('文件已保存。')
+                            } catch (failure) {
+                              onError(failure instanceof Error ? failure.message : '文件下载失败。')
+                            }
+                          })()
+                        }}
                         onPreview={(attachment) =>
                           getBackend().previewAttachment?.(attachment.path) ?? Promise.resolve('')
                         }

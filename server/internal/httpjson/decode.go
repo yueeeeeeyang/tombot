@@ -20,11 +20,19 @@ type Failure struct {
 
 // Decode 要求单个 UTF-8 JSON 对象并拒绝未知字段；读取及关闭失败均明确返回错误。
 func Decode(r *http.Request, target any, maxBytes int64) *Failure {
+	return decode(r, target, maxBytes, 1<<20)
+}
+
+// DecodeAttachment 仅供显式附件上传路由使用；正文上限允许有限二进制的 Base64 膨胀，普通 JSON 接口仍限 1 MB。
+func DecodeAttachment(r *http.Request, target any, maxBytes int64) *Failure {
+	return decode(r, target, maxBytes, 24<<20)
+}
+func decode(r *http.Request, target any, maxBytes, maximum int64) *Failure {
 	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
 		return &Failure{415, "JSON_REQUIRED", "请使用 JSON 请求"}
 	}
-	if maxBytes < 1 || maxBytes > 1<<20 || r.Body == nil {
+	if maxBytes < 1 || maxBytes > maximum || r.Body == nil {
 		return &Failure{400, "BODY_INVALID", "请求内容限制无效"}
 	}
 	encoded, readErr := io.ReadAll(io.LimitReader(r.Body, maxBytes+1))

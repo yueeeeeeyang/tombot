@@ -124,8 +124,18 @@ contextBridge.exposeInMainWorld(
       listGroups: () => invoke('desktop:groups'),
       createGroup: (name: string, memberIds: string[], requestId: string) =>
         invoke('desktop:group-create', { name, memberIds, requestId }),
-      listGroupArtifacts: (id: string, before?: number) =>
-        invoke('desktop:group-artifacts', { id, before }),
+      listGroupFiles: (id: string, before?: string, query?: string) =>
+        invoke('desktop:group-files', { id, before, query }),
+      uploadGroupFile: (id: string, file: { name: string; bytes: Uint8Array }, requestId: string) =>
+        invoke('desktop:group-file-upload', { id, file, requestId }),
+      previewGroupFile: (id: string, fileId: string) =>
+        invoke('desktop:group-file-preview', { id, fileId }),
+      downloadGroupFile: (id: string, fileId: string) =>
+        invoke('desktop:group-file-download', { id, fileId }),
+      renameGroupFile: (id: string, fileId: string, revision: number, name: string) =>
+        invoke('desktop:group-file-rename', { id, fileId, revision, name }),
+      deleteGroupFile: (id: string, fileId: string, revision: number) =>
+        invoke('desktop:group-file-delete', { id, fileId, revision }),
       groupDetail: (id: string) => invoke('desktop:group', id),
       deleteGroup: (id: string, revision: number) =>
         invoke('desktop:group-delete', { id, revision }),
@@ -155,8 +165,8 @@ contextBridge.exposeInMainWorld(
           mentions,
         }),
       uploadAttachment: (
-        file: { name: string; type: string; bytes: Uint8Array },
-        destination: { botId?: string; shared?: boolean },
+        file: { name: string; type: string; bytes: Uint8Array; requestId?: string },
+        destination: { botId?: string; shared?: boolean; groupId?: string },
       ) => invoke('desktop:upload', { ...file, ...destination }),
       previewAttachment: (path: string, botId?: string) =>
         invoke('desktop:preview', { path, botId }),

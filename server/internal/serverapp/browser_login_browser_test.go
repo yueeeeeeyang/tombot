@@ -95,7 +95,8 @@ func TestDesktopBrowserLogin(t *testing.T) {
 		}
 	}()
 	script := `
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 const { chromium, _electron } = await import(process.argv[1]);
@@ -751,6 +752,71 @@ try {
       await groupPanel.getByRole('textbox', { name: '搜索猫咪名称', exact: true }).press('Escape');
     }
   }
+  stage = '群资料库上传真实文件';
+  await groupPanel.getByRole('tab', { name: '资料库', exact: true }).click();
+  await groupPanel.getByText('资料库还是空的。上传文件，或在群聊中分享附件。').waitFor();
+  const libraryText = '共享项目资料：上传、预览、下载与持久化。';
+  await groupPanel.getByLabel('选择群文件').setInputFiles([
+    {name:'群资料.txt',mimeType:'text/plain',buffer:Buffer.from(libraryText)},
+    {name:'设计预览.png',mimeType:'image/png',buffer:Buffer.from(avatarPNG,'base64')},
+    {name:'用于核对超长中文文件名称省略显示与按钮布局的设计说明文档.txt',mimeType:'text/plain',buffer:Buffer.from('设计说明')}
+  ]);
+  await groupPanel.getByRole('button', {name:'预览 群资料.txt',exact:true}).waitFor();
+  await groupPanel.getByText('已上传 3 个文件', {exact:true}).waitFor();
+  for (const width of [1073,860]) {
+    await application.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows()[0].setContentSize(width,780),width);
+    for (const theme of ['light','dark']) {
+      await window.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+      if (!(await groupPanel.evaluate(panel=>panel.scrollWidth<=panel.clientWidth && [...panel.querySelectorAll('.group-library-files li')].every(row=>row.scrollWidth<=row.clientWidth)))) throw new Error('群资料库布局溢出');
+      if(settings.screenshots) await groupPanel.screenshot({path:join(settings.screenshots,'group-library-'+theme+'-'+width+'.png'),animations:'disabled'});
+    }
+  }
+  stage = '群资料库图片预览';
+  await groupPanel.getByRole('button',{name:'预览 设计预览.png',exact:true}).click();
+  const imagePreview=window.getByRole('dialog',{name:'文件预览',exact:true});
+  await imagePreview.getByRole('img',{name:'设计预览.png',exact:true}).evaluate(image=>image.decode());
+  await imagePreview.getByRole('button',{name:'关闭弹窗',exact:true}).click();
+  stage = '群资料库文本预览与真实保存';
+  await groupPanel.getByRole('button',{name:'预览 群资料.txt',exact:true}).click();
+  const filePreview=window.getByRole('dialog',{name:'文件预览',exact:true});
+  await filePreview.getByText(libraryText,{exact:true}).waitFor();
+  const downloadDirectory=mkdtempSync(join(tmpdir(),'tombot-library-download-'));
+  const downloadPath=join(downloadDirectory,'群资料.txt');
+  try {
+    await application.evaluate(({dialog},filePath)=>{dialog.showSaveDialog=async()=>({canceled:false,filePath});},downloadPath);
+    await filePreview.getByRole('button',{name:'下载文件',exact:true}).click();
+    await filePreview.getByText('文件已保存。',{exact:true}).waitFor();
+    if(readFileSync(downloadPath,'utf8')!==libraryText) throw new Error('下载文件内容不一致');
+  } finally {rmSync(downloadDirectory,{recursive:true,force:true});}
+  await filePreview.getByRole('button',{name:'关闭弹窗',exact:true}).click();
+  stage = '群文件重命名搜索与重新加载';
+  await groupPanel.getByRole('button',{name:'重命名 群资料.txt',exact:true}).click();
+  const renameFile=window.getByRole('dialog',{name:'重命名文件',exact:true});
+  await renameFile.getByRole('textbox',{name:'文件名称',exact:true}).fill('更新后的群资料.txt');
+  await renameFile.getByRole('button',{name:'保存名称',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor();
+  await groupPanel.getByRole('textbox',{name:'搜索群文件',exact:true}).fill('不存在');
+  await groupPanel.getByRole('button',{name:'搜索文件',exact:true}).click();
+  await groupPanel.getByText('没有找到匹配的文件。',{exact:true}).waitFor();
+  await window.reload();
+  await window.getByRole('button',{name:'协作群',exact:true}).click();
+  await window.getByRole('button',{name:'查看协作群群资料',exact:true}).click();
+  await groupPanel.getByRole('tab',{name:'资料库',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor();
+  stage = '群聊附件自动收录';
+  await groupPanel.getByRole('button',{name:'关闭群资料',exact:true}).click();
+  await window.locator('#group-file').setInputFiles({name:'聊天附件.txt',mimeType:'text/plain',buffer:Buffer.from('附件内容')});
+  await window.locator('.composer-files').getByText('聊天附件.txt',{exact:true}).waitFor();
+  await window.getByRole('textbox',{name:'给协作群发消息',exact:true}).fill('请查看附件');
+  await window.getByRole('button',{name:'发送',exact:true}).click();
+  await window.getByRole('button',{name:'下载 聊天附件.txt',exact:true}).waitFor();
+  await window.getByRole('button',{name:'查看协作群群资料',exact:true}).click();
+  await groupPanel.getByRole('tab',{name:'资料库',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 聊天附件.txt',exact:true}).waitFor();
+  stage = '群资料库确认删除';
+  await groupPanel.getByRole('button',{name:'删除 更新后的群资料.txt',exact:true}).click();
+  await window.getByRole('dialog',{name:'删除文件',exact:true}).getByRole('button',{name:'确认删除',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor({state:'detached'});
   await groupPanel.getByRole('button', { name: '关闭群资料', exact: true }).click();
   stage = '设置退出登录撤销真实会话';
   await window.getByRole('button', { name: '打开设置', exact: true }).click();
@@ -795,7 +861,7 @@ try {
         (SELECT count(*) FROM tombot.message_reactions WHERE user_id=u.id),
         (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]')
         FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions)
-	if err != nil || bots != 1 || messages != 1 || runs != 6 || reactions != 0 || interactions != 2 {
+	if err != nil || bots != 1 || messages != 1 || runs != 7 || reactions != 0 || interactions != 2 {
 		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 错误=%v", bots, messages, runs, reactions, interactions, err)
 	}
 	t.Log(string(output))

@@ -153,8 +153,41 @@ export class MemoryBackend implements DesktopBackend {
     this.pristine = false
   }
 
-  listGroupArtifacts(): ReturnType<DesktopBackend['listGroupArtifacts']> {
-    return Promise.resolve({ artifacts: [], next: 0 })
+  listGroupFiles(
+    ..._args: Parameters<DesktopBackend['listGroupFiles']>
+  ): ReturnType<DesktopBackend['listGroupFiles']> {
+    void _args
+    return Promise.resolve({
+      files: [],
+      next: '',
+      used_bytes: 0,
+      max_bytes: 256 * 1024 * 1024,
+      max_file_bytes: 16 * 1024 * 1024,
+    })
+  }
+  uploadGroupFile(
+    ..._args: Parameters<DesktopBackend['uploadGroupFile']>
+  ): ReturnType<DesktopBackend['uploadGroupFile']> {
+    void _args
+    return Promise.reject(new Error('请连接服务端后上传。'))
+  }
+  previewGroupFile(
+    ..._args: Parameters<DesktopBackend['previewGroupFile']>
+  ): ReturnType<DesktopBackend['previewGroupFile']> {
+    void _args
+    return Promise.reject(new Error('文件不存在。'))
+  }
+  downloadGroupFile(..._args: Parameters<DesktopBackend['downloadGroupFile']>): Promise<boolean> {
+    void _args
+    return Promise.reject(new Error('文件不存在。'))
+  }
+  renameGroupFile(..._args: Parameters<DesktopBackend['renameGroupFile']>): Promise<void> {
+    void _args
+    return Promise.reject(new Error('文件不存在。'))
+  }
+  deleteGroupFile(..._args: Parameters<DesktopBackend['deleteGroupFile']>): Promise<void> {
+    void _args
+    return Promise.reject(new Error('文件不存在。'))
   }
 
   listTasks(): Promise<CatTask[]> {

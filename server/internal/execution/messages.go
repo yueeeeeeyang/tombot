@@ -28,7 +28,7 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 		if kind == "group" {
 			return service.sendGroupInput(ctx, transaction, principal.UserID, conversationID, request, nil, &submitted)
 		}
-		if len(request.Mentions) > 0 {
+		if len(request.Mentions) > 0 || len(request.FileIDs) > 0 {
 			return ErrInvalidInput
 		}
 		return service.submitInput(ctx, transaction, principal.UserID, conversationID, request, nil, "chat", &submitted)

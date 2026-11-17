@@ -104,7 +104,12 @@ func (service *Service) sendGroupInput(ctx context.Context, tx *sql.Tx, user, co
 	if err != nil {
 		return err
 	}
-	contextBlocks, err := json.Marshal(messageForModel(Message{SenderKind: "user", Blocks: inputBlocks(request, reaction), ReplyTo: reply}).Blocks)
+	attachments, err := groupFileBlocks(ctx, tx, user, conversation, request.FileIDs)
+	if err != nil {
+		return err
+	}
+	blocks := append(inputBlocks(request, reaction), attachments...)
+	contextBlocks, err := json.Marshal(messageForModel(Message{SenderKind: "user", Blocks: blocks, ReplyTo: reply}).Blocks)
 	if err != nil {
 		return err
 	}
@@ -130,7 +135,6 @@ func (service *Service) sendGroupInput(ctx context.Context, tx *sql.Tx, user, co
 	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.turns(user_id,id,conversation_id,sequence,client_request_id,request_digest,source,status,finished_at) VALUES($1,$2,$3,$4,$5,$6,'group',$7,CASE WHEN $7='succeeded' THEN clock_timestamp() END)`, user, submitted.TurnID, conversation, turnSequence, request.ClientRequestID, digest[:], status); err != nil {
 		return err
 	}
-	blocks := inputBlocks(request, reaction)
 	blocks[0].Mentions = mentions
 	if err = writeGroupMessage(ctx, tx, user, conversation, submitted.TurnID, "", "", submitted.MessageID, request.ReplyToID, blocks, "complete"); err != nil {
 		return err

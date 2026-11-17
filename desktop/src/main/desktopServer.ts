@@ -1,7 +1,16 @@
 import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
+import { groupFilePath, parseGroupFilePath, type GroupFile } from '../shared/groupFiles'
+import {
+  listGroupFiles,
+  uploadGroupFile,
+  previewGroupFile,
+  readGroupFile,
+  renameGroupFile,
+  deleteGroupFile,
+} from './groupFiles'
 import { listTasks } from './tasks'
 import { loginResultPage } from './loginResultPage'
-import { app, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
+import { app, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -793,10 +802,40 @@ export function registerDesktopIpc(): void {
         return groupDetail(input.id)
       }),
   )
-  // 群组产物属于 v1 语义，v2 尚无对应能力；明确拒绝而不是返回空列表。
-  ipcMain.handle('desktop:group-artifacts', () =>
+  ipcMain.handle(
+    'desktop:group-files',
+    (_event, input: { id: string; before?: string; query?: string }) =>
+      handle(() => listGroupFiles(call, input.id, input.before, input.query)),
+  )
+  ipcMain.handle(
+    'desktop:group-file-upload',
+    (_event, input: { id: string; file: { name: string; bytes: Uint8Array }; requestId: string }) =>
+      handle(() => uploadGroupFile(call, input.id, input.file, input.requestId)),
+  )
+  ipcMain.handle('desktop:group-file-preview', (_event, input: { id: string; fileId: string }) =>
+    handle(() => previewGroupFile(call, input.id, input.fileId)),
+  )
+  ipcMain.handle(
+    'desktop:group-file-rename',
+    (_event, input: { id: string; fileId: string; revision: number; name: string }) =>
+      handle(() => renameGroupFile(call, input.id, input.fileId, input.revision, input.name)),
+  )
+  ipcMain.handle(
+    'desktop:group-file-delete',
+    (_event, input: { id: string; fileId: string; revision: number }) =>
+      handle(() => deleteGroupFile(call, input.id, input.fileId, input.revision)),
+  )
+  ipcMain.handle('desktop:group-file-download', (_event, input: { id: string; fileId: string }) =>
     handle(async () => {
-      throw Object.assign(new Error('群组资料库暂不可用。'), { code: 'NOT_AVAILABLE' })
+      const { file, bytes } = await readGroupFile(call, input.id, input.fileId)
+      const selected = await dialog.showSaveDialog({
+        title: '保存群文件',
+        defaultPath: join(app.getPath('downloads'), file.name),
+        buttonLabel: '保存',
+      })
+      if (selected.canceled || !selected.filePath) return false
+      await writeFile(selected.filePath, bytes)
+      return true
     }),
   )
   ipcMain.handle('desktop:group', (_event, id: string) => handle(() => groupDetail(id)))
@@ -856,6 +895,8 @@ export function registerDesktopIpc(): void {
         bytes: Uint8Array
         botId?: string
         shared?: boolean
+        groupId?: string
+        requestId?: string
       },
     ) => handle(() => uploadFile(input)),
   )
@@ -1022,6 +1063,7 @@ type ServerMessage = {
     text?: string
     task_result?: boolean
     mentions?: Array<{ id: string; name: string }>
+    group_file?: GroupFile
     artifact?: { path?: string; sha256?: string; media_type?: string }
   }>
   reply_to?: { message_id: string; excerpt: string }
@@ -1055,6 +1097,21 @@ function toBubble(message: ServerMessage): {
     .map((block) => block.text ?? '')
     .join('')
   const attachments = (message.blocks ?? []).flatMap((block) => {
+    if (block.kind === 'group_file' && block.group_file) {
+      const file = block.group_file
+      return [
+        {
+          name: file.name,
+          path: groupFilePath(file),
+          sha256: file.sha256,
+          mediaType: file.media_type,
+          kind:
+            file.media_type === 'image/png' || file.media_type === 'image/jpeg'
+              ? ('image' as const)
+              : ('file' as const),
+        },
+      ]
+    }
     if (block.kind !== 'artifact' || !block.artifact?.path || !block.artifact.sha256) return []
     const name = block.artifact.path.split('/').pop() || block.artifact.path
     const mediaType = block.artifact.media_type ?? ''
@@ -1099,7 +1156,13 @@ async function uploadFile(input: {
   bytes: Uint8Array
   botId?: string
   shared?: boolean
+  groupId?: string
+  requestId?: string
 }): Promise<{ path: string; sha256: string }> {
+  if (input.groupId) {
+    const file = await uploadGroupFile(call, input.groupId, input, input.requestId ?? '')
+    return { path: groupFilePath(file), sha256: file.sha256 }
+  }
   await loadSession()
   const form = new FormData()
   form.append(
@@ -1128,6 +1191,12 @@ async function uploadFile(input: {
 }
 
 async function previewFile(path: string, botId?: string): Promise<string> {
+  if (path.startsWith('group-files/')) {
+    const { groupId, fileId } = parseGroupFilePath(path)
+    const preview = await previewGroupFile(call, groupId, fileId)
+    if (!preview.image) throw new Error('该文件没有图片预览，请在群资料库下载。')
+    return preview.image
+  }
   await loadSession()
   const query = path.startsWith('shared/')
     ? `scope=shared&path=${encodeURIComponent(path)}`

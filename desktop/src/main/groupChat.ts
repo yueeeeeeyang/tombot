@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { parseGroupFilePath } from '../shared/groupFiles'
 
 type Call = (method: string, path: string, body?: unknown) => Promise<unknown>
 const groupSchema = z.object({
@@ -92,13 +93,14 @@ export async function sendGroupMessage(
     mentions: string[]
   },
 ): Promise<{ acceptedMessageId: string }> {
-  if (input.attachments.length) throw new Error('当前群聊发送暂不支持附件。')
+  const fileIds = input.attachments.map((attachment) => parseGroupFilePath(attachment.path).fileId)
   const accepted = parseResponse(
     z.object({ submission: z.object({ message_id: z.string().min(1) }) }),
     await call('POST', `/conversations/${encodeURIComponent(input.conversationId)}/messages`, {
       client_request_id: input.requestId,
       content: input.content,
       mentions: input.mentions,
+      ...(fileIds.length ? { file_ids: fileIds } : {}),
       ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
     }),
   )

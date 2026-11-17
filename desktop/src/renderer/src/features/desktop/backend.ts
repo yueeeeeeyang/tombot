@@ -1,5 +1,5 @@
 import type { CatTask } from '../../../../shared/tasks'
-import type { Artifact } from '../workspace/model'
+import type { GroupFile, GroupFilePage, GroupFilePreview } from '../../../../shared/groupFiles'
 import type { Agent, AppWorkspace, NewAgent } from '../workspace/model'
 
 export interface StreamEvent {
@@ -136,10 +136,16 @@ export interface DesktopBackend {
   deleteTask?: (agentId: string, id: string, revision: number) => Promise<void>
   listGroups?: () => Promise<GroupSummary[]>
   createGroup?: (name: string, memberIds: string[], requestId: string) => Promise<GroupSummary>
-  listGroupArtifacts: (
+  listGroupFiles: (id: string, before?: string, query?: string) => Promise<GroupFilePage>
+  uploadGroupFile: (
     id: string,
-    before?: number,
-  ) => Promise<{ artifacts: Artifact[]; next: number }>
+    file: { name: string; bytes: Uint8Array },
+    requestId: string,
+  ) => Promise<GroupFile>
+  previewGroupFile: (id: string, fileId: string) => Promise<GroupFilePreview>
+  downloadGroupFile: (id: string, fileId: string) => Promise<boolean>
+  renameGroupFile: (id: string, fileId: string, revision: number, name: string) => Promise<void>
+  deleteGroupFile: (id: string, fileId: string, revision: number) => Promise<void>
   groupDetail?: (id: string) => Promise<GroupDetail>
   deleteGroup?: (id: string, revision: number) => Promise<void>
   conversationActivity?: (id: string) => Promise<{ runs: AgentConversation['runs'] }>
@@ -160,8 +166,8 @@ export interface DesktopBackend {
     requestId: string,
   ) => Promise<DeliveryResult>
   uploadAttachment?: (
-    file: { name: string; type: string; bytes: Uint8Array },
-    destination: { botId?: string; shared?: boolean },
+    file: { name: string; type: string; bytes: Uint8Array; requestId?: string },
+    destination: { botId?: string; shared?: boolean; groupId?: string },
   ) => Promise<{ path: string; sha256: string }>
   previewAttachment?: (path: string, botId?: string) => Promise<string>
   setReaction: (

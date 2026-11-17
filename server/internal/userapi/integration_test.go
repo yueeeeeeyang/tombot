@@ -20,6 +20,7 @@ import (
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/execution"
+	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
@@ -388,6 +389,47 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	}
 	if result := decode[groupReply](t, call("POST", "/api/v2/groups", groupRequest, first, nil), 200); result.IsCreated || result.Group.ID != group.Group.ID {
 		t.Fatal("群组重试不幂等")
+	}
+	fileRequest := grouplibrary.Upload{ClientRequestID: ids.New(), Name: "接口资料.txt", Content: []byte("真实群文件内容")}
+	uploaded := decode[struct {
+		File grouplibrary.File `json:"file"`
+	}](t, call("POST", groupPath+"/files", fileRequest, first, nil), 200).File
+	filePath := groupPath + "/files/" + uploaded.ID
+	files := decode[grouplibrary.Page](t, call("GET", groupPath+"/files?q=接口", nil, first, nil), 200)
+	if len(files.Files) != 1 || files.Files[0].ID != uploaded.ID {
+		t.Fatal("资料库目录错误")
+	}
+	content := decode[grouplibrary.Content](t, call("GET", filePath+"/content", nil, first, nil), 200)
+	if string(content.Bytes) != "真实群文件内容" {
+		t.Fatal("文件内容损坏")
+	}
+	for _, path := range []string{groupPath + "/files", filePath + "/content"} {
+		if response := call("GET", path, nil, second, nil); response.status != 404 {
+			t.Fatal("跨用户群文件泄漏", response.status)
+		}
+		if response := call("GET", path, nil, "", nil); response.status != 401 {
+			t.Fatal("匿名群文件泄漏", response.status)
+		}
+	}
+	for _, query := range []string{"?before=bad", "?q=a&q=b", "?path=other", "?q=%00"} {
+		if response := call("GET", groupPath+"/files"+query, nil, first, nil); response.status != 400 {
+			t.Fatal("无效文件查询被接受", query, response.status)
+		}
+	}
+	renamed := decode[struct {
+		File grouplibrary.File `json:"file"`
+	}](t, call("PUT", filePath, map[string]any{"expected_revision": 1, "name": "新资料.txt"}, first, nil), 200).File
+	if renamed.Revision != 2 {
+		t.Fatal("重命名缺少版本推进")
+	}
+	if response := call("DELETE", filePath, map[string]any{"expected_revision": 1}, first, nil); response.status != 409 {
+		t.Fatal("旧版本删除未拒绝", response.status)
+	}
+	if response := call("DELETE", filePath, map[string]any{"expected_revision": 2}, first, nil); response.status != 204 {
+		t.Fatal("删除文件失败", response.status)
+	}
+	if response := call("GET", filePath+"/content", nil, first, nil); response.status != 404 {
+		t.Fatal("已删除文件仍可读", response.status)
 	}
 	groupSpec := group.Group.GroupSpec
 	groupSpec.Name = "更新的工作组"

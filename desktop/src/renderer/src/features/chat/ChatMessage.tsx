@@ -21,6 +21,7 @@ export function ChatMessage({
   onReact,
   onReveal,
   onPreview,
+  onDownload,
 }: {
   message: ChatMessageModel
   speaker?: string
@@ -32,6 +33,7 @@ export function ChatMessage({
   onRetry: (messageId: string) => void
   onReact: (messageId: string, emoji: string) => void
   onReveal: (messageId: string) => void
+  onDownload?: (attachment: MessageAttachment) => void
   onPreview?: (attachment: MessageAttachment) => Promise<string>
 }) {
   const needsStatus = !isPending && (message.status === 'unsent' || message.status === 'failed')
@@ -129,7 +131,12 @@ export function ChatMessage({
               <div className="message-text">{message.content}</div>
             )}
             {message.attachments?.map((attachment) => (
-              <MessageFile key={attachment.path} attachment={attachment} onPreview={onPreview} />
+              <MessageFile
+                key={attachment.path}
+                attachment={attachment}
+                onPreview={onPreview}
+                onDownload={onDownload}
+              />
             ))}
             {message.reactions.length > 0 && (
               <div className="reaction-pills">
@@ -164,31 +171,64 @@ export function ChatMessage({
 function MessageFile({
   attachment,
   onPreview,
+  onDownload,
 }: {
   attachment: MessageAttachment
+  onDownload?: (attachment: MessageAttachment) => void
   onPreview?: (attachment: MessageAttachment) => Promise<string>
 }) {
   const [preview, setPreview] = useState('')
+  const [previewError, setPreviewError] = useState('')
   useEffect(() => {
     if (attachment.kind !== 'image' || !onPreview) return
     let cancelled = false
     void onPreview(attachment).then(
       (url) => {
-        if (!cancelled) setPreview(url)
+        if (!cancelled) {
+          setPreview(url)
+          setPreviewError('')
+        }
       },
-      () => undefined,
+      () => {
+        if (!cancelled) setPreviewError('图片暂时无法预览，请下载文件。')
+      },
     )
     return () => {
       cancelled = true
     }
   }, [attachment, onPreview])
-  if (attachment.kind === 'image' && preview) {
-    return <img className="message-image" src={preview} alt={attachment.name} />
-  }
+  const content =
+    attachment.kind === 'image' && preview ? (
+      <img
+        className="message-image"
+        src={preview}
+        alt={attachment.name}
+        onError={() => {
+          setPreview('')
+          setPreviewError('图片暂时无法预览，请下载文件。')
+        }}
+      />
+    ) : (
+      <>
+        <FileText size={14} />
+        <span>{attachment.name}</span>
+      </>
+    )
   return (
-    <p className="message-file">
-      <FileText size={14} />
-      <span>{attachment.name}</span>
-    </p>
+    <>
+      {onDownload ? (
+        <button
+          type="button"
+          className="message-file"
+          aria-label={`下载 ${attachment.name}`}
+          onClick={() => onDownload(attachment)}
+        >
+          {content}
+        </button>
+      ) : (
+        <p className="message-file">{content}</p>
+      )}
+      {previewError && <small role="status">{previewError}</small>}
+    </>
   )
 }

@@ -10,11 +10,13 @@ import (
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/groupchat"
+	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/provider"
 )
 
 type SendRequest struct {
+	FileIDs         []string `json:"file_ids,omitempty"`
 	ClientRequestID string   `json:"client_request_id"`
 	Content         string   `json:"content"`
 	ReplyToID       string   `json:"reply_to_id,omitempty"`
@@ -27,6 +29,7 @@ type Submission struct {
 	IsCreated bool   `json:"is_created"`
 }
 type Block struct {
+	GroupFile  *grouplibrary.File      `json:"group_file,omitempty"`
 	BotMessage *botmessaging.Reference `json:"bot_message,omitempty"`
 	Mentions   []groupchat.Mention     `json:"mentions,omitempty"`
 	TaskResult bool                    `json:"task_result,omitempty"`

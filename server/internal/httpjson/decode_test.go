@@ -57,3 +57,41 @@ func TestDecodeInputBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestAttachmentJSONLimits(t *testing.T) {
+	body := `{"name":"` + strings.Repeat("a", 2<<20) + `"}`
+	for _, large := range []bool{false, true} {
+		request := httptest.NewRequest("POST", "https://example.test", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		var target struct {
+			Name string `json:"name"`
+		}
+		var failure *Failure
+		if large {
+			failure = DecodeAttachment(request, &target, 3<<20)
+		} else {
+			failure = Decode(request, &target, 3<<20)
+		}
+		if large && (failure != nil || len(target.Name) != 2<<20) {
+			t.Fatal("附件有界正文未通过", failure)
+		}
+		if !large && failure == nil {
+			t.Fatal("普通 JSON 上限被扩大")
+		}
+	}
+	for _, body := range []string{`{} {}`, `{"unknown":true}`, `null`, `{"name":"123456"}`} {
+		request := httptest.NewRequest("POST", "https://example.test", strings.NewReader(body))
+		request.Header.Set("Content-Type", "application/json")
+		var target struct {
+			Name string `json:"name"`
+		}
+		if DecodeAttachment(request, &target, 16) == nil {
+			t.Fatal("附件解码放过无效正文")
+		}
+	}
+	request := httptest.NewRequest("POST", "https://example.test", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	if DecodeAttachment(request, new(any), 24<<20+1) == nil {
+		t.Fatal("附件没有最大上限")
+	}
+}
