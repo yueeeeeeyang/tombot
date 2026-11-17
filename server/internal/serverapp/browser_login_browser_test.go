@@ -7,10 +7,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io.yueyang/tom/internal/scheduledtasks"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,6 +54,46 @@ func TestDesktopBrowserLogin(t *testing.T) {
 	defer clear(input)
 	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
 	defer cancel()
+	seeded := make(chan error, 1)
+	go func() {
+		timer := time.NewTicker(20 * time.Millisecond)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				seeded <- ctx.Err()
+				return
+			case <-timer.C:
+			}
+			var user, bot string
+			err := fixture.pool.QueryRowContext(ctx, `SELECT b.user_id,b.id FROM tombot.bots b JOIN tombot.users u ON u.id=b.user_id WHERE u.username=$1 AND b.name='侧栏猫咪'`, fixture.username).Scan(&user, &bot)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				seeded <- err
+				return
+			}
+			tx, err := fixture.pool.BeginTx(ctx, nil)
+			if err != nil {
+				seeded <- err
+				return
+			}
+			_, err = scheduledtasks.Save(ctx, tx, user, bot, "", 0, scheduledtasks.Definition{Name: "工作日报", Prompt: "总结今天完成的工作，列出明天的重点。", Cron: "0 18 * * *", Timezone: "Asia/Shanghai", IsEnabled: true})
+			if err != nil {
+				seeded <- errors.Join(err, tx.Rollback())
+				return
+			}
+			seeded <- tx.Commit()
+			return
+		}
+	}()
+	defer func() {
+		cancel()
+		if err := <-seeded; err != nil && !errors.Is(err, context.Canceled) {
+			t.Error("准备真实任务卡片失败", err)
+		}
+	}()
 	script := `
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -557,6 +600,64 @@ try {
   await window.getByRole('button', { name: '查看侧栏猫咪资料', exact: true }).click();
   const catPanel = window.getByRole('complementary', { name: '侧栏猫咪', exact: true });
   if (await catPanel.getByText('模型策略', { exact: true }).count() || await catPanel.getByText('由服务端管理', { exact: true }).count()) throw new Error('猫咪详情仍显示模型策略');
+  stage = '猫咪详情整合电脑和定时卡片';
+  if (await catPanel.getByRole('tab').count() !== 2 || await catPanel.getByText('介绍', { exact: true }).count()) throw new Error('旧介绍或独立页签仍存在');
+  if (await catPanel.getByText('名称', {exact:true}).count() || await catPanel.getByText('分组', {exact:true}).count()) throw new Error('动态仍显示名称或分组');
+  await catPanel.getByRole('switch', {name: '禁用工作日报', exact:true}).waitFor();
+  if (await window.evaluate(() => 'loadIntroduction' in window.desktop.backend)) throw new Error('客户端仍暴露介绍请求');
+  const computerCard = catPanel.getByRole('button', { name: '侧栏猫咪的电脑', exact: true });
+  await computerCard.waitFor();
+  if (await computerCard.getAttribute('aria-expanded') !== 'false') throw new Error('电脑配置没有默认收起');
+  stage = '展开详情电脑卡片';
+  await computerCard.press('Enter');
+  await catPanel.getByRole('textbox', { name: '远端电脑地址', exact: true }).waitFor();
+  await computerCard.press('Enter');
+  if (await catPanel.getByRole('textbox', { name: '远端电脑地址', exact: true }).isVisible()) throw new Error('电脑卡片不能收起');
+  stage = '详情页签键盘切换';
+  await catPanel.getByRole('tab', { name: '动态', exact: true }).focus();
+  await window.keyboard.press('ArrowRight');
+  await catPanel.getByRole('tab', { name: '资料库', selected: true }).waitFor();
+  await window.keyboard.press('ArrowRight');
+  await catPanel.getByRole('tab', { name: '动态', selected: true }).waitFor();
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      await catPanel.getByRole('region', { name: '电脑', exact: true }).waitFor();
+      await catPanel.getByRole('region', { name: '任务', exact: true }).waitFor();
+      stage = '详情卡片布局 ' + theme + ' ' + width;
+      const fits = await catPanel.evaluate(panel => {
+        const card = panel.querySelector('.computer-card').getBoundingClientRect();
+        const preview = panel.querySelector('.computer-preview').getBoundingClientRect();
+        const copy = panel.querySelector('.computer-card-copy').getBoundingClientRect();
+        const routine = panel.querySelector('.task-pane').getBoundingClientRect();
+        const body = panel.querySelector('.cat-panel-body');
+        return {height: card.height, previewWidth: preview.width, previewHeight: preview.height, gap: preview.left-copy.right, inset: card.right-preview.right, leftOffset: card.left-routine.left, widthOffset: card.width-routine.width, overflow: body.scrollWidth-body.clientWidth};
+      });
+      if (!(fits.height>=70 && fits.height<=80 && Math.abs(fits.previewWidth-64)<1 && Math.abs(fits.previewHeight-40)<1 && fits.gap>=0 && fits.inset>0 && Math.abs(fits.leftOffset)<1 && Math.abs(fits.widthOffset)<1 && fits.overflow<=0)) { process.stderr.write('详情卡片布局：' + JSON.stringify(fits) + '\n'); throw new Error('详情卡片尺寸、排列或宽度不符合要求'); }
+      const toggle = await catPanel.getByRole('switch', {name:'禁用工作日报',exact:true}).evaluate(element => {
+        const track = element.getBoundingClientRect();
+        const thumb = element.querySelector('span').getBoundingClientRect();
+        return track.width === 34 && track.height === 20 && thumb.width === 16 && thumb.height === 16 && thumb.left > track.left + 10 && thumb.right < track.right;
+      });
+      if (!toggle) throw new Error('任务开关轨道或滑块尺寸错误');
+      await catPanel.getByRole('heading', {name:'侧栏猫咪',exact:true}).click();
+      await window.mouse.move(400, 120);
+      if (settings.screenshots) await catPanel.screenshot({ path: join(settings.screenshots, 'cat-details-' + theme + '-' + width + '.png'), animations: 'disabled' });
+    }
+  }
+
+  stage = '任务卡片禁用启用和删除';
+  await catPanel.getByRole('switch', {name:'禁用工作日报',exact:true}).click();
+  await catPanel.getByRole('switch', {name:'启用工作日报',exact:true}).waitFor();
+  await window.getByRole('button', {name:'关闭猫咪面板',exact:true}).click();
+  await window.getByRole('button', {name:'查看侧栏猫咪资料',exact:true}).click();
+  await catPanel.getByRole('switch', {name:'启用工作日报',exact:true}).waitFor();
+  await catPanel.getByRole('switch', {name:'启用工作日报',exact:true}).click();
+  await catPanel.getByRole('switch', {name:'禁用工作日报',exact:true}).waitFor();
+  await catPanel.getByRole('button', {name:'管理工作日报',exact:true}).click();
+  await catPanel.getByRole('menuitem', {name:'删除',exact:true}).click();
+  await catPanel.getByText('还没有任务',{exact:true}).waitFor();
   await window.getByRole('button', { name: '关闭猫咪面板', exact: true }).click();
   stage = '通用设置账号与招聘页签布局';
   for (const width of [1073, 860]) {

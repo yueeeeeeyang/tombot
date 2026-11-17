@@ -1675,7 +1675,7 @@ test('消息菜单、悬停按钮、回复、表情和时间分隔', async () =>
   await expect(quote).toBeVisible()
 })
 
-test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', async () => {
+test('点击顶部猫咪打开右侧面板，动态整合电脑和任务卡片', async () => {
   const artifacts = artifactsRoot
   await mkdir(artifacts, { recursive: true })
   const trigger = window.getByRole('button', { name: '查看小黑资料', exact: true })
@@ -1719,52 +1719,33 @@ test('点击顶部猫咪打开右侧面板，页签可切换并记住模型', as
   expect(closeBox.height).toBe(createBox.height)
   await window.screenshot({ path: `${artifacts}/panel-close-compare.png`, scale: 'css' })
   await expect(trigger).toHaveAttribute('aria-expanded', 'true')
-  await expect(panel.getByRole('tab', { name: '详情', selected: true })).toBeVisible()
-  await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveText('GPT-4o')
+  await expect(panel.getByRole('tab', { name: '动态', selected: true })).toBeVisible()
+  await expect(panel.getByText('介绍', { exact: true })).toHaveCount(0)
+  await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveCount(0)
   await window.screenshot({ path: `${artifacts}/cat-panel-details.png`, scale: 'css' })
   await panel.getByRole('tab', { name: '资料库', exact: true }).click()
   await expect(panel.getByRole('status')).toContainText('资料库还是空的')
-  const emptyStyles = await panel.getByRole('status').evaluate((element) => {
-    const style = getComputedStyle(element)
-    return {
-      padding: style.padding,
-      border: style.border,
-      borderRadius: style.borderRadius,
-      textAlign: style.textAlign,
-    }
-  })
   await window.screenshot({ path: `${artifacts}/cat-panel-library.png`, scale: 'css' })
-  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
-  await expect(panel.getByRole('status')).toContainText('未连接')
+  await panel.getByRole('tab', { name: '动态', exact: true }).click()
+  await panel.getByRole('button', { name: '小黑的电脑', exact: true }).click()
+  await expect(
+    panel.getByRole('region', { name: '电脑', exact: true }).getByRole('status'),
+  ).toContainText('未连接')
   await expect(panel.getByRole('button', { name: '开始准备', exact: true })).toBeVisible()
   await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
   await expect(panel.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0)
-  await expect(panel.getByRole('tab')).toHaveCount(4)
-  await panel.getByRole('tab', { name: '定时', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('还没有定时任务')
-  expect(
-    await panel.getByRole('status').evaluate((element) => {
-      const style = getComputedStyle(element)
-      return {
-        padding: style.padding,
-        border: style.border,
-        borderRadius: style.borderRadius,
-        textAlign: style.textAlign,
-      }
-    }),
-  ).toEqual(emptyStyles)
+  await expect(panel.getByRole('tab')).toHaveCount(2)
+  await panel.getByRole('tab', { name: '动态', exact: true }).click()
+  await expect(
+    panel.getByRole('region', { name: '任务', exact: true }).getByRole('status'),
+  ).toContainText('还没有任务')
+  await expect(panel.getByRole('region', { name: '任务', exact: true })).toBeVisible()
   await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
   await window.screenshot({ path: `${artifacts}/cat-routines.png`, scale: 'css' })
   await trigger.click()
   await expect(panel).toHaveCount(0)
   await trigger.click()
-  await panel.getByRole('combobox', { name: '模型', exact: true }).click()
-  await window.getByRole('option', { name: 'Claude Sonnet', exact: true }).click()
-  await reloadPersisted()
-  await trigger.click()
-  await expect(panel.getByRole('combobox', { name: '模型', exact: true })).toHaveText(
-    'Claude Sonnet',
-  )
+  await expect(panel.getByRole('tab', { name: '动态', selected: true })).toBeVisible()
   await window.keyboard.press('Escape')
   await expect(panel).toHaveCount(0)
 })
@@ -1806,8 +1787,11 @@ test('资料库按时间分组展示产物，电脑在没有地址时保持未�
   await window.screenshot({ path: `${artifacts}/cat-panel-library-grouped.png`, scale: 'css' })
   await panel.getByRole('button', { name: '展开', exact: true }).click()
   await expect(panel.getByText('今天的文件 1')).toBeVisible()
-  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await panel.getByRole('tab', { name: '动态', exact: true }).click()
+  await panel.getByRole('button', { name: '小黑的电脑', exact: true }).click()
+  await expect(
+    panel.getByRole('region', { name: '电脑', exact: true }).getByRole('status'),
+  ).toHaveText('未连接')
   await window.screenshot({ path: `${artifacts}/cat-panel-computer.png`, scale: 'css' })
   await panel.getByLabel('远端电脑地址').fill('javascript:alert(1)')
   await panel.getByRole('button', { name: '保存地址', exact: true }).click()
@@ -1819,10 +1803,15 @@ test('连接电脑使用这只猫咪的工作区，断开后回到未连接', as
   await mkdir(artifacts, { recursive: true })
   await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
   const panel = window.getByRole('complementary', { name: '小黑' })
-  await panel.getByRole('tab', { name: '电脑', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await panel.getByRole('tab', { name: '动态', exact: true }).click()
+  await panel.getByRole('button', { name: '小黑的电脑', exact: true }).click()
+  await expect(
+    panel.getByRole('region', { name: '电脑', exact: true }).getByRole('status'),
+  ).toHaveText('未连接')
   await panel.getByRole('button', { name: '连接电脑', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('运行中')
+  await expect(
+    panel.getByRole('region', { name: '电脑', exact: true }).getByRole('status'),
+  ).toHaveText('已连接')
   await expect(panel.getByTitle('小黑的远端电脑')).toBeVisible()
   const view = window.frameLocator('[title="小黑的远端电脑"]')
   await expect(view.getByRole('heading', { name: '引导' })).toBeVisible()
@@ -1835,7 +1824,9 @@ test('连接电脑使用这只猫咪的工作区，断开后回到未连接', as
   await panel.getByRole('button', { name: '全屏查看', exact: true }).click()
   await expect(panel.getByRole('button', { name: '还原', exact: true })).toBeVisible()
   await panel.getByRole('button', { name: '断开', exact: true }).click()
-  await expect(panel.getByRole('status')).toHaveText('未连接')
+  await expect(
+    panel.getByRole('region', { name: '电脑', exact: true }).getByRole('status'),
+  ).toHaveText('未连接')
   await window.screenshot({ path: `${artifacts}/computer-disconnected.png`, scale: 'css' })
 })
 
@@ -1863,15 +1854,8 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
     await window.getByRole('button', { name: '查看小黑资料', exact: true }).click()
     const panel = window.getByRole('complementary', { name: '小黑' })
     await expect(panel.getByRole('tab', { name: '记忆', exact: true })).toHaveCount(0)
-    await expect(
-      panel.getByText('熟悉你的晨跑习惯，会贴心地安排周三的提醒。', { exact: true }),
-    ).toBeVisible()
-    await window.screenshot({
-      path: `${artifacts}/cat-introduction.png`,
-      scale: 'css',
-      animations: 'disabled',
-    })
-    await panel.getByRole('tab', { name: '定时', exact: true }).click()
+    await expect(panel.getByText('介绍', { exact: true })).toHaveCount(0)
+    await panel.getByRole('tab', { name: '动态', exact: true }).click()
     await expect(panel.getByText('晨跑提醒', { exact: true })).toBeVisible()
     await expect(panel.getByRole('button', { name: '添加定时任务' })).toHaveCount(0)
     await window.screenshot({ path: `${artifacts}/cat-routines.png`, scale: 'css' })
@@ -1881,7 +1865,9 @@ test('对话里记住一件事并创建定时任务后，界面能看到、能�
     await expect(window.getByRole('menuitem', { name: '删除' })).toBeVisible()
     await window.screenshot({ path: `${artifacts}/cat-routine-menu.png`, scale: 'css' })
     await window.getByRole('menuitem', { name: '删除' }).click()
-    await expect(panel.getByRole('status')).toHaveText('还没有定时任务')
+    await expect(
+      panel.getByRole('region', { name: '任务', exact: true }).getByRole('status'),
+    ).toContainText('还没有任务')
   } finally {
     await model.close()
   }

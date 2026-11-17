@@ -128,7 +128,7 @@ func (service *Service) ListConversations(ctx context.Context, principal identit
 	}
 	conversations := make([]Conversation, 0, limit)
 	err := service.transaction(ctx, principal, false, func(transaction *sql.Tx) (result error) {
-		rows, err := transaction.QueryContext(ctx, `SELECT `+conversationColumns+` FROM tombot.conversations WHERE user_id=$1 AND is_archived=$2 AND ($3='' OR id<$3) ORDER BY id DESC LIMIT $4`, principal.UserID, archived, before, limit)
+		rows, err := transaction.QueryContext(ctx, `SELECT `+conversationColumns+` FROM tombot.conversations WHERE user_id=$1 AND kind<>'task' AND is_archived=$2 AND ($3='' OR id<$3) ORDER BY id DESC LIMIT $4`, principal.UserID, archived, before, limit)
 		if err != nil {
 			return err
 		}

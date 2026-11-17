@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
 
 	"io.yueyang/tom/internal/botagent"
@@ -25,7 +26,7 @@ func (tool memoryTool) Schema() provider.ToolSchema { return tool.schema }
 func (memoryTool) UsesComputer() bool               { return false }
 func (memoryTool) RequiresVision() bool             { return false }
 
-func decodeMemoryInput(arguments string, target any, schema provider.ToolSchema) error {
+func decodeToolInput(arguments string, target any, schema provider.ToolSchema) error {
 	var properties map[string]json.RawMessage
 	var contract struct {
 		Required   []string                   `json:"required"`
@@ -43,8 +44,21 @@ func decodeMemoryInput(arguments string, target any, schema provider.ToolSchema)
 		}
 	}
 	for _, name := range contract.Required {
-		if value, ok := properties[name]; !ok || string(value) == "null" {
+		value, ok := properties[name]
+		if !ok {
 			return botmemory.ErrInput
+		}
+		if string(value) == "null" {
+			var property struct {
+				Type json.RawMessage `json:"type"`
+			}
+			if err := json.Unmarshal(contract.Properties[name], &property); err != nil {
+				return err
+			}
+			var types []string
+			if json.Unmarshal(property.Type, &types) != nil || !slices.Contains(types, "null") {
+				return botmemory.ErrInput
+			}
 		}
 	}
 	decoder := json.NewDecoder(strings.NewReader(arguments))
@@ -62,7 +76,7 @@ func decodeMemoryInput(arguments string, target any, schema provider.ToolSchema)
 func memoryPermitted(ctx context.Context, tx *sql.Tx, lease Lease) (bool, error) {
 	var allowed bool
 	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.conversations c JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id
-		WHERE c.user_id=$1 AND c.id=$2 AND c.bot_id=$3 AND c.kind='direct' AND NOT c.is_archived AND NOT b.is_archived AND jsonb_array_length(b.tool_permissions)>0)`, lease.UserID, lease.ConversationID, lease.BotID).Scan(&allowed)
+		WHERE c.user_id=$1 AND c.id=$2 AND c.bot_id=$3 AND c.kind IN ('direct','task') AND NOT c.is_archived AND NOT b.is_archived AND jsonb_array_length(b.tool_permissions)>0)`, lease.UserID, lease.ConversationID, lease.BotID).Scan(&allowed)
 	return allowed, err
 }
 
@@ -127,13 +141,13 @@ func (tool memoryTool) Execute(ctx context.Context, invocation Invocation) (bota
 		var output any
 		if invocation.Call.Name == "memory_search" {
 			var query botmemory.Query
-			if err = decodeMemoryInput(invocation.Call.Arguments, &query, tool.schema); err != nil {
+			if err = decodeToolInput(invocation.Call.Arguments, &query, tool.schema); err != nil {
 				return err
 			}
 			output, err = botmemory.Search(ctx, tx, lease.UserID, lease.BotID, query)
 		} else {
 			var change botmemory.Change
-			if err = decodeMemoryInput(invocation.Call.Arguments, &change, tool.schema); err != nil {
+			if err = decodeToolInput(invocation.Call.Arguments, &change, tool.schema); err != nil {
 				return err
 			}
 			deleting := invocation.Call.Name == "memory_delete"

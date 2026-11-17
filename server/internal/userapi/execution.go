@@ -40,7 +40,9 @@ func (handler *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 	if submission.IsCreated {
 		status = http.StatusAccepted
 	}
-	w.Header().Set("Location", "/api/v2/runs/"+submission.RunID)
+	if submission.RunID != "" {
+		w.Header().Set("Location", "/api/v2/runs/"+submission.RunID)
+	}
 	handler.respond(w, r, status, map[string]any{"submission": submission})
 }
 

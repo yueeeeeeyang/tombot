@@ -202,6 +202,9 @@ func (service *Service) UpdateGroup(ctx context.Context, principal identity.Prin
 	}
 	var group Group
 	err = service.transaction(ctx, principal, true, func(transaction *sql.Tx) error {
+		if err := lockGroupConversation(ctx, transaction, principal.UserID, id); err != nil {
+			return err
+		}
 		current, err := readGroup(ctx, transaction, principal.UserID, id)
 		if err != nil {
 			return err
@@ -245,6 +248,9 @@ func (service *Service) SetGroupArchived(ctx context.Context, principal identity
 	}
 	var group Group
 	err := service.transaction(ctx, principal, true, func(transaction *sql.Tx) error {
+		if err := lockGroupConversation(ctx, transaction, principal.UserID, id); err != nil {
+			return err
+		}
 		var err error
 		group, err = readGroup(ctx, transaction, principal.UserID, id)
 		if err != nil {
@@ -272,4 +278,10 @@ func (service *Service) SetGroupArchived(ctx context.Context, principal identity
 		return Group{}, err
 	}
 	return group, nil
+}
+
+// lockGroupConversation 与消息受理及发言收尾使用同一会话锁，避免移出成员和公开发言交错提交。
+func lockGroupConversation(ctx context.Context, tx *sql.Tx, userID, groupID string) error {
+	var conversation string
+	return tx.QueryRowContext(ctx, `SELECT id FROM tombot.conversations WHERE user_id=$1 AND group_id=$2 AND kind='group' FOR UPDATE`, userID, groupID).Scan(&conversation)
 }

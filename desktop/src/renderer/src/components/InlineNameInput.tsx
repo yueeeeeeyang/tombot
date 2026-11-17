@@ -11,7 +11,7 @@ export function InlineNameInput({
 }: {
   initialName: string
   label: string
-  onCommit: (name: string) => boolean
+  onCommit: (name: string) => boolean | Promise<boolean>
   onCancel: () => void
   className?: string
   maxLength?: number
@@ -36,10 +36,15 @@ export function InlineNameInput({
       return
     }
     isFinishing.current = true
-    if (!onCommit(name)) {
-      isFinishing.current = false
-      input.current?.focus({ preventScroll: true })
+    const result = onCommit(name)
+    const completed = (saved: boolean) => {
+      if (!saved) {
+        isFinishing.current = false
+        input.current?.focus({ preventScroll: true })
+      }
     }
+    if (result instanceof Promise) void result.then(completed)
+    else completed(result)
   }
 
   return (

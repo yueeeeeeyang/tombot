@@ -116,18 +116,20 @@ contextBridge.exposeInMainWorld(
           ipcRenderer.removeListener('desktop:bootstrap-status', listener)
         }
       },
-      loadIntroduction: (agentId: string) => invoke('desktop:introduction', agentId),
-      listRoutines: (agentId: string) => invoke('desktop:routines', agentId),
-      setRoutineEnabled: (id: string, revision: number, enabled: boolean) =>
-        invoke('desktop:routine-enabled', { id, revision, enabled }),
-      deleteRoutine: (id: string, revision: number) =>
-        invoke('desktop:routine-delete', { id, revision }),
+      listTasks: (agentId: string) => invoke('desktop:tasks', agentId),
+      setTaskEnabled: (agentId: string, id: string, revision: number, enabled: boolean) =>
+        invoke('desktop:task-enabled', { agentId, id, revision, enabled }),
+      deleteTask: (agentId: string, id: string, revision: number) =>
+        invoke('desktop:task-delete', { agentId, id, revision }),
       listGroups: () => invoke('desktop:groups'),
-      createGroup: (name: string, memberIds: string[]) =>
-        invoke('desktop:group-create', { name, memberIds }),
+      createGroup: (name: string, memberIds: string[], requestId: string) =>
+        invoke('desktop:group-create', { name, memberIds, requestId }),
       listGroupArtifacts: (id: string, before?: number) =>
         invoke('desktop:group-artifacts', { id, before }),
       groupDetail: (id: string) => invoke('desktop:group', id),
+      deleteGroup: (id: string, revision: number) =>
+        invoke('desktop:group-delete', { id, revision }),
+      conversationActivity: (id: string) => invoke('desktop:conversation-activity', id),
       renameGroup: (id: string, revision: number, name: string) =>
         invoke('desktop:group-rename', { id, revision, name }),
       addGroupMembers: (id: string, revision: number, botIds: string[]) =>
@@ -142,25 +144,16 @@ contextBridge.exposeInMainWorld(
         attachments: Array<{ path: string; sha256: string }>,
         replyToId: string | undefined,
         mentions: string[],
-        onEvent?: (event: StreamEvent) => void,
-      ) => {
-        const requestId = crypto.randomUUID()
-        const listener = (
-          _event: IpcRendererEvent,
-          payload: StreamEvent & { requestId: string },
-        ) => {
-          if (payload.requestId === requestId) onEvent?.(payload)
-        }
-        ipcRenderer.on('desktop:stream-event', listener)
-        return invoke('desktop:conversation-send', {
+        requestId: string,
+      ) =>
+        invoke('desktop:conversation-send', {
           requestId,
           conversationId,
           content,
           attachments,
           replyToId,
           mentions,
-        }).finally(() => ipcRenderer.removeListener('desktop:stream-event', listener))
-      },
+        }),
       uploadAttachment: (
         file: { name: string; type: string; bytes: Uint8Array },
         destination: { botId?: string; shared?: boolean },

@@ -14,9 +14,11 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"io.yueyang/tom/internal/botmemory"
+	"io.yueyang/tom/internal/groupchat"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/modelusage"
+	"io.yueyang/tom/internal/scheduledtasks"
 	"io.yueyang/tom/internal/store/postgres"
 )
 
@@ -99,7 +101,10 @@ func translate(err error) error {
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
+	if errors.Is(err, groupchat.ErrMention) {
+		return groupchat.ErrMention
+	}
+	for _, known := range []error{scheduledtasks.ErrInput, scheduledtasks.ErrNotFound, scheduledtasks.ErrConflict, scheduledtasks.ErrCapacity, ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}
@@ -120,6 +125,18 @@ func translate(err error) error {
 	return errors.New("运行事务失败")
 }
 func event(ctx context.Context, transaction *sql.Tx, userID, kind, id string, payload any) error {
+	// 后台执行事件不能让前台把当前聊天误判为结束或正在回答。
+	if strings.HasPrefix(kind, "run.") {
+		var background, group bool
+		if err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.jobs WHERE user_id=$1 AND run_id=$2 AND execution_kind='task'),EXISTS(SELECT 1 FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2)`, userID, id).Scan(&background, &group); err != nil {
+			return err
+		}
+		if background {
+			kind = "task." + kind
+		} else if group {
+			kind = "group." + kind
+		}
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err

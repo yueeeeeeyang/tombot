@@ -13,6 +13,9 @@
 | `GET/POST /api/v2/bots` | 分页目录或原子创建机器人、稳定桌面身份及唯一单聊 |
 | `GET/PUT /api/v2/bots/{botID}` | 详情或按期望修订替换配置 |
 | `POST /api/v2/bots/{botID}/state` | 归档或恢复 |
+| `GET /api/v2/bots/{botID}/tasks?before=` | 当前猫咪任务，固定每页 20 条，返回下一页游标 |
+| `POST /api/v2/bots/{botID}/tasks/{taskID}/state` | 必填 `expected_revision`、`is_enabled`，启用或禁用任务 |
+| `DELETE /api/v2/bots/{botID}/tasks/{taskID}` | 必填 `expected_revision`，停止后续计划并保留执行审计 |
 | `GET/PUT/DELETE /api/v2/bots/{botID}/avatar` | 读取、替换或删除用户自己的自定义 PNG |
 | `GET/POST /api/v2/groups` | 分页目录或幂等创建群组、成员与唯一群聊 |
 | `GET/PUT /api/v2/groups/{groupID}` | 详情或原子替换群组配置和成员 |
@@ -34,9 +37,9 @@
 
 机器人响应中的 `desktop_id` 由服务器登记，同键重试、归档恢复和电脑重建都保持稳定。创建或修改请求不能提供该字段，也不能指定 `linux_uid`、`shared_gid` 或 `display_number`。桌面 ID 仅标识资源，不能替代执行授权。
 
-发送消息使用 `client_request_id` 和 `content`，整个 JSON 上限 64 KiB，文本上限 32 KiB。首次持久入队返回 `202`，原请求重试返回 `200`，响应 `submission` 包含回合、运行、消息 ID 与 `is_created`，`Location` 指向运行。受理不表示模型已经执行。活动会话、队列满和同键不同内容返回明确 `409`；群聊和 Bot 私信需要各自编排入口，当前发送接口明确拒绝。已读必须显式提交 `sequence`，不接受未来序号。
+发送消息使用 `client_request_id` 和 `content`，整个 JSON 上限 64 KiB，文本上限 32 KiB。首次持久入队返回 `202`，原请求重试返回 `200`，响应 `submission` 包含回合、运行、消息 ID 与 `is_created`；有运行 ID 时，`Location` 指向该运行。受理不表示模型已经执行。单聊活动回合冲突、队列满和同键不同内容返回明确 `409`；群聊通过同一接口按消息创建独立回合，Bot 私信仍明确拒绝。已读必须显式提交 `sequence`，不接受未来序号。
 
-表情请求使用 `client_request_id`、`emoji` 和必填布尔值 `is_active`，JSON 上限 4 KiB；返回 `200` 与更新后的 `message`，包括 `reactions` 和 `reaction_revision`。相同幂等键重放返回当前状态，不覆盖后续取消；目标状态未变不重复触发模型。只支持当前用户的单聊完整文本消息；隐藏交互或跨用户目标返回 `404`，非法表情、缺失状态返回 `400`，容量失败整体回滚。具体执行、迁移和回滚见[表情说明](../execution/README.md#消息表情)。
+表情请求使用 `client_request_id`、`emoji` 和必填布尔值 `is_active`，JSON 上限 4 KiB；返回 `200` 与更新后的 `message`，包括 `reactions` 和 `reaction_revision`。相同幂等键重放返回当前状态，不覆盖后续取消；目标状态未变不重复触发模型。只支持当前用户的单聊或群聊完整文本消息；隐藏交互或跨用户目标返回 `404`，非法表情、缺失状态返回 `400`，容量失败整体回滚。具体执行、迁移和回滚见[表情说明](../execution/README.md#消息表情)。
 
 运行响应只包含状态元数据，不包含模型选择、机器人提示词或操作账本。`computer_wait_reason` 为最近一次桌面调度观测：空字符串表示当前没有桌面等待记录，`desktop_busy` 表示所属桌面被占用，`user_capacity` 表示用户并发额度或较早的可执行桌面排队，`starting_desktop` 表示节点启动尚待确认。取消排队任务返回 `canceled`；在途任务返回 `canceling`，之后继续查询实际终态，不能在取消请求返回时假定外部操作已停止。客户端没有领取任务、提交模型结果或自行构造租约的接口，具体约束见 [execution](../execution/README.md)。
 
@@ -52,4 +55,10 @@
 
 联合测试用真实 PostgreSQL、真实身份服务和本地 HTTPS 完成两个账户的激活、登录、创建与修改、分页、头像、群组、会话、工作空间、归档恢复、退出及禁用；并验证消息持久入队、同键重试、运行查询、分页已读、取消及新回合。额外覆盖跨用户消息与运行、正文身份和模型注入、私有调度路由拒绝、未接入会话类型、非法序号与正文、旧修订、管理 Cookie、跨来源、数据库故障脱敏及原有 v1 路径拒绝。
 
-测试中的路由组合用于验证协议，不替代生产启动入口。仍需接通主服务、桌面主进程的账户会话与安全存储、真实事件订阅、Worker 生产配置、群聊及私信编排。归档资源会阻止新运行启动和新操作，Worker 续约时也复验状态；生产部署中的撤销通知仍需完成。
+测试中的路由组合用于验证协议，不替代生产启动入口。群聊完整入口另由真实服务与 Electron 联调覆盖，Bot 私信编排仍未接入。归档资源会阻止新运行启动和新操作，Worker 续约时也复验状态。
+
+## 持久任务
+
+任务列表只接受排他的 ID 游标 `before`。创建和修改任务由猫咪的 `task_create` / `task_update` 工具处理，列表、启停和删除由上述 v2 API 提供。接口绑定登录用户及路径中的猫咪，非法配置返回 400、不存在或跨用户目标返回 404、过期修订返回 409；不接受客户端指定用户。完整定义、执行与延迟投递、迁移和回滚见[持久任务说明](../scheduledtasks/README.md)。
+
+群聊发送支持 `mentions` 成员标识和 `reply_to_id`，与单聊共用持久消息接口，响应包装为 `submission`。普通发言广播，明确提及或引用只触发指定成员；模型公开发言可继续转交。群聊使用独立回合与新增 `0070` 投递账本，详见[群聊接口及升级说明](../../docs/groups.md)。

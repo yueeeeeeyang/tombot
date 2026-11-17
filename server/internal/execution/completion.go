@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/infra/ids"
@@ -65,6 +66,15 @@ func (service *Service) Complete(ctx context.Context, lease Lease, outcome Outco
 
 // finishRun 的调用者必须已锁定队列记录；恢复器也使用相同的终态与事件实现。
 func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Outcome) error {
+	group, err := isGroupRun(ctx, transaction, lease)
+	if err != nil {
+		return err
+	}
+	if group {
+		if err = lockDispatch(ctx, transaction, lease.UserID); err != nil {
+			return err
+		}
+	}
 	// 与消息受理共用会话锁；最终模型调用期间到达的消息会原子转入后续运行。
 	var conversationID string
 	if err := transaction.QueryRowContext(ctx, `SELECT id FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, lease.UserID, lease.ConversationID).Scan(&conversationID); err != nil {
@@ -74,7 +84,35 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 	if err := transaction.QueryRowContext(ctx, `SELECT context_sequence IS NOT NULL AND EXISTS(SELECT 1 FROM tombot.run_inputs i JOIN tombot.messages m ON m.user_id=i.user_id AND m.id=i.message_id WHERE i.user_id=r.user_id AND i.turn_id=r.turn_id AND m.sequence>r.input_sequence) FROM tombot.runs r WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&pending); err != nil {
 		return err
 	}
-	if outcome.Answer != "" {
+	if group {
+		if err = available(ctx, transaction, lease); errors.Is(err, ErrUnavailable) {
+			outcome = Outcome{Status: "failed", ErrorCode: "RESOURCE_UNAVAILABLE"}
+		} else if err != nil {
+			return err
+		}
+		if outcome.Status != "succeeded" && outcome.Answer == "" {
+			var name string
+			if err = transaction.QueryRowContext(ctx, `SELECT bot_snapshot->>'name' FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&name); err != nil {
+				return err
+			}
+			reason := "本次未能完成回复，请稍后重试。"
+			if outcome.ErrorCode == "RESOURCE_UNAVAILABLE" {
+				reason = "本次未能完成回复，请检查群成员和猫咪状态。"
+			}
+			if outcome.Status == "canceled" {
+				reason = "本次回复已取消。"
+			}
+			if err = writeGroupMessage(ctx, transaction, lease.UserID, lease.ConversationID, lease.TurnID, lease.RunID, "", ids.New(), "", []Block{{Kind: "text", Text: "「" + name + "」" + reason}}, "complete"); err != nil {
+				return err
+			}
+		}
+	}
+	if group && outcome.Answer != "" {
+		if err = finishGroupAnswer(ctx, transaction, lease, outcome); err != nil {
+			return err
+		}
+	}
+	if outcome.Answer != "" && !group {
 		var sequence int64
 		if err := transaction.QueryRowContext(ctx, `UPDATE tombot.conversations SET message_sequence=message_sequence+1,revision=revision+1,updated_at=clock_timestamp() WHERE user_id=$1 AND id=$2 RETURNING message_sequence`, lease.UserID, lease.ConversationID).Scan(&sequence); err != nil {
 			return err
@@ -114,6 +152,11 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 			return err
 		}
 	}
+	if group && outcome.Status != "canceled" && outcome.ErrorCode != "RESOURCE_UNAVAILABLE" {
+		if err = followGroupMentions(ctx, transaction, lease); err != nil {
+			return err
+		}
+	}
 	var active, unknown, failed, canceled bool
 	if err := transaction.QueryRowContext(ctx, `SELECT bool_or(status IN ('queued','running','canceling')),bool_or(status='unknown'),bool_or(status='failed'),bool_or(status='canceled')
 		FROM tombot.runs WHERE user_id=$1 AND turn_id=$2`, lease.UserID, lease.TurnID).Scan(&active, &unknown, &failed, &canceled); err != nil {
@@ -139,7 +182,10 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 			return err
 		}
 	}
-	return event(ctx, transaction, lease.UserID, "run.finished", lease.RunID, map[string]string{"status": outcome.Status, "error_code": outcome.ErrorCode, "bot_id": lease.BotID, "conversation_id": lease.ConversationID})
+	if err := event(ctx, transaction, lease.UserID, "run.finished", lease.RunID, map[string]string{"status": outcome.Status, "error_code": outcome.ErrorCode, "bot_id": lease.BotID, "conversation_id": lease.ConversationID}); err != nil {
+		return err
+	}
+	return stageTaskResult(ctx, transaction, lease, outcome)
 }
 
 // Cancel 排队任务立即终止；已领取任务持久请求取消，等待持有者或恢复器收尾。

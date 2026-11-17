@@ -27,6 +27,10 @@ export function Sidebar({
   renamingAgentId,
   editingGroupName,
   onAgentMenu,
+  onGroupMenu,
+  renamingChatId,
+  onRenameChat,
+  onCancelRenameChat,
   onRenameAgent,
   onCancelRenameAgent,
   onRenameGroup,
@@ -50,6 +54,10 @@ export function Sidebar({
   isCollapsed: boolean
   renamingAgentId?: string
   editingGroupName?: string
+  onGroupMenu?: (anchor: CatMenuAnchor) => void
+  renamingChatId?: string
+  onRenameChat?: (id: string, name: string) => Promise<boolean>
+  onCancelRenameChat?: () => void
   onAgentMenu: (anchor: CatMenuAnchor) => void
   onRenameAgent: (id: string, name: string) => boolean
   onCancelRenameAgent: () => void
@@ -86,7 +94,68 @@ export function Sidebar({
     (agent) => agent.id !== lead?.id && !hiddenIds.includes(agent.id),
   )
   const unpinnedAgents = visibleAgents.filter((agent) => !pinnedIds.includes(agent.id))
-  const groups = [...new Set(unpinnedAgents.map((agent) => agent.group))]
+  const visibleChats = chatGroups.filter((group) => !hiddenIds.includes(group.id))
+  const unpinnedChats = visibleChats.filter((group) => !pinnedIds.includes(group.id))
+  const chatCategory = (id: string) => preferences.chatCategories?.[id] ?? '群聊'
+  const groups = [
+    ...new Set([
+      ...unpinnedAgents.map((agent) => agent.group),
+      ...unpinnedChats.map((group) => chatCategory(group.id)),
+    ]),
+  ]
+  function chatButton(group: GroupSummary, pinned = false) {
+    const css = pinned ? 'pinned-agent' : 'agent-button'
+    if (group.id === renamingChatId && onRenameChat && onCancelRenameChat)
+      return (
+        <div className={`${css} is-editing`} key={group.id}>
+          <GroupAvatar presets={group.avatar_presets} />
+          <InlineNameInput
+            initialName={group.name}
+            label="聊天名称"
+            maxLength={48}
+            onCommit={(name) => onRenameChat(group.id, name)}
+            onCancel={onCancelRenameChat}
+          />
+        </div>
+      )
+    return (
+      <button
+        key={group.id}
+        type="button"
+        className={`${css} ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
+        aria-label={`${group.name}${unreadIds.includes(group.id) ? '，未读' : ''}`}
+        onClick={() => onOpenGroup(group.id)}
+        onContextMenu={(event) => {
+          event.preventDefault()
+          onGroupMenu?.({
+            agentId: group.id,
+            x: event.clientX,
+            y: event.clientY,
+            trigger: event.currentTarget,
+          })
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) {
+            event.preventDefault()
+            const box = event.currentTarget.getBoundingClientRect()
+            onGroupMenu?.({
+              agentId: group.id,
+              x: box.left,
+              y: box.bottom,
+              trigger: event.currentTarget,
+            })
+          }
+        }}
+      >
+        <GroupAvatar presets={group.avatar_presets} size={pinned ? 'large' : undefined} />
+        <span className={pinned ? 'pinned-name' : 'agent-copy'}>
+          <span className="agent-name">{group.name}</span>
+          {!pinned && <span className="agent-preview">多只猫咪一起聊</span>}
+        </span>
+        {unreadIds.includes(group.id) && <span className="agent-unread-dot" aria-hidden="true" />}
+      </button>
+    )
+  }
 
   function openAgentMenu(event: ReactMouseEvent<HTMLButtonElement>, agentId: string): void {
     event.preventDefault()
@@ -148,11 +217,16 @@ export function Sidebar({
             onCancelRename={onCancelRenameAgent}
           />
         ))}
+        {visibleChats
+          .filter((group) => pinnedIds.includes(group.id))
+          .map((group) => chatButton(group, true))}
       </div>
       <nav className="agent-groups" aria-label="助手列表">
         {collapseError && <p role="alert">{collapseError}</p>}
         {groups.map((group) => {
           const groupAgents = unpinnedAgents.filter((agent) => agent.group === group)
+          const groupChats = unpinnedChats.filter((chat) => chatCategory(chat.id) === group)
+          const groupCount = groupAgents.length + groupChats.length
           const isGroupCollapsed = collapsed.includes(`cats:${group}`)
           return (
             <section className="agent-group" key={group}>
@@ -170,14 +244,20 @@ export function Sidebar({
                     className="group-toggle"
                     type="button"
                     aria-label={`${isGroupCollapsed ? '展开' : '收起'}${group}分组`}
-                    aria-description={isGroupCollapsed ? `${groupAgents.length} 只猫咪` : undefined}
+                    aria-description={
+                      isGroupCollapsed
+                        ? groupChats.length
+                          ? `${groupCount} 个聊天`
+                          : `${groupCount} 只猫咪`
+                        : undefined
+                    }
                     aria-expanded={!isGroupCollapsed}
                     onClick={() => toggle(`cats:${group}`)}
                   >
                     <span className="group-name">{group}</span>
                     {isGroupCollapsed && (
                       <span className="group-count" aria-hidden="true">
-                        {groupAgents.length}
+                        {groupCount}
                       </span>
                     )}
                     <ChevronRight size={13} aria-hidden="true" />
@@ -199,50 +279,11 @@ export function Sidebar({
                     onCancelRename={onCancelRenameAgent}
                   />
                 ))}
+                {groupChats.map((chat) => chatButton(chat))}
               </div>
             </section>
           )
         })}
-        {chatGroups.length > 0 && (
-          <section className="agent-group">
-            <h2 aria-label="群聊">
-              <button
-                type="button"
-                className="group-toggle"
-                aria-label={`${collapsed.includes('conversations') ? '展开' : '收起'}群聊分组`}
-                aria-expanded={!collapsed.includes('conversations')}
-                aria-description={
-                  collapsed.includes('conversations') ? `${chatGroups.length} 个群聊` : undefined
-                }
-                onClick={() => toggle('conversations')}
-              >
-                <span className="group-name">群聊</span>
-                {collapsed.includes('conversations') && (
-                  <span className="group-count" aria-hidden="true">
-                    {chatGroups.length}
-                  </span>
-                )}
-                <ChevronRight size={13} aria-hidden="true" />
-              </button>
-            </h2>
-            <div hidden={!isCollapsed && collapsed.includes('conversations')}>
-              {chatGroups.map((group) => (
-                <button
-                  key={group.id}
-                  type="button"
-                  className={`agent-button ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
-                  onClick={() => onOpenGroup(group.id)}
-                >
-                  <GroupAvatar presets={group.avatar_presets} />
-                  <span className="agent-copy">
-                    <span className="agent-name">{group.name}</span>
-                    <span className="agent-preview">多只猫咪一起聊</span>
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
-        )}
       </nav>
       <div className="sidebar-footer">
         {isCollapsed && (

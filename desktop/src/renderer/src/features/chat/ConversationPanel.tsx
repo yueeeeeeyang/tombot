@@ -1,3 +1,4 @@
+import { readGroupHistory } from './groupHistory'
 import { ReplyPreview } from './ReplyPreview'
 import { GroupAvatar } from '../../components/GroupAvatar'
 import { ulid } from '../../../../shared/ulid'
@@ -7,14 +8,13 @@ import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { ArrowLeftRight, ArrowUp, Check, ChevronRight, Plus, Users, X } from 'lucide-react'
 import type { CatAvatarId } from '../avatars/presets'
-import type { ServerBubble, IncomingMessages, StreamEvent } from '../desktop/backend'
+import type { ServerBubble, AgentConversation } from '../desktop/backend'
 import { getBackend } from '../desktop/backend'
 import type { Agent, DmNotice } from '../workspace/model'
 import { replyExcerpt } from '../workspace/model'
 import { GroupSidePanel } from './GroupSidePanel'
 import type { GroupDetail } from '../desktop/backend'
 import { WorkStatus } from './WorkStatus'
-import type { WorkStates } from './useWorkActivity'
 import { useAttachments } from './useAttachments'
 import { pasteFiles } from './pasteFiles'
 import { MarkdownMessage } from './MarkdownMessage'
@@ -25,25 +25,19 @@ import { messageTimeSeparator } from './messageTime'
 /** 群聊复用原来的气泡，可以发言和管理成员。猫咪之间的私信不在这里打开。 */
 export function ConversationPanel({
   id,
+  name,
   composerNotice,
   agents,
   onNotice,
   onError,
   onGroupChange,
-  onIncoming,
-  workStates,
-  onExecutionEvent,
-  onExecutionEnd,
 }: {
   id: string
+  name?: string
   composerNotice?: ReactNode
-  workStates: WorkStates
-  onExecutionEvent: (source: string, event: StreamEvent) => void
-  onExecutionEnd: (source: string) => void
   agents: Agent[]
   onNotice: (message: string) => void
   onError: (message: string) => void
-  onIncoming?: (incoming: IncomingMessages) => void
   onGroupChange: (group: GroupDetail) => void
 }) {
   const [title, setTitle] = useState('群聊')
@@ -68,57 +62,101 @@ export function ConversationPanel({
     }
   })
   const [replyToId, setReplyToId] = useState<string>()
-  const [live, setLive] = useState<ServerBubble[]>([])
+  const [runs, setRuns] = useState<AgentConversation['runs']>([])
+  const request = useRef<{ key: string; id: string } | undefined>(undefined)
+  const alive = useRef(true)
+  const nearBottom = useRef(true)
+  const [highlighted, setHighlighted] = useState('')
   const [menu, setMenu] = useState<MessageMenuAnchor>()
   const [isDetailsOpen, setDetailsOpen] = useState(false)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [isLoadingEarlier, setLoadingEarlier] = useState(false)
   const log = useRef<HTMLElement>(null)
   const [busy, setBusy] = useState(false)
-  const workingAgents = agents.filter(
-    (agent) => workStates[agent.id] && group?.members.some((member) => member.bot_id === agent.id),
-  )
+  const workingAgents = agents.filter((agent) => runs.some((run) => run.bot_id === agent.id))
   const names = new Map<string, string>()
   for (const agent of agents) names.set(agent.id, agent.name)
   for (const member of group?.members ?? []) names.set(member.bot_id, member.name)
 
+  const conversationRef = useRef('')
+  const loaded = useRef(false)
+  const latestSequence = useRef(0)
   const reload = useCallback(async () => {
     const backend = getBackend()
-    const detail = await backend.groupDetail?.(id)
-    if (!detail) return
+    if (!backend.groupDetail || !backend.listConversationMessages)
+      throw new Error('群聊服务不可用。')
+    const detail = await backend.groupDetail(id)
+    const [page, activity] = await Promise.all([
+      readGroupHistory(
+        (before) => backend.listConversationMessages!(detail.conversation_id, before),
+        latestSequence.current,
+      ),
+      backend.conversationActivity?.(detail.conversation_id),
+    ])
+    if (!alive.current) return
     setGroup(detail)
-    setTitle(detail.name)
+    setTitle(name ?? detail.name)
+    conversationRef.current = detail.conversation_id
     setConversationId(detail.conversation_id)
-    const page = await backend.listConversationMessages?.(detail.conversation_id)
-    setMessages(page?.messages ?? [])
-    setHasEarlier(page?.hasMore ?? false)
-  }, [id])
+    latestSequence.current = Math.max(latestSequence.current, page.messages.at(-1)?.sequence ?? 0)
+    setMessages((current) => {
+      if (page.replace) return page.messages
+      const merged = new Map(current.map((item) => [item.id, item]))
+      for (const message of page.messages) {
+        if ((merged.get(message.id)?.reactionRevision ?? 0) <= (message.reactionRevision ?? 0))
+          merged.set(message.id, message)
+      }
+      return [...merged.values()].sort((a, b) => a.sequence - b.sequence)
+    })
+    if (!loaded.current || page.replace) {
+      setHasEarlier(page.hasMore)
+      loaded.current = true
+    }
+    setRuns(activity?.runs ?? [])
+  }, [id, name])
 
   useEffect(() => {
-    let cancelled = false
-    const backend = window.desktop?.backend
-    const failed = (failure: Error) => {
-      if (!cancelled) onError(failure.message)
+    alive.current = true
+    let refreshing = false
+    let requested = false
+    async function sync() {
+      if (refreshing) {
+        requested = true
+        return
+      }
+      refreshing = true
+      do {
+        requested = false
+        try {
+          await reload()
+        } catch (failure) {
+          if (alive.current) onError((failure as Error).message)
+        }
+      } while (requested && alive.current)
+      refreshing = false
     }
-    void backend
-      ?.groupDetail?.(id)
-      .then((detail) => {
-        if (cancelled || !detail) return
-        setGroup(detail)
-        setTitle(detail.name)
-        setConversationId(detail.conversation_id)
-        return backend.listConversationMessages?.(detail.conversation_id)
-      })
-      .then((page) => {
-        if (cancelled || !page) return
-        setMessages(page.messages)
-        setHasEarlier(page.hasMore)
-      })
-      .catch(failed)
+    void sync()
+    const unwatch = getBackend().watchEvents?.(
+      (event) => {
+        if (
+          event.kind === 'stream.reset' ||
+          event.payload.conversation_id === conversationRef.current ||
+          event.resource_id === id
+        )
+          void sync()
+      },
+      (failure) => onError(failure.message),
+    )
+    const timer = window.setInterval(() => void sync(), 10_000)
+    const focus = () => void sync()
+    window.addEventListener('focus', focus)
     return () => {
-      cancelled = true
+      alive.current = false
+      unwatch?.()
+      clearInterval(timer)
+      window.removeEventListener('focus', focus)
     }
-  }, [id, onError])
+  }, [id, reload, onError])
 
   // 向前翻页以当前最早一条消息为游标；加载期间禁止重复请求，避免同一页插入多次。
   const loadEarlier = useCallback(async () => {
@@ -128,7 +166,14 @@ export function ConversationPanel({
     try {
       const page = await getBackend().listConversationMessages?.(conversationId, oldest.sequence)
       if (!page) return
-      setMessages((current) => [...page.messages, ...current])
+      const previousHeight = log.current?.scrollHeight ?? 0
+      setMessages((current) => [
+        ...page.messages.filter((item) => !current.some((saved) => saved.id === item.id)),
+        ...current,
+      ])
+      requestAnimationFrame(() => {
+        if (log.current) log.current.scrollTop += log.current.scrollHeight - previousHeight
+      })
       setHasEarlier(page.hasMore)
     } catch (failure) {
       onError((failure as Error).message)
@@ -139,8 +184,8 @@ export function ConversationPanel({
 
   useEffect(() => {
     const element = log.current
-    if (element) element.scrollTop = element.scrollHeight
-  }, [messages, live])
+    if (element && nearBottom.current) element.scrollTop = element.scrollHeight
+  }, [messages])
 
   function bubbleMessage(item: ServerBubble) {
     return {
@@ -161,62 +206,65 @@ export function ConversationPanel({
     const content = draft.trim() || pending.map((item) => item.name).join('、')
     if (!content || !conversationId || busy || uploading.current) return
     setBusy(true)
-    const source = crypto.randomUUID()
-    setLive([])
-    let streamFailure: Error | undefined
+    const key = JSON.stringify({ content, replyToId, mentions, pending })
+    if (request.current?.key !== key) request.current = { key, id: ulid() }
     try {
-      await getBackend().sendConversation?.(
+      const sendMessage = getBackend().sendConversation
+      if (!sendMessage) throw new Error('群聊发送服务不可用。')
+      await sendMessage(
         conversationId,
         content,
         pending.map((item) => ({ path: item.path, sha256: item.sha256 })),
         replyToId,
         mentions,
-        (event) => {
-          if (event.type === 'incoming' && event.incoming) onIncoming?.(event.incoming)
-          onExecutionEvent(source, event)
-          if (event.type === 'delta') {
-            if (!event.messageId || !event.botId) {
-              streamFailure = new Error('群消息缺少发言成员信息。')
-              return
-            }
-            setLive((current) => {
-              const existing = current.find((item) => item.id === event.messageId)
-              if (existing)
-                return current.map((item) =>
-                  item.id === event.messageId
-                    ? { ...item, content: item.content + event.text }
-                    : item,
-                )
-              return [
-                ...current,
-                {
-                  id: event.messageId!,
-                  // 流式气泡尚未落库；只有落库后的消息才带序号，翻页时会用重新读取的结果替换它们。
-                  sequence: 0,
-                  role: 'assistant',
-                  speaker: event.botId!,
-                  content: event.text,
-                  createdAt: new Date().toISOString(),
-                  reactions: [],
-                  attachments: [],
-                },
-              ]
-            })
-          }
-        },
+        request.current.id,
       )
-      if (streamFailure) throw streamFailure
+      request.current = undefined
       setDraft('')
       setMentions([])
       setPending([])
       setReplyToId(undefined)
-      setLive([])
+      nearBottom.current = true
       await reload()
     } catch (failure) {
       onError((failure as Error).message)
     } finally {
-      onExecutionEnd(source)
       setBusy(false)
+    }
+  }
+
+  async function reveal(messageId: string) {
+    let current = messages
+    try {
+      for (
+        let pageIndex = 0;
+        !current.some((item) => item.id === messageId) && pageIndex < 20;
+        pageIndex++
+      ) {
+        const page = await getBackend().listConversationMessages?.(
+          conversationId,
+          current[0]?.sequence,
+        )
+        if (!page?.messages.length) break
+        current = [
+          ...page.messages.filter((item) => !current.some((saved) => saved.id === item.id)),
+          ...current,
+        ]
+        setHasEarlier(page.hasMore)
+        if (!page.hasMore) break
+      }
+      if (!current.some((item) => item.id === messageId))
+        throw new Error('原消息尚未加载，请继续查看更早的消息。')
+      nearBottom.current = false
+      setMessages(current)
+      setHighlighted(messageId)
+      requestAnimationFrame(() =>
+        document
+          .querySelector(`[data-group-message="${CSS.escape(messageId)}"]`)
+          ?.scrollIntoView({ block: 'center', behavior: 'smooth' }),
+      )
+    } catch (failure) {
+      onError((failure as Error).message)
     }
   }
 
@@ -239,10 +287,7 @@ export function ConversationPanel({
       onError(`表情更新失败：${(failure as Error).message}`)
     }
   }
-  const shown = [
-    ...messages,
-    ...live.filter((item) => !messages.some((saved) => saved.id === item.id)),
-  ]
+  const shown = messages
   const menuMessage = menu ? messages.find((message) => message.id === menu.messageId) : undefined
 
   return (
@@ -257,11 +302,19 @@ export function ConversationPanel({
             disabled={!group}
           >
             {group && <GroupAvatar presets={group.avatar_presets} size="small" />}
-            <span>{title}</span>
+            <span>{name ?? title}</span>
             <ChevronRight className="pill-chevron" size={14} aria-hidden="true" />
           </button>
         </header>
-        <section ref={log} className="messages-scroll" aria-label={`与${title}的会话`}>
+        <section
+          ref={log}
+          className="messages-scroll"
+          aria-label={`与${title}的会话`}
+          onScroll={() => {
+            const el = log.current
+            if (el) nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+          }}
+        >
           <div className="conversation">
             <div className="saved-messages" role="log" aria-label={title} aria-live="polite">
               {hasEarlier ? (
@@ -284,33 +337,38 @@ export function ConversationPanel({
                   new Date(),
                 )
                 return (
-                  <div className="message-entry" key={item.id}>
+                  <div className="message-entry" key={item.id} data-group-message={item.id}>
                     {label ? (
                       <div className="time-separator">
                         <time dateTime={item.createdAt}>{label}</time>
                       </div>
                     ) : null}
-                    <ChatMessage
-                      message={bubbleMessage(item)}
-                      speaker={
-                        item.role === 'assistant'
-                          ? names.get(item.speaker) || item.speaker
-                          : undefined
-                      }
-                      isHighlighted={false}
-                      onOpenMenu={(messageId, x, y, trigger) =>
-                        setMenu({ messageId, x, y, trigger })
-                      }
-                      onReply={setReplyToId}
-                      onRetry={() => undefined}
-                      onReact={(messageId, emoji) => {
-                        void reactToMessage(messageId, emoji)
-                      }}
-                      onReveal={() => undefined}
-                      onPreview={(attachment) =>
-                        getBackend().previewAttachment?.(attachment.path) ?? Promise.resolve('')
-                      }
-                    />
+                    {item.isNotice ? (
+                      <p className="group-notice">{item.content}</p>
+                    ) : (
+                      <ChatMessage
+                        mentions={item.mentions}
+                        message={bubbleMessage(item)}
+                        speaker={
+                          item.role === 'assistant'
+                            ? names.get(item.speaker) || item.speaker || '群通知'
+                            : undefined
+                        }
+                        isHighlighted={highlighted === item.id}
+                        onOpenMenu={(messageId, x, y, trigger) =>
+                          setMenu({ messageId, x, y, trigger })
+                        }
+                        onReply={setReplyToId}
+                        onRetry={() => undefined}
+                        onReact={(messageId, emoji) => {
+                          void reactToMessage(messageId, emoji)
+                        }}
+                        onReveal={(messageId) => void reveal(messageId)}
+                        onPreview={(attachment) =>
+                          getBackend().previewAttachment?.(attachment.path) ?? Promise.resolve('')
+                        }
+                      />
+                    )}
                   </div>
                 )
               })}
@@ -347,7 +405,10 @@ export function ConversationPanel({
         >
           {workingAgents.length > 0 && (
             <WorkStatus
-              summary={workStates[workingAgents[0]!.id]!.summary}
+              summary={
+                runs[0]?.progress_summary ||
+                (runs.every((run) => run.status === 'queued') ? '正在等待回复' : '正在回复')
+              }
               agents={workingAgents}
             />
           )}
@@ -545,9 +606,10 @@ export function GroupCreateDialog({
 }: {
   agents: Agent[]
   onClose: () => void
-  onCreate: (name: string, memberIds: string[]) => Promise<void>
+  onCreate: (name: string, memberIds: string[], requestId: string) => Promise<void>
 }) {
   const [name, setName] = useState('')
+  const request = useRef<{ key: string; id: string } | undefined>(undefined)
   const [memberIds, setMemberIds] = useState<string[]>([])
   const [error, setError] = useState('')
   const [isSubmitting, setSubmitting] = useState(false)
@@ -565,7 +627,9 @@ export function GroupCreateDialog({
     setError('')
     setSubmitting(true)
     try {
-      await onCreate(name.trim(), memberIds)
+      const key = JSON.stringify({ name: name.trim(), memberIds })
+      if (request.current?.key !== key) request.current = { key, id: ulid() }
+      await onCreate(name.trim(), memberIds, request.current.id)
     } catch (failure) {
       setError((failure as Error).message)
     } finally {

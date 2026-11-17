@@ -10,6 +10,8 @@ import (
 	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/botpersona"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/groupchat"
+	"io.yueyang/tom/internal/scheduledtasks"
 	"log/slog"
 	"strings"
 	"sync"
@@ -101,7 +103,7 @@ func NewWorker(executor *Service, directory ModelDirectory, caller ModelCaller, 
 		}
 		schema := tool.Schema()
 		var object map[string]json.RawMessage
-		if !bots.ValidToolName(schema.Name) || schema.Name == "report_progress" || botmemory.IsTool(schema.Name) || worker.tools[schema.Name] != nil || !validText(schema.Description, 4096) || len(schema.InputSchema) > 16<<10 || json.Unmarshal(schema.InputSchema, &object) != nil || object == nil {
+		if !bots.ValidToolName(schema.Name) || schema.Name == "report_progress" || schema.Name == "post_to_group" || botmemory.IsTool(schema.Name) || scheduledtasks.IsTool(schema.Name) || worker.tools[schema.Name] != nil || !validText(schema.Description, 4096) || len(schema.InputSchema) > 16<<10 || json.Unmarshal(schema.InputSchema, &object) != nil || object == nil {
 			return nil, ErrInvalidInput
 		}
 		schema.InputSchema = bytes.Clone(schema.InputSchema)
@@ -114,6 +116,7 @@ func NewWorker(executor *Service, directory ModelDirectory, caller ModelCaller, 
 func (worker *Worker) Serve(ctx context.Context) error {
 	var wait sync.WaitGroup
 	wait.Go(func() { worker.reconcile(ctx) })
+	wait.Go(func() { worker.scheduleTasks(ctx) })
 	for range worker.options.Concurrency {
 		wait.Go(func() {
 			ownerID := ids.New()
@@ -297,12 +300,29 @@ func (worker *Worker) execute(ctx context.Context, lease Lease) (string, error) 
 		schemas = append(schemas, schema)
 	}
 	system := botpersona.System(work.Bot.Name, work.Bot.Description, work.Bot.AvatarRef, work.Bot.SystemPrompt)
+	if work.GroupContext != "" {
+		schema := groupchat.Schema()
+		allowed[schema.Name] = groupPostTool{executor: worker.executor}
+		schemas = append(schemas, schema)
+		system += work.GroupContext
+	}
 	if work.HasMemory {
 		for _, schema := range botmemory.Schemas() {
+			if work.IsTask && schema.Name != "memory_search" {
+				continue
+			}
 			allowed[schema.Name] = memoryTool{executor: worker.executor, schema: schema, maximum: worker.options.MaxOutputBytes}
 			schemas = append(schemas, schema)
 		}
 		system += botmemory.Instructions
+		for _, schema := range scheduledtasks.Schemas() {
+			if work.IsTask {
+				break
+			}
+			allowed[schema.Name] = taskTool{executor: worker.executor, schema: schema, maximum: worker.options.MaxOutputBytes}
+			schemas = append(schemas, schema)
+		}
+		system += scheduledtasks.Instructions + "\nCurrent turn time (UTC): " + work.Run.CreatedAt.UTC().Format(time.RFC3339)
 	}
 	if len(schemas) > 0 {
 		system += botpersona.ProgressInstructions

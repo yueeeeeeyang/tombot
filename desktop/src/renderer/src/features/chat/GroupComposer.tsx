@@ -24,7 +24,11 @@ export function GroupComposer({
     ? members.filter((cat) => cat.name.toLocaleLowerCase().includes(query.text.toLocaleLowerCase()))
     : []
   function update(value: string, position: number) {
-    const chosen = selected.filter((cat) => value.includes(`@${cat.name}`))
+    const chosen = selected.filter(
+      (cat) =>
+        members.some((member) => member.id === cat.id && member.name === cat.name) &&
+        containsMention(value, cat.name),
+    )
     setSelected(chosen)
     onChange(
       value,
@@ -119,4 +123,10 @@ export function GroupComposer({
       />
     </div>
   )
+}
+
+/** 名称编辑后移除失效目标，避免把“@小黑猫”同时发给之前选择的“小黑”。 */
+function containsMention(text: string, name: string): boolean {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`(?:^|[^a-zA-Z0-9._%+-])@${escaped}(?=$|[\\s\\p{P}@])`, 'u').test(text)
 }

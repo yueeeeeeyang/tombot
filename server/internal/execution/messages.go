@@ -21,7 +21,17 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 	}
 	var submitted Submission
 	err := service.user(ctx, principal, true, func(transaction *sql.Tx) error {
-		return service.submitInput(ctx, transaction, principal.UserID, conversationID, request, nil, &submitted)
+		var kind string
+		if err := transaction.QueryRowContext(ctx, `SELECT kind FROM tombot.conversations WHERE user_id=$1 AND id=$2`, principal.UserID, conversationID).Scan(&kind); err != nil {
+			return err
+		}
+		if kind == "group" {
+			return service.sendGroupInput(ctx, transaction, principal.UserID, conversationID, request, nil, &submitted)
+		}
+		if len(request.Mentions) > 0 {
+			return ErrInvalidInput
+		}
+		return service.submitInput(ctx, transaction, principal.UserID, conversationID, request, nil, "chat", &submitted)
 	})
 	if err != nil {
 		return Submission{}, err
@@ -30,7 +40,7 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 }
 
 // submitInput 让正文与表情交互共用入队、补充输入和幂等事务，调用方不得在提交前发布事件。
-func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, userID, conversationID string, request SendRequest, reaction *ReactionChange, submitted *Submission) error {
+func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, userID, conversationID string, request SendRequest, reaction *ReactionChange, source string, submitted *Submission) error {
 	encoded, err := json.Marshal(struct {
 		ConversationID string
 		Content        string
@@ -67,7 +77,7 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	botID, err := lockConversation(ctx, transaction, userID, conversationID)
+	botID, err := lockInputConversation(ctx, transaction, userID, conversationID, source == "routine")
 	if err != nil {
 		return err
 	}
@@ -79,6 +89,9 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	err = transaction.QueryRowContext(ctx, `SELECT r.id,r.turn_id FROM tombot.runs r JOIN tombot.turns t ON t.user_id=r.user_id AND t.id=r.turn_id
             WHERE r.user_id=$1 AND r.conversation_id=$2 AND t.status IN ('queued','running','canceling') AND r.status IN ('queued','running','canceling') ORDER BY r.id DESC LIMIT 1`, userID, conversationID).Scan(&activeRun, &activeTurn)
 	if err == nil {
+		if source == "routine" {
+			return ErrConflict
+		}
 		return service.appendInput(ctx, transaction, userID, conversationID, activeTurn, activeRun, request, inputBlocks(request, reaction), reply, digest[:], submitted)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -122,7 +135,7 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 		return err
 	}
 	*submitted = Submission{TurnID: ids.New(), RunID: ids.New(), MessageID: ids.New(), IsCreated: true}
-	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.turns(user_id,id,conversation_id,sequence,client_request_id,request_digest,source,status) VALUES($1,$2,$3,$4,$5,$6,'chat','queued')`, userID, submitted.TurnID, conversationID, turnSequence, request.ClientRequestID, digest[:]); err != nil {
+	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.turns(user_id,id,conversation_id,sequence,client_request_id,request_digest,source,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')`, userID, submitted.TurnID, conversationID, turnSequence, request.ClientRequestID, digest[:], source); err != nil {
 		return err
 	}
 	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.runs(user_id,id,turn_id,conversation_id,bot_id,bot_revision,bot_snapshot,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')`, userID, submitted.RunID, submitted.TurnID, conversationID, botID, revision, snapshot); err != nil {
@@ -132,10 +145,14 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	if err != nil {
 		return err
 	}
-	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.messages(user_id,id,conversation_id,turn_id,sequence,sender_kind,blocks,status,reply_to_id) VALUES($1,$2,$3,$4,$5,'user',$6,'complete',NULLIF($7,''))`, userID, submitted.MessageID, conversationID, submitted.TurnID, messageSequence, blocks, request.ReplyToID); err != nil {
+	senderKind, executionKind := "user", "chat"
+	if source == "routine" {
+		senderKind, executionKind = "system", "task"
+	}
+	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.messages(user_id,id,conversation_id,turn_id,sequence,sender_kind,blocks,status,reply_to_id) VALUES($1,$2,$3,$4,$5,$8,$6,'complete',NULLIF($7,''))`, userID, submitted.MessageID, conversationID, submitted.TurnID, messageSequence, blocks, request.ReplyToID, senderKind); err != nil {
 		return err
 	}
-	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.jobs(user_id,id,run_id,bot_id,conversation_id,turn_id,status) VALUES($1,$2,$3,$4,$5,$6,'queued')`, userID, ids.New(), submitted.RunID, botID, conversationID, submitted.TurnID); err != nil {
+	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.jobs(user_id,id,run_id,bot_id,conversation_id,turn_id,status,execution_kind) VALUES($1,$2,$3,$4,$5,$6,'queued',$7)`, userID, ids.New(), submitted.RunID, botID, conversationID, submitted.TurnID, executionKind); err != nil {
 		return err
 	}
 	if err = event(ctx, transaction, userID, "message.created", submitted.MessageID, map[string]any{"conversation_id": conversationID, "sequence": messageSequence, "turn_id": submitted.TurnID}); err != nil {
@@ -155,13 +172,16 @@ func lockDispatch(ctx context.Context, transaction *sql.Tx, userID string) error
 
 // lockConversation 与执行收尾共享会话锁，拒绝已归档资源和尚未支持的会话类型。
 func lockConversation(ctx context.Context, transaction *sql.Tx, userID, conversationID string) (string, error) {
+	return lockInputConversation(ctx, transaction, userID, conversationID, false)
+}
+func lockInputConversation(ctx context.Context, transaction *sql.Tx, userID, conversationID string, background bool) (string, error) {
 	var kind string
 	var botID *string
 	var archived bool
 	if err := transaction.QueryRowContext(ctx, `SELECT c.kind,c.bot_id,c.is_archived OR COALESCE(b.is_archived,false) FROM tombot.conversations c LEFT JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id WHERE c.user_id=$1 AND c.id=$2 FOR UPDATE OF c`, userID, conversationID).Scan(&kind, &botID, &archived); err != nil {
 		return "", err
 	}
-	if kind != "direct" {
+	if (!background && kind != "direct") || (background && kind != "task") {
 		return "", ErrConversationKind
 	}
 	if archived || botID == nil {

@@ -32,12 +32,20 @@ func (service *Service) SetReaction(ctx context.Context, principal identity.Prin
 			return err
 		}
 		var conversationID string
-		if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM tombot.messages WHERE user_id=$1 AND id=$2 AND sender_kind IN ('user','bot') AND status='complete' AND blocks @> '[{"kind":"text"}]'::jsonb`, principal.UserID, messageID).Scan(&conversationID); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT conversation_id FROM tombot.messages WHERE user_id=$1 AND id=$2 AND `+interactiveMessage+` AND status='complete' AND blocks @> '[{"kind":"text"}]'::jsonb`, principal.UserID, messageID).Scan(&conversationID); err != nil {
 			return err
 		}
-		botID, err := lockConversation(ctx, tx, principal.UserID, conversationID)
-		if err != nil {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM tombot.conversations WHERE user_id=$1 AND id=$2`, principal.UserID, conversationID).Scan(&kind); err != nil {
 			return err
+		}
+		botID := ""
+		var err error
+		if kind != "group" {
+			botID, err = lockConversation(ctx, tx, principal.UserID, conversationID)
+			if err != nil {
+				return err
+			}
 		}
 		var previousMessageID, previousEmoji string
 		var previousActive bool
@@ -68,7 +76,14 @@ func (service *Service) SetReaction(ctx context.Context, principal identity.Prin
 			}
 			if count > 0 {
 				var submitted Submission
-				if err := service.submitInput(ctx, tx, principal.UserID, conversationID, SendRequest{ClientRequestID: request.ClientRequestID, ReplyToID: messageID}, &ReactionChange{Emoji: request.Emoji, IsActive: request.IsActive}, &submitted); err != nil {
+				input := SendRequest{ClientRequestID: request.ClientRequestID, ReplyToID: messageID}
+				reaction := &ReactionChange{Emoji: request.Emoji, IsActive: request.IsActive}
+				if kind == "group" {
+					err = service.sendGroupInput(ctx, tx, principal.UserID, conversationID, input, reaction, &submitted)
+				} else {
+					err = service.submitInput(ctx, tx, principal.UserID, conversationID, input, reaction, "chat", &submitted)
+				}
+				if err != nil {
 					return err
 				}
 				if _, err := tx.ExecContext(ctx, `UPDATE tombot.messages SET reaction_revision=reaction_revision+1 WHERE user_id=$1 AND id=$2`, principal.UserID, messageID); err != nil {

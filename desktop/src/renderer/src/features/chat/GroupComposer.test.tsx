@@ -44,6 +44,15 @@ describe('群消息提及', () => {
     fireEvent.change(screen.getByRole('textbox'), { target: { value: '公开消息' } })
     expect(change).toHaveBeenLastCalledWith('公开消息', [])
   })
+  it('编辑完整提及名称后清理旧目标，不把前缀当作原成员', async () => {
+    const change = vi.fn()
+    const user = userEvent.setup()
+    render(<Composer onChange={change} onSend={vi.fn()} />)
+    await user.type(screen.getByRole('textbox'), '@小黑')
+    await user.keyboard('{Enter}')
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '@小黑猫 请检查' } })
+    expect(change).toHaveBeenLastCalledWith('@小黑猫 请检查', [])
+  })
   it('不存在的名称显示空结果，Esc 收起，中文输入确认不发送', () => {
     const send = vi.fn()
     render(<Composer onChange={vi.fn()} onSend={send} />)

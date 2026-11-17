@@ -16,8 +16,10 @@ import (
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/execution"
+	"io.yueyang/tom/internal/groupchat"
 	"io.yueyang/tom/internal/httpjson"
 	"io.yueyang/tom/internal/identity"
+	"io.yueyang/tom/internal/scheduledtasks"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userevents"
 )
@@ -47,6 +49,9 @@ var _ Catalog = (*bots.Service)(nil)
 
 // Execution 只暴露用户消息和运行查询，不把调度租约、模型绑定或操作写入权交给客户端。
 type Execution interface {
+	Tasks(context.Context, identity.Principal, string, string) (scheduledtasks.Page, error)
+	SetTaskEnabled(context.Context, identity.Principal, string, string, int64, bool) (scheduledtasks.Task, error)
+	DeleteTask(context.Context, identity.Principal, string, string, int64) error
 	Send(context.Context, identity.Principal, string, execution.SendRequest) (execution.Submission, error)
 	SetReaction(context.Context, identity.Principal, string, execution.ReactionRequest) (execution.Message, error)
 	Messages(context.Context, identity.Principal, string, int64, int) ([]execution.Message, error)
@@ -105,6 +110,9 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Get("/api/v2/bots", handler.listBots)
 	router.Post("/api/v2/bots", handler.createBot)
 	router.Get("/api/v2/bots/{botID}", handler.getBot)
+	router.Get("/api/v2/bots/{botID}/tasks", handler.listTasks)
+	router.Post("/api/v2/bots/{botID}/tasks/{taskID}/state", handler.taskState)
+	router.Delete("/api/v2/bots/{botID}/tasks/{taskID}", handler.deleteTask)
 	router.Put("/api/v2/bots/{botID}", handler.updateBot)
 	router.Post("/api/v2/bots/{botID}/state", handler.botState)
 	router.Get("/api/v2/bots/{botID}/avatar", handler.getAvatar)
@@ -128,7 +136,7 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	protected, err := gate.Protect("desktop", func(w http.ResponseWriter, r *http.Request, principal identity.Principal, attempt identity.Attempt) {
 		r = r.WithContext(context.WithValue(r.Context(), requestKey{}, requestIdentity{principal, attempt}))
 		messagesPath := strings.HasPrefix(r.URL.Path, "/api/v2/conversations/") && strings.HasSuffix(r.URL.Path, "/messages")
-		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || r.URL.Path == "/api/v2/events" || messagesPath)
+		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || r.URL.Path == "/api/v2/events" || messagesPath || strings.HasPrefix(r.URL.Path, "/api/v2/bots/") && strings.HasSuffix(r.URL.Path, "/tasks"))
 		if r.URL.RawQuery != "" && !allowsQuery {
 			handler.failure(w, r, 400, "INPUT_INVALID", "此接口不接受查询参数")
 			return
@@ -179,6 +187,14 @@ func (handler *Handler) failure(w http.ResponseWriter, r *http.Request, status i
 func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := 503, "USER_SERVICE_UNAVAILABLE", "用户资源服务暂不可用"
 	switch {
+	case errors.Is(err, scheduledtasks.ErrInput):
+		status, code, message = 400, "TASK_INPUT_INVALID", scheduledtasks.ErrInput.Error()
+	case errors.Is(err, scheduledtasks.ErrNotFound):
+		status, code, message = 404, "TASK_NOT_FOUND", scheduledtasks.ErrNotFound.Error()
+	case errors.Is(err, scheduledtasks.ErrConflict):
+		status, code, message = 409, "TASK_CONFLICT", scheduledtasks.ErrConflict.Error()
+	case errors.Is(err, scheduledtasks.ErrCapacity):
+		status, code, message = 409, "TASK_CAPACITY", scheduledtasks.ErrCapacity.Error()
 	case errors.Is(err, identity.ErrInvalidSession):
 		status, code, message = 401, "SESSION_INVALID", identity.ErrInvalidSession.Error()
 	case errors.Is(err, bots.ErrInvalidInput):
@@ -193,6 +209,8 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		status, code, message = 409, "RESOURCE_ARCHIVED", bots.ErrArchived.Error()
 	case errors.Is(err, bots.ErrInviteDenied):
 		status, code, message = 403, "GROUP_INVITE_DENIED", bots.ErrInviteDenied.Error()
+	case errors.Is(err, groupchat.ErrMention):
+		status, code, message = 400, "MENTION_INVALID", groupchat.ErrMention.Error()
 	case errors.Is(err, execution.ErrInvalidInput), errors.Is(err, userevents.ErrInvalidInput):
 		status, code, message = 400, "INPUT_INVALID", execution.ErrInvalidInput.Error()
 	case errors.Is(err, execution.ErrNotFound):

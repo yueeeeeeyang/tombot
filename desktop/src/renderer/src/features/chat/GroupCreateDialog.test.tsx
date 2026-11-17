@@ -27,7 +27,11 @@ describe('创建群聊', () => {
     await user.click(screen.getByRole('checkbox', { name: '小黑' }))
     expect(screen.getByText('已选 1 位')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '创建群聊' }))
-    expect(onCreate).toHaveBeenCalledWith('创作小队', ['assistant'])
+    expect(onCreate).toHaveBeenCalledWith(
+      '创作小队',
+      ['assistant'],
+      expect.stringMatching(/^[0-9A-Z]{26}$/),
+    )
   })
   it('请求期间禁止重复提交，失败保留表单并允许重试', async () => {
     let reject!: (error: Error) => void
@@ -55,6 +59,9 @@ describe('创建群聊', () => {
     expect(screen.getByRole('textbox')).toHaveValue('讨论组')
     expect(screen.getByRole('checkbox')).toBeChecked()
     expect(screen.getByRole('button', { name: '创建群聊' })).toBeEnabled()
+    fireEvent.submit(container.querySelector('form')!)
+    expect(onCreate.mock.calls[1]).toEqual(onCreate.mock.calls[0])
+    await act(async () => reject(new Error('仍然无法连接服务')))
   })
   it('没有猫咪时提供说明并禁止创建', () => {
     render(<GroupCreateDialog agents={[]} onClose={vi.fn()} onCreate={vi.fn()} />)

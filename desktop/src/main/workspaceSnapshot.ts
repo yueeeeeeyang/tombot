@@ -21,6 +21,7 @@ export interface ServerBot {
 }
 
 export interface ServerGroup {
+  max_cost_micro?: number | null
   id: string
   name: string
   purpose: string

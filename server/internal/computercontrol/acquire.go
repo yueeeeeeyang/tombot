@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/computerdesktop"
 	"io.yueyang/tom/internal/infra/ids"
 )
 
@@ -27,6 +28,16 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 		if !live {
 			return ErrLeaseLost
 		}
+
+		var kind string
+		if err = tx.QueryRowContext(ctx, `SELECT execution_kind FROM tombot.jobs WHERE user_id=$1 AND id=$2`, reference.UserID, reference.JobID).Scan(&kind); err != nil {
+			return err
+		}
+		if kind == "task" {
+			if _, err = computerdesktop.TaskDesktop(ctx, tx, reference.UserID, reference.BotID); err != nil {
+				return err
+			}
+		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.computer_execution_heads(user_id,computer_id) SELECT user_id,id FROM tombot.computers WHERE user_id=$1 ON CONFLICT(user_id) DO NOTHING`, reference.UserID); err != nil {
 			return err
 		}
@@ -42,7 +53,7 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 			value, err = scan(tx.QueryRowContext(ctx, `INSERT INTO tombot.computer_sessions(user_id,id,computer_id,node_id,container_id,generation,job_id,run_id,bot_id,job_owner,job_fencing_token,job_attempt,ticket,status,wait_deadline_at,desktop_id,linux_uid,shared_gid,display_number,wait_reason)
 				SELECT c.user_id,$2,c.id,c.node_id,c.container_id,c.generation,$3,$4,$5,$6,$7,$8,$9,'waiting',clock_timestamp()+$10::bigint*interval '1 millisecond',d.id,d.linux_uid,d.shared_gid,d.display_number,'pending'
 				FROM tombot.computers c JOIN tombot.bot_desktops d ON d.user_id=c.user_id AND d.computer_id=c.id
-				WHERE c.user_id=$1 AND c.status='ready' AND d.bot_id=$5 RETURNING `+columns, reference.UserID, ids.New(), reference.JobID, reference.RunID, reference.BotID, reference.OwnerID, reference.FencingToken, reference.Attempt, ticket, service.options.WaitTimeout.Milliseconds()))
+				WHERE c.user_id=$1 AND c.status='ready' AND d.bot_id=$5 AND d.purpose=$11 RETURNING `+columns, reference.UserID, ids.New(), reference.JobID, reference.RunID, reference.BotID, reference.OwnerID, reference.FencingToken, reference.Attempt, ticket, service.options.WaitTimeout.Milliseconds(), kind))
 			if errors.Is(err, sql.ErrNoRows) {
 				return ErrUnavailable
 			}

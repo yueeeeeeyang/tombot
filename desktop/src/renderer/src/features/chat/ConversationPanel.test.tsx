@@ -4,7 +4,6 @@ import type { DesktopBackend, GroupDetail, ServerBubble } from '../desktop/backe
 import { MemoryBackend, memoryBackend } from '../desktop/memoryBackend'
 import { createWorkspace } from '../workspace/model'
 import { ConversationPanel } from './ConversationPanel'
-import { useWorkActivity } from './useWorkActivity'
 
 const agents = createWorkspace().agents.slice(0, 2)
 const group: GroupDetail = {
@@ -18,6 +17,7 @@ const group: GroupDetail = {
 type Send = NonNullable<DesktopBackend['sendConversation']>
 
 afterEach(() => {
+  vi.restoreAllMocks()
   window.desktop = { platform: 'linux', backend: memoryBackend }
 })
 
@@ -37,12 +37,8 @@ function openPanel(
     }),
   }
   function Panel() {
-    const { workStates, receiveActivity, clearActivity } = useWorkActivity()
     return (
       <ConversationPanel
-        workStates={workStates}
-        onExecutionEvent={receiveActivity}
-        onExecutionEnd={clearActivity}
         id={group.id}
         agents={agents}
         onError={onError}
@@ -95,7 +91,7 @@ describe('消息翻页', () => {
         hasMore: false,
       })
     openPanel(
-      vi.fn(async () => undefined),
+      vi.fn(async () => ({})),
       listMessages,
     )
     fireEvent.click(await screen.findByRole('button', { name: '加载更早的消息' }))
@@ -106,98 +102,75 @@ describe('消息翻页', () => {
   })
 })
 
-describe('群聊流式回复', () => {
-  it('交错文字按消息与成员分别累加，完成后替换为持久化内容', async () => {
-    let finish!: () => void
-    let publish!: NonNullable<Parameters<Send>[5]>
-    const send: Send = vi.fn(async (_id, _content, _files, _reply, _mentions, onEvent) => {
-      publish = onEvent!
-      await new Promise<void>((resolve) => {
-        finish = resolve
-      })
+describe('群聊持久消息同步', () => {
+  it('交错到达的成员消息分别显示，受理后可继续发言并保留引用与用户提及', async () => {
+    const send = vi.fn<Send>().mockResolvedValue({ acceptedMessageId: 'accepted' })
+    const list = vi.fn<ListMessages>().mockResolvedValue({ messages: [], hasMore: false })
+    let publish!: Parameters<NonNullable<DesktopBackend['watchEvents']>>[0]
+    vi.spyOn(MemoryBackend.prototype, 'watchEvents').mockImplementation((listener) => {
+      publish = listener
+      return () => undefined
     })
-    const listMessages = vi.fn(
-      async (): Promise<{ messages: ServerBubble[]; hasMore: boolean }> => ({
-        messages: [],
-        hasMore: false,
-      }),
-    )
-    const error = openPanel(send, listMessages)
+    const error = openPanel(send, list)
+
     fireEvent.change(await screen.findByRole('textbox', { name: '给讨论组发消息' }), {
       target: { value: '一起看看' },
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await waitFor(() => expect(publish).toBeDefined())
-    expect(screen.queryByText('正在思考…')).toBeNull()
-    act(() =>
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
+    expect(send.mock.calls[0]?.[5]).toMatch(/^[0-9A-Z]{26}$/)
+    const messages: ServerBubble[] = agents.map((agent, index) => ({
+      id: `reply-${index}`,
+      sequence: index + 1,
+      role: 'assistant',
+      speaker: agent.id,
+      content: `第${index + 1}位回复`,
+      createdAt: new Date().toISOString(),
+      reactions: [],
+      attachments: [],
+      mentions: index === 1 ? [{ id: 'user', name: '用户' }] : [],
+    }))
+    list.mockResolvedValue({ messages, hasMore: false })
+    await act(async () =>
       publish({
-        type: 'activity',
-        text: '',
-        botId: agents[0]!.id,
-        runId: 'first-run',
-        isWorking: true,
+        sequence: 1,
+        kind: 'message.created',
+        resource_id: 'reply-1',
+        payload: { conversation_id: 'conversation' },
+        created_at: new Date().toISOString(),
       }),
     )
-    expect(
-      screen.getByText('正在思考…').closest('.work-status')!.querySelectorAll('.avatar'),
-    ).toHaveLength(1)
-    act(() => {
-      publish({ type: 'delta', text: '第一', messageId: 'first', botId: agents[0]!.id })
-      publish({ type: 'delta', text: '第二位回复', messageId: 'second', botId: agents[1]!.id })
-      publish({ type: 'delta', text: '位回复', messageId: 'first', botId: agents[0]!.id })
-    })
-    const first = screen.getByText('第一位回复').closest('.message-bubble')! as HTMLElement
-    const second = screen.getByText('第二位回复').closest('.message-bubble')! as HTMLElement
+    const first = screen.getByText('第1位回复').closest('.message-bubble') as HTMLElement
+    const second = screen.getByText('第2位回复').closest('.message-bubble') as HTMLElement
     expect(within(first).getByText(agents[0]!.name)).toBeInTheDocument()
     expect(within(second).getByText(agents[1]!.name)).toBeInTheDocument()
-    expect(first).not.toHaveTextContent('第二位回复')
-    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
-    listMessages.mockResolvedValue({
-      messages: [
-        {
-          id: 'first',
-          sequence: 1,
-          role: 'assistant',
-          speaker: agents[0]!.id,
-          content: '第一位回复',
-          createdAt: new Date().toISOString(),
-          reactions: [],
-          attachments: [],
-        },
-        {
-          id: 'second',
-          sequence: 2,
-          role: 'assistant',
-          speaker: agents[1]!.id,
-          content: '第二位回复',
-          createdAt: new Date().toISOString(),
-          reactions: [],
-          attachments: [],
-        },
-      ],
-      hasMore: false,
-    })
-    await act(async () => finish())
-    expect(screen.getAllByText('第一位回复')).toHaveLength(1)
-    expect(screen.getAllByText('第二位回复')).toHaveLength(1)
-    expect(screen.getByRole('textbox')).toHaveValue('')
+    expect(screen.getByText('@你')).toBeInTheDocument()
+    fireEvent.click(
+      within(second.closest('.message-line') as HTMLElement).getByRole('button', { name: '回复' }),
+    )
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '解释第二点' } })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+    expect(send.mock.calls[1]?.[3]).toBe('reply-1')
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
+    expect(screen.getAllByText('第1位回复')).toHaveLength(1)
     expect(error).not.toHaveBeenCalled()
-    expect(screen.queryByText('正在思考…')).toBeNull()
   })
-
-  it('缺少发言标识时提示错误，保留草稿并停止等待动画', async () => {
-    const send: Send = vi.fn(async (_id, _content, _files, _reply, _mentions, onEvent) => {
-      onEvent?.({ type: 'delta', text: '无法归属的回复' })
-    })
+  it('发送失败保留草稿，同一消息重试沿用幂等键', async () => {
+    const send = vi
+      .fn<Send>()
+      .mockRejectedValueOnce(new Error('连接中断'))
+      .mockResolvedValue({ acceptedMessageId: 'accepted' })
     const error = openPanel(send)
     fireEvent.change(await screen.findByRole('textbox', { name: '给讨论组发消息' }), {
       target: { value: '保留这条消息' },
     })
     fireEvent.click(screen.getByRole('button', { name: '发送' }))
-    await waitFor(() => expect(error).toHaveBeenCalledWith('群消息缺少发言成员信息。'))
+    await waitFor(() => expect(error).toHaveBeenCalledWith('连接中断'))
     expect(screen.getByRole('textbox')).toHaveValue('保留这条消息')
-    expect(screen.queryByText('无法归属的回复')).toBeNull()
-    expect(screen.queryByText('正在思考…')).toBeNull()
-    expect(screen.getByRole('button', { name: '发送' })).toBeEnabled()
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2))
+    expect(send.mock.calls[1]?.[5]).toBe(send.mock.calls[0]?.[5])
+    await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
   })
 })

@@ -1,3 +1,5 @@
+import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
+import { listTasks } from './tasks'
 import { loginResultPage } from './loginResultPage'
 import { app, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
@@ -5,7 +7,6 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { join } from 'node:path'
 import { readClipboardFiles } from './clipboardFiles'
-import { ulid } from '../shared/ulid'
 import { ServerTransport } from './serverTransport'
 import { createBot } from './botCreation'
 import {
@@ -735,49 +736,35 @@ export function registerDesktopIpc(): void {
         }
       }),
   )
-  ipcMain.handle('desktop:introduction', (_event, agentId: string) =>
-    handle(() =>
-      call(
-        'POST',
-        `/workspace/agents/${encodeURIComponent(agentId)}/introduction`,
-        undefined,
-        30_000,
-      ),
-    ),
-  )
-  ipcMain.handle('desktop:routines', (_event, agentId: string) =>
-    handle(async () => {
-      const rows = (await call('GET', `/routines?bot_id=${encodeURIComponent(agentId)}`)) as Array<{
-        id: string
-        name: string
-        cron: string
-        prompt: string
-        is_enabled: boolean
-        revision: number
-        target?: { bot_id?: string }
-      }>
-      return (Array.isArray(rows) ? rows : []).filter((item) => item.target?.bot_id === agentId)
-    }),
+  ipcMain.handle('desktop:tasks', (_event, agentId: string) =>
+    handle(() => listTasks(call, agentId)),
   )
   ipcMain.handle(
-    'desktop:routine-enabled',
-    (_event, input: { id: string; revision: number; enabled: boolean }) =>
-      handle(() =>
-        call('PATCH', `/routines/${encodeURIComponent(input.id)}`, {
-          revision: input.revision,
-          is_enabled: input.enabled,
-        }),
-      ),
+    'desktop:task-enabled',
+    (_event, input: { agentId: string; id: string; revision: number; enabled: boolean }) =>
+      handle(async () => {
+        await call(
+          'POST',
+          `/bots/${encodeURIComponent(input.agentId)}/tasks/${encodeURIComponent(input.id)}/state`,
+          { expected_revision: input.revision, is_enabled: input.enabled },
+        )
+      }),
   )
-  ipcMain.handle('desktop:routine-delete', (_event, input: { id: string; revision: number }) =>
-    handle(() =>
-      call('DELETE', `/routines/${encodeURIComponent(input.id)}?revision=${input.revision}`),
-    ),
+  ipcMain.handle(
+    'desktop:task-delete',
+    (_event, input: { agentId: string; id: string; revision: number }) =>
+      handle(async () => {
+        await call(
+          'DELETE',
+          `/bots/${encodeURIComponent(input.agentId)}/tasks/${encodeURIComponent(input.id)}`,
+          { expected_revision: input.revision },
+        )
+      }),
   )
   ipcMain.handle('desktop:groups', () =>
     handle(async () => {
-      const response = (await call('GET', '/groups?limit=50')) as { groups?: ServerGroup[] }
-      return (response.groups ?? []).map((group) => ({
+      const groups = await readGroups(call)
+      return groups.map((group) => ({
         id: group.id,
         name: group.name,
         revision: group.revision,
@@ -790,27 +777,20 @@ export function registerDesktopIpc(): void {
       }))
     }),
   )
-  ipcMain.handle('desktop:group-create', (_event, input: { name: string; memberIds: string[] }) =>
-    handle(() =>
-      call('POST', '/groups', {
-        client_request_id: ulid(),
-        name: input.name,
-        purpose: '',
-        member_ids: input.memberIds,
+  ipcMain.handle(
+    'desktop:group-create',
+    (_event, input: { name: string; memberIds: string[]; requestId: string }) =>
+      handle(async () => {
+        const group = await createGroup(call, input.name, input.memberIds, input.requestId)
+        return groupDetail(group.id)
       }),
-    ),
   )
   ipcMain.handle(
     'desktop:group-rename',
     (_event, input: { id: string; revision: number; name: string }) =>
       handle(async () => {
-        // v2 用整体替换保存群组；先读当前成员再连同新名称提交，避免误删成员。
-        const current = await readGroupSpec(input.id)
-        return call('PUT', `/groups/${encodeURIComponent(input.id)}`, {
-          expected_revision: input.revision,
-          ...current,
-          name: input.name,
-        })
+        await changeGroup(call, input.id, input.revision, { name: input.name })
+        return groupDetail(input.id)
       }),
   )
   // 群组产物属于 v1 语义，v2 尚无对应能力；明确拒绝而不是返回空列表。
@@ -824,24 +804,28 @@ export function registerDesktopIpc(): void {
     'desktop:group-members',
     (_event, input: { id: string; revision: number; botIds: string[] }) =>
       handle(async () => {
-        const current = await readGroupSpec(input.id)
-        return call('PUT', `/groups/${encodeURIComponent(input.id)}`, {
-          expected_revision: input.revision,
-          ...current,
-          member_ids: input.botIds,
-        })
+        await changeGroup(call, input.id, input.revision, { add: input.botIds })
       }),
   )
   ipcMain.handle(
     'desktop:group-member-remove',
     (_event, input: { id: string; revision: number; botId: string }) =>
-      handle(() =>
-        call(
-          'DELETE',
-          `/groups/${encodeURIComponent(input.id)}/members/${encodeURIComponent(input.botId)}?revision=${input.revision}`,
-        ),
-      ),
+      handle(async () => {
+        await changeGroup(call, input.id, input.revision, { remove: input.botId })
+      }),
   )
+  ipcMain.handle('desktop:group-delete', (_event, input: { id: string; revision: number }) =>
+    handle(() =>
+      call('POST', `/groups/${encodeURIComponent(input.id)}/state`, {
+        expected_revision: input.revision,
+        is_archived: true,
+      }),
+    ),
+  )
+  ipcMain.handle('desktop:conversation-activity', (_event, id: string) =>
+    handle(() => call('GET', `/conversations/${encodeURIComponent(id)}/activity`)),
+  )
+
   ipcMain.handle(
     'desktop:conversation-messages',
     (_event, input: { conversationId: string; before?: number }) =>
@@ -850,7 +834,7 @@ export function registerDesktopIpc(): void {
   ipcMain.handle(
     'desktop:conversation-send',
     (
-      event,
+      _event,
       input: {
         requestId: string
         conversationId: string
@@ -859,21 +843,9 @@ export function registerDesktopIpc(): void {
         replyToId?: string
         mentions: string[]
       },
-    ) =>
-      handle(() =>
-        readConversationStream(
-          event,
-          input.conversationId,
-          {
-            content: input.content,
-            mentions: input.mentions,
-            attachments: input.attachments,
-            ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
-          },
-          input.requestId,
-        ),
-      ),
+    ) => handle(() => sendGroupMessage(call, input)),
   )
+
   ipcMain.handle(
     'desktop:upload',
     (
@@ -1012,18 +984,6 @@ async function listMessagesPage(
   return { messages, hasMore: rows.length === messagePageSize }
 }
 
-/** 读取群组的可写字段；v2 的保存是整体替换，改名和成员调整都要带上原有内容。 */
-async function readGroupSpec(
-  id: string,
-): Promise<{ name: string; purpose: string; member_ids: string[] }> {
-  const response = (await call('GET', `/groups/${encodeURIComponent(id)}`)) as {
-    group?: ServerGroup
-  }
-  const group = response.group
-  if (!group) throw Object.assign(new Error('找不到这个群组。'), { code: 'RESOURCE_NOT_FOUND' })
-  return { name: group.name, purpose: group.purpose, member_ids: group.member_ids }
-}
-
 /** 群组详情把成员标识补成名字，界面才能显示成员列表。 */
 async function groupDetail(id: string): Promise<unknown> {
   const response = (await call('GET', `/groups/${encodeURIComponent(id)}`)) as {
@@ -1060,6 +1020,8 @@ type ServerMessage = {
   blocks?: Array<{
     kind: string
     text?: string
+    task_result?: boolean
+    mentions?: Array<{ id: string; name: string }>
     artifact?: { path?: string; sha256?: string; media_type?: string }
   }>
   reply_to?: { message_id: string; excerpt: string }
@@ -1068,6 +1030,7 @@ type ServerMessage = {
 }
 
 function toBubble(message: ServerMessage): {
+  isNotice: boolean
   id: string
   requestId?: string
   sequence: number
@@ -1078,6 +1041,7 @@ function toBubble(message: ServerMessage): {
   replyTo?: { messageId: string; excerpt: string }
   reactions: Array<{ emoji: string; count: number }>
   reactionRevision: number
+  mentions: Array<{ id: string; name: string }>
   attachments: Array<{
     name: string
     path: string
@@ -1109,6 +1073,9 @@ function toBubble(message: ServerMessage): {
   })
   if (!content.trim() && attachments.length === 0) return null
   return {
+    isNotice:
+      message.sender_kind === 'system' &&
+      !(message.blocks ?? []).some((block) => block.task_result),
     id: message.id,
     ...(message.client_request_id ? { requestId: message.client_request_id } : {}),
     sequence: message.sequence,
@@ -1119,6 +1086,7 @@ function toBubble(message: ServerMessage): {
     ...(message.reply_to
       ? { replyTo: { messageId: message.reply_to.message_id, excerpt: message.reply_to.excerpt } }
       : {}),
+    mentions: (message.blocks ?? []).flatMap((block) => block.mentions ?? []),
     reactions: message.reactions ?? [],
     reactionRevision: message.reaction_revision ?? 0,
     attachments,
@@ -1184,142 +1152,13 @@ async function previewFile(path: string, botId?: string): Promise<string> {
   return `data:${type};base64,${bytes.toString('base64')}`
 }
 
-async function readConversationStream(
-  event: IpcMainInvokeEvent,
-  conversationId: string,
-  body: unknown,
-  requestId: string,
-): Promise<unknown> {
-  await loadSession()
-  const response = await transport().fetch(
-    `${requireServerAddress()}/api/v1/conversations/${encodeURIComponent(conversationId)}/messages`,
-    {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        accept: 'text/event-stream',
-        ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(90_000),
-    },
-  )
-  const type = response.headers.get('content-type') ?? ''
-  if (!type.includes('text/event-stream')) {
-    const text = await response.text()
-    const payload = text
-      ? (JSON.parse(text) as { error?: { code?: string; message?: string } })
-      : {}
-    if (!response.ok) {
-      throw Object.assign(new Error(payload.error?.message ?? '服务暂时无法完成这个操作。'), {
-        code: payload.error?.code ?? 'REQUEST_FAILED',
-      })
-    }
-    return payload
-  }
-  return readEventStream(event, response, requestId)
-}
-
-async function readEventStream(
-  event: IpcMainInvokeEvent,
-  response: Response,
-  requestId: string,
-): Promise<unknown> {
-  const reader = response.body?.getReader()
-  if (!reader)
-    throw Object.assign(new Error('服务没有返回运行过程。'), { code: 'RESPONSE_INVALID' })
-  const decoder = new TextDecoder()
-  let buffer = ''
-  let donePayload: unknown
-  const push = async (block: string) => {
-    const name = /^event: (\S+)/m.exec(block)?.[1]
-    const data = block
-      .split('\n')
-      .filter((line) => line.startsWith('data: '))
-      .map((line) => line.slice(6))
-      .join('\n')
-    if (!name || !data) return
-    const parsed = JSON.parse(data) as {
-      text?: string
-      code?: string
-      message?: string
-      kind?: string
-      message_id?: string
-      bot_id?: string
-      run_id?: string
-      is_working?: boolean
-      is_finished?: boolean
-      to_bot_id?: string
-      to_name?: string
-      conversation_id?: string
-    }
-    if (name === 'delta' || name === 'process' || name === 'activity') {
-      event.sender.send('desktop:stream-event', {
-        requestId,
-        type: name,
-        text: parsed.text ?? '',
-        runId: parsed.run_id,
-        isWorking: parsed.is_working,
-        isFinished: parsed.is_finished,
-        messageId: parsed.message_id,
-        botId: parsed.bot_id,
-      })
-    }
-    if ((name === 'dm' || name === 'user_message') && parsed.message_id) {
-      const snapshot = (await call('GET', '/workspace')) as {
-        workspace: {
-          agents: Array<{
-            id: string
-            messages: Array<{ id: string; dmNotice?: { conversationId: string } }>
-          }>
-        }
-      }
-      const incoming = snapshot.workspace.agents.flatMap((agent) => {
-        const messages = agent.messages.filter((message) =>
-          name === 'user_message'
-            ? message.id === parsed.message_id
-            : message.dmNotice?.conversationId === parsed.conversation_id,
-        )
-        return messages.length ? [{ id: agent.id, messages }] : []
-      })
-      event.sender.send('desktop:stream-event', {
-        requestId,
-        type: 'incoming',
-        text: '',
-        incoming,
-      })
-    }
-    if (name === 'done') donePayload = parsed
-    if (name === 'error') {
-      throw Object.assign(new Error(parsed.message ?? 'agent 运行失败。'), {
-        code: parsed.code ?? 'MODEL_FAILED',
-      })
-    }
-  }
-  while (true) {
-    const chunk = await reader.read()
-    if (chunk.done) break
-    buffer += decoder.decode(chunk.value, { stream: true })
-    const blocks = buffer.split('\n\n')
-    buffer = blocks.pop() ?? ''
-    for (const block of blocks) await push(block)
-  }
-  if (buffer.trim()) await push(buffer)
-  if (!donePayload)
-    throw Object.assign(new Error('agent 没有返回结果。'), { code: 'RESPONSE_INVALID' })
-  return donePayload
-}
-
 interface LoginInput {
   username: string
   password: string
   code?: string
 }
 
-/**
- * 浏览器登录：在本机回环端口等待一次性回调，用系统浏览器完成登录，
- * 再用授权码 + PKCE 校验串换取会话。口令不经过桌面进程。
- */
+/** 使用系统浏览器完成登录并校验回调，不在桌面收集口令。 */
 async function beginBrowserLogin(): Promise<{ phase: 'ready'; username?: string }> {
   await loadSession()
   const state = Buffer.from(await randomBytes(32)).toString('base64url')

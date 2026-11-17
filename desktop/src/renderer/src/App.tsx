@@ -1,3 +1,4 @@
+import { useGroupChatActions } from './features/workspace/useGroupChatActions'
 import { ulid } from '../../shared/ulid'
 import type { GroupSummary } from './features/desktop/backend'
 import { useCallback, useEffect, useState, type CSSProperties } from 'react'
@@ -75,7 +76,6 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     commit,
     create,
     deliver,
-    receive,
     react,
     error,
     isBlocked,
@@ -143,7 +143,10 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       })
   }
   const agent = workspace.agents.find((candidate) => candidate.id === workspace.activeAgentId)
-  const agentIds = workspace.agents.map((item) => item.id)
+  const agentIds = [
+    ...workspace.agents.map((item) => item.id),
+    ...chatGroups.map((group) => group.id),
+  ]
   const menuAgent = menuAnchor
     ? workspace.agents.find((candidate) => candidate.id === menuAnchor.agentId)
     : undefined
@@ -156,6 +159,32 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   const bannerMessage =
     error || profileError || themeError || sidebarError || languageError || notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
+  const groupActions = useGroupChatActions({
+    activeGroupId: surface.kind === 'group' ? surface.id : undefined,
+    onHide: (id) => {
+      if (surface.kind === 'group' && surface.id === id)
+        setSurface({ kind: 'agent', id: workspace.activeAgentId })
+    },
+    groups: chatGroups,
+    categories: getAgentGroups(workspace),
+    ids: agentIds,
+    preferences,
+    update: updatePreferences,
+    onError: setNotice,
+    onSelect: (id) => {
+      setSurface({ kind: 'group', id })
+      setCatPanelOpen(false)
+    },
+    onChanged: (group, deleted) => {
+      setChatGroups((current) =>
+        deleted
+          ? current.filter((item) => item.id !== group.id)
+          : current.map((item) => (item.id === group.id ? group : item)),
+      )
+      if (deleted && surface.kind === 'group' && surface.id === group.id)
+        setSurface({ kind: 'agent', id: workspace.activeAgentId })
+    },
+  })
 
   // 活动只由传输层事件驱动；本地草稿没有进行中的请求，不能在这里写入 working。
   useEffect(() => installAgentActivityEvents(), [])
@@ -442,7 +471,17 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         isCollapsed={sidebarWidth === SIDEBAR_WIDTH.collapsed}
         renamingAgentId={renamingAgentId}
         editingGroupName={editingGroupName}
-        onAgentMenu={setMenuAnchor}
+        onAgentMenu={(anchor) => {
+          groupActions.openMenu(undefined)
+          setMenuAnchor(anchor)
+        }}
+        onGroupMenu={(anchor) => {
+          closeMenu()
+          groupActions.openMenu(anchor)
+        }}
+        renamingChatId={groupActions.renamingId}
+        onRenameChat={groupActions.rename}
+        onCancelRenameChat={groupActions.cancelRename}
         onRenameAgent={renameCurrentAgent}
         onCancelRenameAgent={() => setRenamingAgentId(undefined)}
         onRenameGroup={renameCurrentGroup}
@@ -456,10 +495,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         selected={
           surface.kind === 'agent' ? { kind: 'agent', id: workspace.activeAgentId } : surface
         }
-        onOpenGroup={(id) => {
-          setSurface({ kind: 'group', id })
-          setCatPanelOpen(false)
-        }}
+        onOpenGroup={groupActions.select}
         onCreateGroup={() => setOpenDialog('group')}
         serverUrl={serverUrl}
         connectionStatus={connectionStatus}
@@ -470,12 +506,9 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         {surface.kind !== 'agent' ? (
           <ConversationPanel
             composerNotice={composerNotice}
-            onIncoming={receive}
-            workStates={workStates}
-            onExecutionEvent={receiveActivity}
-            onExecutionEnd={clearActivity}
             key={surface.id}
             id={surface.id}
+            name={chatGroups.find((group) => group.id === surface.id)?.name}
             agents={workspace.agents}
             onNotice={setNotice}
             onError={setNotice}
@@ -634,10 +667,12 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
           />
         )}
       </div>
+      {groupActions.overlays}
       {menuAnchor && menuAgent && (
         <CatContextMenu
           anchor={menuAnchor}
           agent={menuAgent}
+          chatType="bot"
           groups={getAgentGroups(workspace)}
           isLead={menuAgent.id === workspace.leadAgentId}
           isPinned={
@@ -675,6 +710,14 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         <WorkspaceDialog
           workspace={workspace}
           hiddenAgents={hiddenAgents}
+          hiddenChats={chatGroups.filter((group) => preferences.hiddenIds.includes(group.id))}
+          onUnhideChat={(id) =>
+            runAction(() =>
+              updatePreferences((previous) =>
+                setSidebarFlag(previous, agentIds, id, 'hiddenIds', false),
+              ),
+            )
+          }
           connectionStatus={connectionStatus}
           onUnhide={showHiddenAgent}
           onClose={() => setOpenDialog(null)}
@@ -693,8 +736,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         <GroupCreateDialog
           agents={workspace.agents}
           onClose={() => setOpenDialog(null)}
-          onCreate={async (name, memberIds) => {
-            const created = await getBackend().createGroup?.(name, memberIds)
+          onCreate={async (name, memberIds, requestId) => {
+            const created = await getBackend().createGroup?.(name, memberIds, requestId)
             if (!created) throw new Error('还不能创建群聊。')
             refreshRooms()
             setSurface({ kind: 'group', id: created.id })

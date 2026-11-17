@@ -12,6 +12,7 @@ import type { ChatMessage as ChatMessageModel, MessageAttachment } from '../work
 export function ChatMessage({
   message,
   speaker,
+  mentions,
   isPending = false,
   isHighlighted,
   onOpenMenu,
@@ -23,6 +24,7 @@ export function ChatMessage({
 }: {
   message: ChatMessageModel
   speaker?: string
+  mentions?: Array<{ id: string; name: string }>
   isPending?: boolean
   isHighlighted: boolean
   onOpenMenu: (messageId: string, x: number, y: number, trigger: HTMLElement) => void
@@ -112,6 +114,15 @@ export function ChatMessage({
             {speaker && message.role === 'assistant' ? (
               <span className="message-speaker">{speaker}</span>
             ) : null}
+            {!!mentions?.length && (
+              <div className="group-mentions">
+                {mentions.map((mention) => (
+                  <span key={mention.id} className={mention.id === 'user' ? 'is-self' : ''}>
+                    @{mention.id === 'user' ? '你' : mention.name}
+                  </span>
+                ))}
+              </div>
+            )}
             {message.role === 'assistant' ? (
               <MarkdownMessage content={message.content} />
             ) : (

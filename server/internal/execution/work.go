@@ -14,7 +14,8 @@ import (
 func available(ctx context.Context, transaction *sql.Tx, lease Lease) error {
 	var valid bool
 	err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.users u JOIN tombot.bots b ON b.user_id=u.id JOIN tombot.conversations c ON c.user_id=u.id
-		WHERE u.id=$1 AND b.id=$2 AND c.id=$3 AND u.status='active' AND NOT b.is_archived AND NOT c.is_archived)`, lease.UserID, lease.BotID, lease.ConversationID).Scan(&valid)
+		WHERE u.id=$1 AND b.id=$2 AND c.id=$3 AND u.status='active' AND NOT b.is_archived AND NOT c.is_archived
+		AND (c.kind<>'group' OR EXISTS(SELECT 1 FROM tombot.group_members m JOIN tombot.groups g ON g.user_id=m.user_id AND g.id=m.group_id WHERE m.user_id=c.user_id AND m.group_id=c.group_id AND m.bot_id=b.id AND NOT g.is_archived)))`, lease.UserID, lease.BotID, lease.ConversationID).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -70,11 +71,19 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if err = transaction.QueryRowContext(ctx, `SELECT message_sequence FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, lease.UserID, lease.ConversationID).Scan(&contextSequence); err != nil {
 			return err
 		}
+		var triggerSequence int64
+		work.GroupContext, triggerSequence, err = groupContext(ctx, transaction, lease)
+		if err != nil {
+			return err
+		}
+		if work.GroupContext != "" {
+			contextSequence = triggerSequence
+		}
 		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
 			return err
 		}
 		// 能力沿用运行快照，执行工具时再检查最新授权，避免恢复时悄悄改写模型输入。
-		if err = transaction.QueryRowContext(ctx, `SELECT kind='direct' FROM tombot.conversations WHERE user_id=$1 AND id=$2`, lease.UserID, lease.ConversationID).Scan(&work.HasMemory); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT kind IN ('direct','task'),kind='task' FROM tombot.conversations WHERE user_id=$1 AND id=$2`, lease.UserID, lease.ConversationID).Scan(&work.HasMemory, &work.IsTask); err != nil {
 			return err
 		}
 		work.HasMemory = work.HasMemory && len(work.Bot.ToolPermissions) > 0
@@ -102,6 +111,8 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		used := 0
 		work.Messages = make([]Message, 0, min(len(messages), service.options.ContextMessages))
 		for index, message := range messages {
+			message.GroupMember = work.GroupContext != ""
+			message.OwnMessage = message.SenderBotID != nil && *message.SenderBotID == lease.BotID
 			if index >= service.options.ContextMessages {
 				work.HistoryTruncated = true
 				break

@@ -9,6 +9,10 @@ import (
 )
 
 func TestRejectMissingTransaction(t *testing.T) {
+	if _, err := TaskDesktop(context.Background(), nil, ids.New(), ids.New()); !errors.Is(err, ErrInvalidInput) {
+		t.Fatal("缺少事务仍接受任务桌面", err)
+	}
+
 	if _, err := Register(context.Background(), nil, ids.New(), ids.New(), ids.New()); !errors.Is(err, ErrInvalidInput) {
 		t.Fatal("缺少事务仍接受登记", err)
 	}

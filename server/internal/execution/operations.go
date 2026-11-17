@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/scheduledtasks"
 
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelusage"
@@ -70,8 +71,16 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 		if err := available(ctx, transaction, lease); err != nil {
 			return err
 		}
-		// 内建记忆逐次核验私人单聊范围，业务工具仍逐次检查权限。
-		if request.Kind == "tool" && botmemory.IsTool(request.ToolName) {
+		// 内建记忆和任务逐次核验私人单聊范围，业务工具仍逐次检查权限。
+		if request.Kind == "tool" && request.ToolName == "post_to_group" {
+			allowed, err := isGroupRun(ctx, transaction, lease)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return ErrUnavailable
+			}
+		} else if request.Kind == "tool" && (botmemory.IsTool(request.ToolName) || scheduledtasks.IsTool(request.ToolName)) {
 			allowed, err := memoryPermitted(ctx, transaction, lease)
 			if err != nil {
 				return err

@@ -1,5 +1,5 @@
-import { Pencil, Users, X } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { Users, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import { GroupAvatar } from '../../components/GroupAvatar'
 import { GroupMemberPicker } from './GroupMemberPicker'
 import { GroupLibrary } from './GroupLibrary'
@@ -19,9 +19,7 @@ export function GroupSidePanel({
   onClose: () => void
   onChange: (group: GroupDetail) => void
 }) {
-  const [tab, setTab] = useState<'details' | 'library' | 'members'>('details')
-  const [editing, setEditing] = useState(false)
-  const [name, setName] = useState(group.name)
+  const [tab, setTab] = useState<'members' | 'library'>('members')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState('')
   const locked = useRef(false)
@@ -45,8 +43,6 @@ export function GroupSidePanel({
       if (!load) throw new Error('暂时无法读取群资料。')
       const next = await load(group.id)
       onChange(next)
-      setName(next.name)
-      setEditing(false)
       return true
     } catch (failure) {
       setError((failure as Error).message)
@@ -64,18 +60,6 @@ export function GroupSidePanel({
     }
   }
 
-  function rename(event: FormEvent) {
-    event.preventDefault()
-    if (!name.trim()) {
-      setError('请填写群名称')
-      return
-    }
-    void change(async () => {
-      const renameGroup = getBackend().renameGroup
-      if (!renameGroup) throw new Error('暂时无法修改群名称。')
-      await renameGroup(group.id, group.revision, name.trim())
-    })
-  }
   const available = agents.filter(
     (agent) => !group.members.some((member) => member.bot_id === agent.id),
   )
@@ -95,7 +79,7 @@ export function GroupSidePanel({
         <p>{group.members.length} 位猫咪搭档</p>
       </div>
       <div className="cat-panel-tabs" role="tablist" aria-label="群栏目">
-        {(['details', 'library', 'members'] as const).map((item) => (
+        {(['members', 'library'] as const).map((item) => (
           <button
             key={item}
             type="button"
@@ -108,13 +92,13 @@ export function GroupSidePanel({
             onKeyDown={(event) => {
               if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
               event.preventDefault()
-              const tabs = ['details', 'library', 'members'] as const
-              const next = tabs[(tabs.indexOf(tab) + (event.key === 'ArrowRight' ? 1 : 2)) % 3]!
+              const tabs = ['members', 'library'] as const
+              const next = tabs[(tabs.indexOf(tab) + 1) % 2]!
               setTab(next)
               document.getElementById(`group-tab-${next}`)?.focus()
             }}
           >
-            {item === 'details' ? '详情' : item === 'library' ? '资料库' : '成员'}
+            {item === 'library' ? '资料库' : '成员'}
           </button>
         ))}
       </div>
@@ -124,69 +108,6 @@ export function GroupSidePanel({
         id={`group-panel-${tab}`}
         aria-labelledby={`group-tab-${tab}`}
       >
-        {tab === 'details' &&
-          (editing ? (
-            <form
-              className="group-name-form"
-              onSubmit={rename}
-              onKeyDown={(event) => {
-                if (event.key === 'Escape') {
-                  event.stopPropagation()
-                  setEditing(false)
-                  setName(group.name)
-                }
-              }}
-            >
-              <label>
-                群名称
-                <input
-                  autoFocus
-                  value={name}
-                  maxLength={48}
-                  onChange={(event) => setName(event.target.value)}
-                  disabled={pending}
-                />
-              </label>
-              <div className="group-name-actions">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  disabled={pending}
-                  onClick={() => {
-                    setEditing(false)
-                    setName(group.name)
-                  }}
-                >
-                  取消
-                </button>
-                <button
-                  type="submit"
-                  className="secondary-button"
-                  disabled={pending || !name.trim() || name.trim() === group.name}
-                >
-                  保存名称
-                </button>
-              </div>
-            </form>
-          ) : (
-            <section className="cat-panel-card group-name-display">
-              <span>群名称</span>
-              <div>
-                <strong>{group.name}</strong>
-                <button
-                  type="button"
-                  className="icon-button"
-                  aria-label="修改群名称"
-                  onClick={() => {
-                    setName(group.name)
-                    setEditing(true)
-                  }}
-                >
-                  <Pencil size={15} />
-                </button>
-              </div>
-            </section>
-          ))}
         {tab === 'library' && <GroupLibrary groupId={group.id} />}
         {error && (
           <p role="alert" className="form-error">
@@ -196,8 +117,13 @@ export function GroupSidePanel({
         {tab === 'members' && (
           <section className="group-roster" aria-label="群成员">
             <h3>
-              群成员 <span>{group.members.length}</span>
+              群成员 <span>{group.members.length + 1}</span>
             </h3>
+            <div className="group-member-row">
+              <Users size={24} />
+              <span>你</span>
+              <span>群主</span>
+            </div>
             {group.members.map((member) => {
               const cat = agents.find((agent) => agent.id === member.bot_id)
               return (

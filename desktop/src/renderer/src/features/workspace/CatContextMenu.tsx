@@ -49,6 +49,7 @@ function navigateMenu(event: KeyboardEvent<HTMLDivElement>): void {
 export function CatContextMenu({
   anchor,
   agent,
+  chatType,
   groups,
   isLead,
   isPinned,
@@ -59,7 +60,8 @@ export function CatContextMenu({
   onClose,
 }: {
   anchor: CatMenuAnchor
-  agent: Agent
+  agent: Pick<Agent, 'name' | 'group'>
+  chatType: 'bot' | 'group'
   groups: string[]
   isLead: boolean
   isPinned: boolean
@@ -124,7 +126,12 @@ export function CatContextMenu({
       title: isDefault ? '默认猫咪固定置顶' : undefined,
     },
     { action: 'unread', label: isUnread ? '标为已读' : '标为未读', Icon: Bell },
-    { action: 'rename', label: '重命名猫咪', Icon: Pencil, separator: true },
+    {
+      action: 'rename',
+      label: chatType === 'group' ? '重命名聊天' : '重命名猫咪',
+      Icon: Pencil,
+      separator: true,
+    },
     { action: 'copy', label: '复制对话 ID', Icon: Copy, separator: true },
     {
       action: 'hide',

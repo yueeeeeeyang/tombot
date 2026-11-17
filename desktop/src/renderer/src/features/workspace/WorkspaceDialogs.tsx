@@ -1,3 +1,5 @@
+import { GroupAvatar } from '../../components/GroupAvatar'
+import type { GroupSummary } from '../desktop/backend'
 import type { ConnectionStatus } from '../session/useConnectionStatus'
 import { useRef, useState, type FormEvent } from 'react'
 import { ulid } from '../../../../shared/ulid'
@@ -208,12 +210,16 @@ export function FirstCatPage(props: RecruitCatFormProps) {
 export function WorkspaceDialog({
   workspace,
   hiddenAgents,
+  hiddenChats = [],
+  onUnhideChat,
   connectionStatus,
   onUnhide,
   onClose,
 }: {
   workspace: Workspace
   hiddenAgents: Agent[]
+  hiddenChats?: GroupSummary[]
+  onUnhideChat?: (id: string) => void
   connectionStatus: ConnectionStatus
   onUnhide: (id: string) => void
   onClose: () => void
@@ -253,6 +259,24 @@ export function WorkspaceDialog({
         </div>
         <span>{connectionStatus === 'connected' ? '已连接' : '连接异常'}</span>
       </div>
+      {hiddenChats.length > 0 && (
+        <section className="workspace-hidden" aria-label="已隐藏的群聊">
+          <h3>已隐藏的群聊</h3>
+          {hiddenChats.map((group) => (
+            <div className="workspace-hidden-item" key={group.id}>
+              <GroupAvatar presets={group.avatar_presets} />
+              <strong>{group.name}</strong>
+              <button
+                type="button"
+                aria-label={`恢复显示${group.name}`}
+                onClick={() => onUnhideChat?.(group.id)}
+              >
+                恢复显示
+              </button>
+            </div>
+          ))}
+        </section>
+      )}
       {hiddenAgents.length > 0 && (
         <section className="workspace-hidden" aria-label="已隐藏的助手">
           <div className="workspace-hidden-heading">

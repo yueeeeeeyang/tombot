@@ -24,6 +24,7 @@ import (
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/modelregistry"
+	"io.yueyang/tom/internal/scheduledtasks"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/testkit/pgtest"
 	"io.yueyang/tom/internal/userevents"
@@ -225,6 +226,43 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if foreign.Bot.ID == created.Bot.ID {
 		t.Fatal("跨账户复用了同一资源")
 	}
+
+	taskID := ids.New()
+	execute(t, pool, `INSERT INTO tombot.scheduled_tasks(user_id,id,bot_id,conversation_id,name,prompt,cron,timezone,is_enabled,next_run_at) VALUES($1,$2,$3,$4,'日报','整理工作','0 18 * * *','Asia/Shanghai',true,clock_timestamp()+interval '1 hour')`, sessions[0].Principal.UserID, taskID, created.Bot.ID, created.Bot.ConversationID)
+	taskPath := "/api/v2/bots/" + created.Bot.ID + "/tasks"
+	if page := decode[scheduledtasks.Page](t, call("GET", taskPath, nil, first, nil), 200); len(page.Tasks) != 1 || page.Tasks[0].ID != taskID {
+		t.Fatal("任务列表未接入新版协议")
+	}
+	if response := call("GET", taskPath, nil, second, nil); response.status != 404 {
+		t.Fatal("跨用户读取任务", response.status)
+	}
+	for _, suffix := range []string{"?before=bad", "?unknown=1", "?before=x&before=y"} {
+		if response := call("GET", taskPath+suffix, nil, first, nil); response.status != 400 {
+			t.Fatal("任务查询未校验", response.status)
+		}
+	}
+	statePath := taskPath + "/" + taskID + "/state"
+	if response := call("POST", statePath, map[string]any{"expected_revision": 1}, first, nil); response.status != 400 {
+		t.Fatal("缺少任务启用状态未拒绝")
+	}
+	type taskReply struct {
+		Task scheduledtasks.Task `json:"task"`
+	}
+	if task := decode[taskReply](t, call("POST", statePath, map[string]any{"expected_revision": 1, "is_enabled": false}, first, nil), 200).Task; task.IsEnabled || task.Revision != 2 || task.NextRunAt != nil {
+		t.Fatal("任务禁用未生效")
+	}
+	if response := call("POST", statePath, map[string]any{"expected_revision": 1, "is_enabled": true}, first, nil); response.status != 409 {
+		t.Fatal("旧版任务覆盖状态")
+	}
+	if response := call("DELETE", taskPath+"/"+taskID, map[string]any{"expected_revision": 2}, second, nil); response.status != 404 {
+		t.Fatal("跨用户删除任务")
+	}
+	if response := call("DELETE", taskPath+"/"+taskID, map[string]any{"expected_revision": 2}, first, nil); response.status != 204 {
+		t.Fatal("面板删除任务失败", response.status)
+	}
+	if page := decode[scheduledtasks.Page](t, call("GET", taskPath, nil, first, nil), 200); len(page.Tasks) != 0 {
+		t.Fatal("任务删除未生效")
+	}
 	conversationPath := "/api/v2/conversations/" + created.Bot.ConversationID
 	messagePath := conversationPath + "/messages"
 	messageRequest := execution.SendRequest{ClientRequestID: ids.New(), Content: "请核对这份资料。"}
@@ -338,12 +376,13 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	groupRequest := bots.CreateGroupRequest{ClientRequestID: ids.New(), GroupSpec: bots.GroupSpec{Name: "资料工作组", MemberIDs: []string{created.Bot.ID}}}
 	group := decode[groupReply](t, call("POST", "/api/v2/groups", groupRequest, first, nil), 201)
 	groupPath := "/api/v2/groups/" + group.Group.ID
-	kindFailure := decode[struct {
-		Code string `json:"code"`
-	}](t, call("POST", "/api/v2/conversations/"+group.Group.ConversationID+"/messages", execution.SendRequest{ClientRequestID: ids.New(), Content: "群聊任务"}, first, nil), 409)
-	if kindFailure.Code != "CONVERSATION_KIND_UNAVAILABLE" {
-		t.Fatal("尚未接入的群编排未明确拒绝")
+	groupAccepted := decode[struct {
+		Submission execution.Submission `json:"submission"`
+	}](t, call("POST", "/api/v2/conversations/"+group.Group.ConversationID+"/messages", execution.SendRequest{ClientRequestID: ids.New(), Content: "群聊任务"}, first, nil), 202)
+	if groupAccepted.Submission.RunID == "" || groupAccepted.Submission.MessageID == "" {
+		t.Fatal("群聊消息没有持久受理")
 	}
+
 	if response := call("GET", groupPath, nil, second, nil); response.status != 404 {
 		t.Fatal("跨用户群组泄漏")
 	}

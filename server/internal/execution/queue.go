@@ -26,7 +26,7 @@ func (service *Service) Claim(ctx context.Context, ownerID string) (Lease, error
 		var userID string
 		err := transaction.QueryRowContext(ctx, `SELECT h.user_id FROM tombot.user_dispatch_heads h WHERE EXISTS(
 			SELECT 1 FROM tombot.jobs j WHERE j.user_id=h.user_id AND j.status='queued' AND j.available_at<=clock_timestamp() AND j.attempt<$1
-			AND NOT EXISTS(SELECT 1 FROM tombot.jobs busy WHERE busy.user_id=j.user_id AND busy.bot_id=j.bot_id AND busy.status='leased'))
+			AND NOT EXISTS(SELECT 1 FROM tombot.jobs busy WHERE busy.user_id=j.user_id AND busy.bot_id=j.bot_id AND busy.execution_kind=j.execution_kind AND busy.status='leased'))
 			ORDER BY h.last_claimed_at NULLS FIRST,h.user_id LIMIT 1 FOR UPDATE OF h SKIP LOCKED`, service.options.MaxAttempts).Scan(&userID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoWork
@@ -36,7 +36,7 @@ func (service *Service) Claim(ctx context.Context, ownerID string) (Lease, error
 		}
 		var jobID string
 		err = transaction.QueryRowContext(ctx, `SELECT j.id FROM tombot.jobs j WHERE j.user_id=$1 AND j.status='queued' AND j.available_at<=clock_timestamp() AND j.attempt<$2
-			AND NOT EXISTS(SELECT 1 FROM tombot.jobs busy WHERE busy.user_id=j.user_id AND busy.bot_id=j.bot_id AND busy.status='leased')
+			AND NOT EXISTS(SELECT 1 FROM tombot.jobs busy WHERE busy.user_id=j.user_id AND busy.bot_id=j.bot_id AND busy.execution_kind=j.execution_kind AND busy.status='leased')
 			ORDER BY j.available_at,j.created_at,j.id LIMIT 1 FOR UPDATE OF j SKIP LOCKED`, userID, service.options.MaxAttempts).Scan(&jobID)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNoWork

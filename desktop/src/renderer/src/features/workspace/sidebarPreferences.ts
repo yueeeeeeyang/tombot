@@ -1,17 +1,17 @@
 import { z } from 'zod'
-import { MAX_AGENTS } from './model'
 import type { WorkspaceStorage } from './storage'
 
 export const SIDEBAR_STORAGE_KEY = 'tombot.sidebar.v1'
 const idsSchema = z
   .array(z.string().min(1).max(128))
-  .max(MAX_AGENTS)
+  .max(1024)
   .refine((ids) => new Set(ids).size === ids.length)
 const preferencesSchema = z.object({
   version: z.literal(1),
   pinnedIds: idsSchema.refine((ids) => !ids.includes('assistant')),
   unreadIds: idsSchema,
   hiddenIds: idsSchema,
+  chatCategories: z.record(z.string().min(1).max(128), z.string().trim().min(1).max(24)).optional(),
 })
 export type SidebarPreferences = z.infer<typeof preferencesSchema>
 export type SidebarFlag = 'pinnedIds' | 'unreadIds' | 'hiddenIds'
@@ -77,8 +77,11 @@ export function removeSidebarAgent(
   preferences: SidebarPreferences,
   id: string,
 ): SidebarPreferences {
+  const chatCategories = preferences.chatCategories ? { ...preferences.chatCategories } : undefined
+  if (chatCategories) delete chatCategories[id]
   return preferencesSchema.parse({
     ...preferences,
+    ...(chatCategories ? { chatCategories } : {}),
     pinnedIds: preferences.pinnedIds.filter((candidate) => candidate !== id),
     unreadIds: preferences.unreadIds.filter((candidate) => candidate !== id),
     hiddenIds: preferences.hiddenIds.filter((candidate) => candidate !== id),

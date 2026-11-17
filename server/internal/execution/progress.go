@@ -8,6 +8,7 @@ import (
 
 	"io.yueyang/tom/internal/botagent"
 	"io.yueyang/tom/internal/botpersona"
+	"io.yueyang/tom/internal/groupchat"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/provider"
 )
@@ -43,11 +44,17 @@ func (service *Service) Activity(ctx context.Context, principal identity.Princip
 	}
 	runs := []Run{}
 	err := service.user(ctx, principal, false, func(tx *sql.Tx) error {
-		var id string
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM tombot.conversations WHERE user_id=$1 AND id=$2`, principal.UserID, conversationID).Scan(&id); err != nil {
+		var kind string
+		if err := tx.QueryRowContext(ctx, `SELECT kind FROM tombot.conversations WHERE user_id=$1 AND id=$2`, principal.UserID, conversationID).Scan(&kind); err != nil {
 			return err
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+runColumns+` FROM tombot.runs WHERE user_id=$1 AND conversation_id=$2 AND status IN ('queued','running','canceling') ORDER BY id DESC LIMIT 1`, principal.UserID, conversationID)
+		query := `SELECT ` + runColumns + ` FROM tombot.runs WHERE user_id=$1 AND conversation_id=$2 AND status IN ('queued','running','canceling') ORDER BY id DESC LIMIT $3`
+		limit := 1
+		if kind == "group" {
+			query = `SELECT DISTINCT ON (bot_id) ` + runColumns + ` FROM tombot.runs WHERE user_id=$1 AND conversation_id=$2 AND status IN ('queued','running','canceling') ORDER BY bot_id,CASE WHEN status='running' THEN 0 ELSE 1 END,id DESC LIMIT $3`
+			limit = groupchat.MaxMembers
+		}
+		rows, err := tx.QueryContext(ctx, query, principal.UserID, conversationID, limit)
 		if err != nil {
 			return err
 		}

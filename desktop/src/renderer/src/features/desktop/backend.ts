@@ -1,3 +1,4 @@
+import type { CatTask } from '../../../../shared/tasks'
 import type { Artifact } from '../workspace/model'
 import type { Agent, AppWorkspace, NewAgent } from '../workspace/model'
 
@@ -48,6 +49,7 @@ export interface WorkspaceSnapshot {
 }
 
 export type ServerBubble = {
+  isNotice?: boolean
   id: string
   /** 用户发送时的幂等键，用于合并先于回执到达的服务端消息。 */
   requestId?: string
@@ -59,6 +61,7 @@ export type ServerBubble = {
   createdAt: string
   replyTo?: { messageId: string; excerpt: string }
   reactions: Array<{ emoji: string; count: number }>
+  mentions?: Array<{ id: string; name: string }>
   reactionRevision?: number
   attachments: Array<{
     name: string
@@ -123,26 +126,23 @@ export interface DesktopBackend {
     replyToId?: string,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
-  loadIntroduction: (agentId: string) => Promise<{ text: string }>
-  listRoutines?: (agentId: string) => Promise<
-    Array<{
-      id: string
-      name: string
-      cron: string
-      prompt: string
-      is_enabled: boolean
-      revision: number
-    }>
-  >
-  setRoutineEnabled?: (id: string, revision: number, enabled: boolean) => Promise<void>
-  deleteRoutine?: (id: string, revision: number) => Promise<void>
+  listTasks?: (agentId: string) => Promise<CatTask[]>
+  setTaskEnabled?: (
+    agentId: string,
+    id: string,
+    revision: number,
+    enabled: boolean,
+  ) => Promise<void>
+  deleteTask?: (agentId: string, id: string, revision: number) => Promise<void>
   listGroups?: () => Promise<GroupSummary[]>
-  createGroup?: (name: string, memberIds: string[]) => Promise<GroupSummary>
+  createGroup?: (name: string, memberIds: string[], requestId: string) => Promise<GroupSummary>
   listGroupArtifacts: (
     id: string,
     before?: number,
   ) => Promise<{ artifacts: Artifact[]; next: number }>
   groupDetail?: (id: string) => Promise<GroupDetail>
+  deleteGroup?: (id: string, revision: number) => Promise<void>
+  conversationActivity?: (id: string) => Promise<{ runs: AgentConversation['runs'] }>
   renameGroup?: (id: string, revision: number, name: string) => Promise<GroupDetail>
   addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>
   removeGroupMember?: (id: string, revision: number, botId: string) => Promise<void>
@@ -157,8 +157,8 @@ export interface DesktopBackend {
     attachments: Array<{ path: string; sha256: string }>,
     replyToId: string | undefined,
     mentions: string[],
-    onEvent?: (event: StreamEvent) => void,
-  ) => Promise<void>
+    requestId: string,
+  ) => Promise<DeliveryResult>
   uploadAttachment?: (
     file: { name: string; type: string; bytes: Uint8Array },
     destination: { botId?: string; shared?: boolean },

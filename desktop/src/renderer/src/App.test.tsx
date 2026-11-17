@@ -595,6 +595,7 @@ describe('客户端交互', () => {
     ).toBe('未分组')
 
     openAgentMenu('游戏负责人 + 策划')
+    expect(screen.queryByRole('menuitem', { name: '重命名聊天' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('menuitem', { name: '重命名猫咪' }))
     const nameInput = screen.getByRole('textbox', { name: '猫咪名称' })
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()

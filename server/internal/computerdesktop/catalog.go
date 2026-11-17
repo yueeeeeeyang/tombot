@@ -8,6 +8,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/infra/ids"
 )
 
 var (
@@ -45,12 +46,35 @@ func Lookup(ctx context.Context, transaction *sql.Tx, userID, desktopID string) 
 // Register 与机器人创建共用事务；调用前须插入同一用户、机器人和桌面 ID 的机器人记录。
 // 只在短事务内锁定编号分配行；相同身份重试不会消耗编号，失败由调用方回滚整个事务。
 func Register(ctx context.Context, transaction *sql.Tx, userID, botID, desktopID string) (computer.DesktopIdentity, error) {
+	return register(ctx, transaction, userID, botID, desktopID, "chat")
+}
+
+// TaskDesktop 为猫咪惰性分配一个独立后台桌面；身份永久保留，重启和并发申请不会重复分配。
+func TaskDesktop(ctx context.Context, tx *sql.Tx, userID, botID string) (computer.DesktopIdentity, error) {
+	if tx == nil || !validIDs(userID, botID) {
+		return computer.DesktopIdentity{}, ErrInvalidInput
+	}
+	var id string
+	err := tx.QueryRowContext(ctx, `SELECT id FROM tombot.bots WHERE user_id=$1 AND id=$2 AND NOT is_archived FOR UPDATE`, userID, botID).Scan(&id)
+	if err != nil {
+		return computer.DesktopIdentity{}, err
+	}
+	err = tx.QueryRowContext(ctx, `SELECT id FROM tombot.bot_desktops WHERE user_id=$1 AND bot_id=$2 AND purpose='task'`, userID, botID).Scan(&id)
+	if err == nil {
+		return Lookup(ctx, tx, userID, id)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return computer.DesktopIdentity{}, err
+	}
+	return register(ctx, tx, userID, botID, ids.New(), "task")
+}
+func register(ctx context.Context, transaction *sql.Tx, userID, botID, desktopID, purpose string) (computer.DesktopIdentity, error) {
 	if transaction == nil || !validIDs(userID, botID, desktopID) {
 		return computer.DesktopIdentity{}, ErrInvalidInput
 	}
 	var computerID string
 	err := transaction.QueryRowContext(ctx, `SELECT c.id FROM tombot.computers c JOIN tombot.bots b ON b.user_id=c.user_id
-		WHERE c.user_id=$1 AND b.id=$2 AND b.desktop_id=$3 AND c.status<>'deleted'`, userID, botID, desktopID).Scan(&computerID)
+		WHERE c.user_id=$1 AND b.id=$2 AND ($4='task' OR b.desktop_id=$3) AND c.status<>'deleted'`, userID, botID, desktopID, purpose).Scan(&computerID)
 	if err != nil {
 		return computer.DesktopIdentity{}, err
 	}
@@ -89,8 +113,8 @@ func Register(ctx context.Context, transaction *sql.Tx, userID, botID, desktopID
 	if _, err = transaction.ExecContext(ctx, `UPDATE tombot.desktop_identity_heads SET last_display_number=$2 WHERE user_id=$1`, userID, identity.DisplayNumber); err != nil {
 		return computer.DesktopIdentity{}, err
 	}
-	_, err = transaction.ExecContext(ctx, `INSERT INTO tombot.bot_desktops(user_id,id,bot_id,computer_id,linux_uid,shared_gid,display_number) VALUES($1,$2,$3,$4,$5,$6,$7)`,
-		userID, desktopID, botID, computerID, identity.UID, identity.GID, identity.DisplayNumber)
+	_, err = transaction.ExecContext(ctx, `INSERT INTO tombot.bot_desktops(user_id,id,bot_id,computer_id,linux_uid,shared_gid,display_number,purpose) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`,
+		userID, desktopID, botID, computerID, identity.UID, identity.GID, identity.DisplayNumber, purpose)
 	if err != nil {
 		return computer.DesktopIdentity{}, err
 	}

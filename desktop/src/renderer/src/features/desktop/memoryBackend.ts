@@ -1,3 +1,4 @@
+import type { CatTask } from '../../../../shared/tasks'
 import { replyExcerpt } from '../workspace/model'
 import {
   addAgent,
@@ -156,29 +157,14 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.resolve({ artifacts: [], next: 0 })
   }
 
-  loadIntroduction(): Promise<{ text: string }> {
-    return Promise.resolve({ text: '' })
-  }
-
-  listRoutines(): Promise<
-    Array<{
-      id: string
-      name: string
-      cron: string
-      prompt: string
-      is_enabled: boolean
-      revision: number
-    }>
-  > {
+  listTasks(): Promise<CatTask[]> {
     return Promise.resolve([])
   }
-
-  setRoutineEnabled(): Promise<void> {
-    return Promise.resolve()
+  setTaskEnabled(): Promise<void> {
+    return Promise.reject(new Error('任务不存在。'))
   }
-
-  deleteRoutine(): Promise<void> {
-    return Promise.resolve()
+  deleteTask(): Promise<void> {
+    return Promise.reject(new Error('任务不存在。'))
   }
 
   openComputer(): Promise<string> {

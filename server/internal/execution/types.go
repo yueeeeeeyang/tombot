@@ -8,14 +8,16 @@ import (
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
+	"io.yueyang/tom/internal/groupchat"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/provider"
 )
 
 type SendRequest struct {
-	ClientRequestID string `json:"client_request_id"`
-	Content         string `json:"content"`
-	ReplyToID       string `json:"reply_to_id,omitempty"`
+	ClientRequestID string   `json:"client_request_id"`
+	Content         string   `json:"content"`
+	ReplyToID       string   `json:"reply_to_id,omitempty"`
+	Mentions        []string `json:"mentions,omitempty"`
 }
 type Submission struct {
 	TurnID    string `json:"turn_id"`
@@ -24,9 +26,11 @@ type Submission struct {
 	IsCreated bool   `json:"is_created"`
 }
 type Block struct {
-	Kind     string          `json:"kind"`
-	Text     string          `json:"text"`
-	Reaction *ReactionChange `json:"reaction,omitempty"`
+	Mentions   []groupchat.Mention `json:"mentions,omitempty"`
+	TaskResult bool                `json:"task_result,omitempty"`
+	Kind       string              `json:"kind"`
+	Text       string              `json:"text"`
+	Reaction   *ReactionChange     `json:"reaction,omitempty"`
 }
 
 // ReactionChange 记录一次不可变的表情交互，目标由消息的 reply_to_id 绑定。
@@ -46,6 +50,8 @@ type Reaction struct {
 	Count int    `json:"count"`
 }
 type Message struct {
+	GroupMember      bool          `json:"-"`
+	OwnMessage       bool          `json:"-"`
 	ID               string        `json:"id"`
 	ClientRequestID  string        `json:"client_request_id,omitempty"`
 	ConversationID   string        `json:"conversation_id"`
@@ -108,6 +114,8 @@ type Work struct {
 	ContinuationAfter int64
 	MemoryContext     string
 	HasMemory         bool
+	IsTask            bool
+	GroupContext      string
 }
 type Operation struct {
 	ID            string          `json:"id"`

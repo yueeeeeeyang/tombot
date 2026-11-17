@@ -1,19 +1,18 @@
+import type { CatTask } from '../../../../shared/tasks'
 import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
 import type { Agent } from '../workspace/model'
 import { ArtifactLibrary } from './ArtifactLibrary'
 import { ComputerPane } from './ComputerPane'
-import { CatIntroduction } from './CatIntroduction'
-import { RoutinePane } from './RoutinePane'
+import { getBackend } from '../desktop/backend'
+import { TaskPane } from './TaskPane'
 
-const PANEL_TABS = ['details', 'library', 'computer', 'routine'] as const
+const PANEL_TABS = ['activity', 'library'] as const
 type PanelTab = (typeof PANEL_TABS)[number]
 const TAB_LABELS: Record<PanelTab, string> = {
-  details: '详情',
+  activity: '动态',
   library: '资料库',
-  computer: '电脑',
-  routine: '定时',
 }
 
 /** 会话右侧的猫咪面板；Esc 关闭，但下拉菜单或弹窗先处理自己的 Esc。 */
@@ -34,11 +33,11 @@ export function CatSidePanel({
   onPrepareComputer?: () => void
   now?: Date
 }) {
-  const [tab, setTab] = useState<PanelTab>('details')
+  const [tab, setTab] = useState<PanelTab>('activity')
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent): void {
-      if (event.key !== 'Escape') return
+      if (event.key !== 'Escape' || event.defaultPrevented) return
       // 下拉和弹窗自己消费 Esc；收起的列表仍留在文档里，不能据此挡住面板关闭。
       if (document.querySelector('dialog[open], [role="listbox"]:not([hidden])')) return
       onClose()
@@ -96,24 +95,34 @@ export function CatSidePanel({
           </button>
         ))}
       </div>
-      {tab === 'details' && (
+      {tab === 'activity' && (
         <div
           className="cat-panel-body"
           role="tabpanel"
-          id="cat-panel-details"
-          aria-labelledby="cat-tab-details"
+          id="cat-panel-activity"
+          aria-labelledby="cat-tab-activity"
         >
-          <section className="cat-panel-card">
-            <span>名称</span>
-            <strong>{agent.name}</strong>
+          <section className="cat-panel-section" aria-labelledby="cat-computer-heading">
+            <h3 id="cat-computer-heading">电脑</h3>
+            <ComputerPane
+              key={`${agent.id}:${agent.computerUrl}`}
+              agentName={agent.name}
+              computerUrl={agent.computerUrl}
+              onSave={onComputerUrl}
+              onConnect={onConnectComputer}
+              onPrepare={onPrepareComputer}
+            />
           </section>
-          <section className="cat-panel-card">
-            <span>介绍</span>
-            <CatIntroduction key={agent.id} agentId={agent.id} revision={agent.messages.length} />
-          </section>
-          <section className="cat-panel-card">
-            <span>分组</span>
-            <strong>{agent.group}</strong>
+          <section className="cat-panel-section" aria-labelledby="cat-task-heading">
+            <h3 id="cat-task-heading">任务</h3>
+            <TaskPane
+              key={agent.id}
+              agentId={agent.id}
+              onLoad={loadTasks}
+              onToggle={toggleTask}
+              onDelete={deleteTask}
+              onWatch={watchTasks}
+            />
           </section>
         </div>
       )}
@@ -127,40 +136,41 @@ export function CatSidePanel({
           <ArtifactLibrary artifacts={agent.artifacts} now={now} />
         </div>
       )}
-      {tab === 'computer' && (
-        <div
-          className="cat-panel-body"
-          role="tabpanel"
-          id="cat-panel-computer"
-          aria-labelledby="cat-tab-computer"
-        >
-          <ComputerPane
-            key={agent.computerUrl}
-            agentName={agent.name}
-            computerUrl={agent.computerUrl}
-            onSave={onComputerUrl}
-            onConnect={onConnectComputer}
-            onPrepare={onPrepareComputer}
-          />
-        </div>
-      )}
-      {tab === 'routine' && (
-        <RoutinePane
-          agentId={agent.id}
-          onLoad={(id) => window.desktop?.backend.listRoutines?.(id) ?? Promise.resolve([])}
-          onToggle={(routine) =>
-            window.desktop?.backend.setRoutineEnabled?.(
-              routine.id,
-              routine.revision,
-              !routine.is_enabled,
-            ) ?? Promise.resolve()
-          }
-          onDelete={(routine) =>
-            window.desktop?.backend.deleteRoutine?.(routine.id, routine.revision) ??
-            Promise.resolve()
-          }
-        />
-      )}
     </aside>
+  )
+}
+
+// 回调保持稳定，聊天消息更新不应重新发起整组任务请求。
+function loadTasks(agentId: string): Promise<CatTask[]> {
+  const backend = getBackend()
+  return backend.listTasks
+    ? backend.listTasks(agentId)
+    : Promise.reject(new Error('当前服务不支持读取任务。'))
+}
+
+function toggleTask(task: CatTask): Promise<void> {
+  const backend = getBackend()
+  return backend.setTaskEnabled
+    ? backend.setTaskEnabled(task.bot_id, task.id, task.revision, !task.is_enabled)
+    : Promise.reject(new Error('当前服务不支持修改任务。'))
+}
+
+function deleteTask(task: CatTask): Promise<void> {
+  const backend = getBackend()
+  return backend.deleteTask
+    ? backend.deleteTask(task.bot_id, task.id, task.revision)
+    : Promise.reject(new Error('当前服务不支持删除任务。'))
+}
+
+function watchTasks(agentId: string, onChange: () => void): () => void {
+  return (
+    getBackend().watchEvents?.((event) => {
+      if (
+        event.kind === 'workspace.refresh' ||
+        (event.payload.bot_id === agentId &&
+          (event.kind === 'task.updated' || event.kind === 'task.run.finished'))
+      )
+        onChange()
+    }, onChange) ?? (() => {})
   )
 }

@@ -126,3 +126,27 @@
 .connection-dot--disconnected {
   background: #e25151;
 }
+
+.group-mentions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+.group-mentions span {
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: var(--hover-bg);
+}
+.group-mentions .is-self {
+  font-weight: 600;
+}
+.group-notice {
+  margin: 8px 16px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-muted);
+}
