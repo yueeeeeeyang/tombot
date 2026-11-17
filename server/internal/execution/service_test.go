@@ -23,6 +23,8 @@ import (
 
 type testAuthorizer struct{}
 
+const executionTestContextLimit = 8192
+
 func (testAuthorizer) RequireAdmin(_ context.Context, principal identity.Principal, _ bool) error {
 	if principal.Role != "admin" || principal.Scope != "admin" {
 		return identity.ErrForbidden
@@ -110,7 +112,8 @@ func newFixtureWithProtocol(t *testing.T, cluster *pgtest.Cluster, protocol stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	model, err := registry.CreateModel(ctx, actor, ids.New(), modelregistry.ModelRequest{ProviderID: provider.ID, ModelKey: "execution-fixture", DisplayName: "运行测试模型", ContextLimit: 4096, OutputLimit: 1024})
+	// 猫咪即使没有业务工具，也使用内建目录和私信工具；基础模型须声明工具能力。
+	model, err := registry.CreateModel(ctx, actor, ids.New(), modelregistry.ModelRequest{ProviderID: provider.ID, ModelKey: "execution-fixture", DisplayName: "运行测试模型", ContextLimit: executionTestContextLimit, OutputLimit: 1024, SupportsTools: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -206,7 +209,7 @@ func expect(t *testing.T, err, want error) {
 }
 func operationRequest(step string) OperationRequest {
 	digest := sha256.Sum256([]byte(step))
-	return OperationRequest{StepKey: step, Kind: "model", RequestDigest: digest[:], Model: &ModelCall{Configuration: modelregistry.Configuration{Protocol: "openai_compat", BaseURL: "https://model.example.test/v1", ModelKey: "execution-fixture", ContextLimit: 4096, OutputLimit: 256}, Lifetime: 30 * time.Second}}
+	return OperationRequest{StepKey: step, Kind: "model", RequestDigest: digest[:], Model: &ModelCall{Configuration: modelregistry.Configuration{Protocol: "openai_compat", BaseURL: "https://model.example.test/v1", ModelKey: "execution-fixture", ContextLimit: executionTestContextLimit, OutputLimit: 256, SupportsTools: true}, Lifetime: 30 * time.Second}}
 }
 func (fixture fixture) completeModel(t *testing.T, lease Lease) Operation {
 	t.Helper()

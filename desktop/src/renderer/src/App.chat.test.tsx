@@ -252,15 +252,65 @@ describe('聊天体验', () => {
     expect(workingCat).toHaveAttribute('data-pose', 'working')
     expect(summary.closest('.composer-area')).not.toBeNull()
     expect(screen.getByRole('log')).not.toHaveTextContent('正在归纳')
-    expect(screen.getByText('结论').tagName).toBe('STRONG')
+    expect(screen.queryByText('结论')).toBeNull()
+    act(() => publish({ type: 'process', text: '正在输入…', botId: 'assistant', runId: 'root' }))
+    expect(screen.getByText('正在输入…').closest('[role="status"]')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: /^游戏程序/ }))
-    expect(screen.queryByText('正在归纳材料中的关键结论')).toBeNull()
+    expect(screen.queryByText('正在输入…')).toBeNull()
     await user.click(screen.getByRole('button', { name: '小黑' }))
-    expect(screen.getByText('正在归纳材料中的关键结论')).toBeInTheDocument()
+    expect(screen.getByText('正在输入…')).toBeInTheDocument()
     await act(async () => finish({ code: 'MODEL_FAILED', message: '模型连接中断' }))
-    expect(screen.queryByText('正在归纳材料中的关键结论')).toBeNull()
+    expect(screen.queryByText('正在输入…')).toBeNull()
+    expect(screen.queryByText('结论')).toBeNull()
     expect(screen.getByRole('alert')).toHaveTextContent('模型连接中断')
     expect(screen.getByRole('button', { name: '未发送，点击重试' })).toBeInTheDocument()
+  })
+  it('输入期间不显示正文片段，完成后整条显示且保留 Markdown', async () => {
+    memoryBackend.loadFixture({ isModelPolicyAvailable: true })
+    let finish!: (value: DeliveryResult) => void
+    let publish!: (event: StreamEvent) => void
+    vi.spyOn(memoryBackend, 'deliverMessage').mockImplementation(
+      (_id, _text, _request, onEvent) => {
+        publish = onEvent!
+        return new Promise((resolve) => {
+          finish = resolve
+        })
+      },
+    )
+    render(<App />)
+    fireEvent.change(screen.getByRole('textbox', { name: '给小黑发消息' }), {
+      target: { value: '核对资料' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(publish).toBeDefined())
+    act(() => {
+      publish({ type: 'activity', text: '', botId: 'assistant', runId: 'reply', isWorking: true })
+      publish({ type: 'process', text: '正在输入…', botId: 'assistant', runId: 'reply' })
+      publish({ type: 'delta', text: '**结果**' })
+      publish({ type: 'delta', text: '\n资料已核对' })
+    })
+    expect(screen.getByText('正在输入…').closest('[role="status"]')).toBeInTheDocument()
+    expect(screen.getByRole('log')).not.toHaveTextContent('资料已核对')
+    expect(screen.queryByText('结果')).toBeNull()
+    await act(async () =>
+      finish({
+        messages: [
+          {
+            id: 'complete-reply',
+            sequence: 2,
+            role: 'assistant',
+            speaker: 'assistant',
+            content: '**结果**\n资料已核对，可以直接使用。',
+            createdAt: new Date().toISOString(),
+            reactions: [],
+            attachments: [],
+          },
+        ],
+      }),
+    )
+    expect(screen.getByText('结果').tagName).toBe('STRONG')
+    expect(screen.getAllByText(/资料已核对，可以直接使用/)).toHaveLength(1)
+    expect(screen.queryByText('正在输入…')).toBeNull()
   })
   it('只有一只猫咪时也显示操作和通用设置，可直接打开账号信息', async () => {
     const fixture = memoryBackend.tryWorkspaceSync().workspace

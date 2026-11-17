@@ -166,7 +166,10 @@ func TestPersistentWorker(t *testing.T) {
 				if fixture.sessionState(t, lease) != "active" {
 					t.Error("纯文本模型调用未取得电脑执行权")
 				}
-				if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 0 || len(input.Messages) != 1 || input.Messages[0].Role != "user" || input.System != botpersona.System(bot.Name, bot.Description, bot.AvatarRef, bot.SystemPrompt) {
+				if strings.Contains(input.System, botpersona.ProgressInstructions) {
+					t.Error("纯文本猫咪被要求调用未提供的进度工具")
+				}
+				if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 2 || input.Tools[0].Name != "list_bots" || input.Tools[1].Name != "send_bot_message" || len(input.Messages) != 1 || input.Messages[0].Role != "user" || !strings.HasPrefix(input.System, botpersona.System(bot.Name, bot.Description, bot.AvatarRef, bot.SystemPrompt)) || !strings.Contains(input.System, "Your bot ID: "+bot.ID) {
 					t.Error("模型调用未使用所属运行快照")
 				}
 				return emitText(emit, "已经完成资料核对。")
@@ -291,7 +294,7 @@ func TestPersistentWorker(t *testing.T) {
 		if err != nil || run.Status != "unknown" || calls != 1 {
 			t.Fatal("失联被重试或标成功", run.Status, calls, err)
 		}
-		if known, held := fixture.totals(t, lease.UserID); known != 0 || held != 4352 {
+		if known, held := fixture.totals(t, lease.UserID); known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("未知调用释放了额度")
 		}
 	})

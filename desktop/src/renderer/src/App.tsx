@@ -106,7 +106,6 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
   const [chatGroups, setChatGroups] = useState<GroupSummary[]>([])
   const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
-  const [liveReplies, setLiveReplies] = useState<Record<string, string>>({})
   const [pendingMessages, setPendingMessages] = useState<Record<string, string[]>>({})
 
   function startDelivery(agentId: string, content: string, messageId: string): void {
@@ -115,13 +114,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       ...current,
       [agentId]: [...(current[agentId] ?? []), messageId],
     }))
-    let reply = ''
     void deliver(agentId, content, messageId, (streamEvent) => {
       receiveActivity(source, streamEvent)
-      if (streamEvent.type === 'delta') {
-        reply += streamEvent.text
-        setLiveReplies((current) => ({ ...current, [agentId]: reply }))
-      }
     })
       .then((result) => {
         if (result.message) setNotice(result.message)
@@ -129,11 +123,6 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       })
       .catch((failure: Error) => setNotice(failure.message))
       .finally(() => {
-        setLiveReplies((current) => {
-          const next = { ...current }
-          delete next[agentId]
-          return next
-        })
         setPendingMessages((current) => {
           const next = { ...current }
           next[agentId] = next[agentId]?.filter((id) => id !== messageId) ?? []
@@ -505,6 +494,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       <div className="chat-stage">
         {surface.kind !== 'agent' ? (
           <ConversationPanel
+            userProfile={userProfile}
             composerNotice={composerNotice}
             key={surface.id}
             id={surface.id}
@@ -522,24 +512,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
           <ChatPanel
             composerNotice={composerNotice}
             key={agent.id}
-            agent={
-              liveReplies[agent.id]
-                ? {
-                    ...agent,
-                    messages: [
-                      ...agent.messages,
-                      {
-                        id: 'live-reply',
-                        role: 'assistant',
-                        content: liveReplies[agent.id]!,
-                        createdAt: new Date().toISOString(),
-                        status: 'sent',
-                        reactions: [],
-                      },
-                    ],
-                  }
-                : agent
-            }
+            agent={agent}
             isBlocked={isBlocked}
             workSummary={workStates[agent.id]?.summary}
             pendingMessageIds={pendingMessages[agent.id]}

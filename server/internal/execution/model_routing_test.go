@@ -22,7 +22,7 @@ func (f fixture) multiPolicy(t *testing.T, mode string) modelregistry.Version {
 	if err := f.pool.QueryRow(`SELECT provider_id FROM tombot.models WHERE id=$1`, f.modelID).Scan(&providerID); err != nil {
 		t.Fatal(err)
 	}
-	model, err := f.registry.CreateModel(ctx, f.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "routing-backup", DisplayName: "备用视觉模型", ContextLimit: 8192, OutputLimit: 512, SupportsTools: true, SupportsVision: true})
+	model, err := f.registry.CreateModel(ctx, f.actor, ids.New(), modelregistry.ModelRequest{ProviderID: providerID, ModelKey: "routing-backup", DisplayName: "备用视觉模型", ContextLimit: 16384, OutputLimit: 512, SupportsTools: true, SupportsVision: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestModelRoutingIntegration(t *testing.T) {
 		if err != nil || repeated.ModelID != selected.ModelID {
 			t.Fatal("重复选择改变模型", err)
 		}
-		_, err = f.registry.Route(ctx, selection, modelregistry.Requirements{InputTokens: 9000}, "")
+		_, err = f.registry.Route(ctx, selection, modelregistry.Requirements{InputTokens: max(v.Candidates[0].Configuration.ContextLimit, v.Candidates[1].Configuration.ContextLimit) + 1}, "")
 		expect(t, err, modelregistry.ErrNoCandidate)
 		forged := selection
 		forged.UserID = f.b.UserID
@@ -259,7 +259,7 @@ func TestFailoverRecoveryDoesNotReplayTools(t *testing.T) {
 	if err := f.registry.SetEnabled(ctx, f.actor, ids.New(), "model", f.modelID, 1, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.registry.UpdateModel(ctx, f.actor, ids.New(), f.modelID, 2, modelregistry.ModelRequest{ModelKey: "execution-fixture", DisplayName: "工具主模型", ContextLimit: 8192, OutputLimit: 1024, SupportsTools: true}); err != nil {
+	if _, err := f.registry.UpdateModel(ctx, f.actor, ids.New(), f.modelID, 2, modelregistry.ModelRequest{ModelKey: "execution-fixture", DisplayName: "工具主模型", ContextLimit: 16384, OutputLimit: 1024, SupportsTools: true}); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.registry.SetEnabled(ctx, f.actor, ids.New(), "model", f.modelID, 3, true); err != nil {

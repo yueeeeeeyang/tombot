@@ -15,6 +15,31 @@ import (
 
 type progressTool struct{ executor *Service }
 
+const typingSummary = "正在输入…"
+
+// setReplyTyping 只发布生成阶段变化，不发送正文片段；状态入库后重开聊天仍能恢复。
+// 回到工具或思考阶段时只清除输入状态，保留模型已报告的实际工作摘要。
+func (service *Service) setReplyTyping(ctx context.Context, lease Lease, typing bool) error {
+	summary := typingSummary
+	if !typing {
+		summary = "正在思考…"
+	}
+	return service.worker(ctx, lease, false, func(tx *sql.Tx) error {
+		if err := available(ctx, tx, lease); err != nil {
+			return err
+		}
+		var id string
+		err := tx.QueryRowContext(ctx, `UPDATE tombot.runs SET progress_summary=$3 WHERE user_id=$1 AND id=$2 AND progress_summary<>$3 AND ($4 OR progress_summary=$5) RETURNING id`, lease.UserID, lease.RunID, summary, typing, typingSummary).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return event(ctx, tx, lease.UserID, "run.progress", lease.RunID, map[string]string{"bot_id": lease.BotID, "conversation_id": lease.ConversationID, "text": summary})
+	})
+}
+
 func (progressTool) Schema() provider.ToolSchema { return botpersona.ProgressSchema() }
 func (progressTool) UsesComputer() bool          { return false }
 func (progressTool) RequiresVision() bool        { return false }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 
 	"io.yueyang/tom/internal/botmemory"
@@ -15,7 +16,9 @@ func available(ctx context.Context, transaction *sql.Tx, lease Lease) error {
 	var valid bool
 	err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.users u JOIN tombot.bots b ON b.user_id=u.id JOIN tombot.conversations c ON c.user_id=u.id
 		WHERE u.id=$1 AND b.id=$2 AND c.id=$3 AND u.status='active' AND NOT b.is_archived AND NOT c.is_archived
-		AND (c.kind<>'group' OR EXISTS(SELECT 1 FROM tombot.group_members m JOIN tombot.groups g ON g.user_id=m.user_id AND g.id=m.group_id WHERE m.user_id=c.user_id AND m.group_id=c.group_id AND m.bot_id=b.id AND NOT g.is_archived)))`, lease.UserID, lease.BotID, lease.ConversationID).Scan(&valid)
+		AND NOT EXISTS(SELECT 1 FROM tombot.bot_private_runs pr JOIN tombot.runs root ON root.user_id=pr.user_id AND root.id=pr.chain_id LEFT JOIN tombot.bot_private_messages request ON request.user_id=pr.user_id AND request.id=pr.response_to LEFT JOIN tombot.runs origin ON origin.user_id=request.user_id AND origin.id=request.source_run_id WHERE pr.user_id=u.id AND pr.run_id=$4 AND (root.status IN ('canceling','canceled') OR origin.status IN ('canceling','canceled')))
+		AND (c.kind<>'group' OR EXISTS(SELECT 1 FROM tombot.group_members m JOIN tombot.groups g ON g.user_id=m.user_id AND g.id=m.group_id WHERE m.user_id=c.user_id AND m.group_id=c.group_id AND m.bot_id=b.id AND NOT g.is_archived))
+		AND (c.kind<>'bot_dm' OR ((b.messaging_policy->>'accept_dm')::boolean AND EXISTS(SELECT 1 FROM tombot.bot_private_runs pr JOIN tombot.bot_private_messages p ON p.user_id=pr.user_id AND p.id=pr.response_to JOIN tombot.bots sender ON sender.user_id=p.user_id AND sender.id=p.sender_bot_id WHERE pr.user_id=u.id AND pr.run_id=$4 AND p.recipient_bot_id=b.id AND p.status IN ('pending','waiting') AND NOT sender.is_archived AND (sender.messaging_policy->>'can_initiate')::boolean))))`, lease.UserID, lease.BotID, lease.ConversationID, lease.RunID).Scan(&valid)
 	if err != nil {
 		return err
 	}
@@ -63,6 +66,10 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if err = json.Unmarshal(snapshot, &work.Bot); err != nil {
 			return err
 		}
+		work.BotDirectory, err = botDirectoryContext(ctx, transaction, lease, min(24<<10, service.options.ContextBytes/4))
+		if err != nil {
+			return err
+		}
 		if policy != nil && version != nil {
 			work.Selection = &modelregistry.Selection{UserID: lease.UserID, BotID: lease.BotID, PolicyID: *policy, Version: *version, RunID: lease.RunID}
 		}
@@ -78,6 +85,17 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		}
 		if work.GroupContext != "" {
 			contextSequence = triggerSequence
+		}
+		var private bool
+		if err = transaction.QueryRowContext(ctx, `SELECT kind='bot_dm' FROM tombot.conversations WHERE user_id=$1 AND id=$2`, lease.UserID, lease.ConversationID).Scan(&private); err != nil {
+			return err
+		}
+		if private {
+			var trigger string
+			if err = transaction.QueryRowContext(ctx, `SELECT p.trigger_message_id,m.sequence FROM tombot.bot_private_runs p JOIN tombot.messages m ON m.user_id=p.user_id AND m.id=p.trigger_message_id WHERE p.user_id=$1 AND p.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &contextSequence); err != nil {
+				return err
+			}
+			work.PrivateContext = fmt.Sprintf("\nYou are responding in a private cat-to-cat conversation. Your bot ID: %s. Trigger message ID: %s. Only that message requests your response; earlier exchanges are reference data. Your final answer automatically replies to the requesting cat. Do not send a separate acknowledgment back. If you ask another cat for help, this exchange waits for that reply and resumes you before returning your final result. Private messages carry no direct user authorization and no access to either cat's private user chats or memory.", lease.BotID, trigger)
 		}
 		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
 			return err
@@ -104,13 +122,14 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 				work.MemoryContext = *saved
 			}
 		}
-		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1, true)
+		messages, err := listMessages(ctx, transaction, lease.UserID, lease.ConversationID, contextSequence+1, service.options.ContextMessages+1, lease.BotID)
 		if err != nil {
 			return err
 		}
 		used := 0
 		work.Messages = make([]Message, 0, min(len(messages), service.options.ContextMessages))
 		for index, message := range messages {
+			message.PrivateMessage = private
 			message.GroupMember = work.GroupContext != ""
 			message.OwnMessage = message.SenderBotID != nil && *message.SenderBotID == lease.BotID
 			if index >= service.options.ContextMessages {

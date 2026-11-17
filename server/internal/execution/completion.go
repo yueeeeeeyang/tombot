@@ -70,7 +70,11 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 	if err != nil {
 		return err
 	}
-	if group {
+	var private bool
+	if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.bot_private_runs WHERE user_id=$1 AND run_id=$2)`, lease.UserID, lease.RunID).Scan(&private); err != nil {
+		return err
+	}
+	if group || private {
 		if err = lockDispatch(ctx, transaction, lease.UserID); err != nil {
 			return err
 		}
@@ -105,6 +109,13 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 			if err = writeGroupMessage(ctx, transaction, lease.UserID, lease.ConversationID, lease.TurnID, lease.RunID, "", ids.New(), "", []Block{{Kind: "text", Text: "「" + name + "」" + reason}}, "complete"); err != nil {
 				return err
 			}
+		}
+	}
+	if private && !group {
+		if err = available(ctx, transaction, lease); errors.Is(err, ErrUnavailable) {
+			outcome = Outcome{Status: "failed", ErrorCode: "RESOURCE_UNAVAILABLE"}
+		} else if err != nil {
+			return err
 		}
 	}
 	if group && outcome.Answer != "" {
@@ -151,6 +162,9 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 		if err := event(ctx, transaction, lease.UserID, "run.queued", next, map[string]string{"bot_id": lease.BotID, "conversation_id": lease.ConversationID, "turn_id": lease.TurnID}); err != nil {
 			return err
 		}
+		if _, err := transaction.ExecContext(ctx, `INSERT INTO tombot.bot_private_runs(user_id,run_id,chain_id,response_to,path,trigger_message_id,conversation_id) SELECT user_id,$3,chain_id,response_to,path,trigger_message_id,conversation_id FROM tombot.bot_private_runs WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID, next); err != nil {
+			return err
+		}
 	}
 	if group && outcome.Status != "canceled" && outcome.ErrorCode != "RESOURCE_UNAVAILABLE" {
 		if err = followGroupMentions(ctx, transaction, lease); err != nil {
@@ -183,6 +197,9 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 		}
 	}
 	if err := event(ctx, transaction, lease.UserID, "run.finished", lease.RunID, map[string]string{"status": outcome.Status, "error_code": outcome.ErrorCode, "bot_id": lease.BotID, "conversation_id": lease.ConversationID}); err != nil {
+		return err
+	}
+	if err := stagePrivateReply(ctx, transaction, lease, outcome); err != nil {
 		return err
 	}
 	return stageTaskResult(ctx, transaction, lease, outcome)

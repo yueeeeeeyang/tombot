@@ -95,7 +95,22 @@ func TestGroupChatExecution(t *testing.T) {
 			calls++
 			switch calls {
 			case 1:
-				return emitMemory(emit, "post_to_group", memoryArguments(t, map[string]any{"message": "请第二位继续", "mentions": []string{f.second.ID}, "reply_to_id": ""}))
+				return emitMemory(func(event provider.Event) error {
+					if err := emit(event); err != nil {
+						return err
+					}
+					if event.Kind == "tool_use_start" {
+						active, err := f.service.Activity(ctx, f.a, group.ConversationID)
+						if err != nil || len(active) != 1 || active[0].ProgressSummary != typingSummary {
+							t.Fatal("生成群发言参数时没有输入状态", active, err)
+						}
+						messages, err := f.service.Messages(ctx, f.a, group.ConversationID, 0, 20)
+						if err != nil || len(messages) != 1 {
+							t.Fatal("未完成的群发言提前可见", messages, err)
+						}
+					}
+					return nil
+				}, "post_to_group", memoryArguments(t, map[string]any{"message": "请第二位继续", "mentions": []string{f.second.ID}, "reply_to_id": ""}))
 			case 2:
 				return emitText(emit, "已完成第一部分")
 			default:

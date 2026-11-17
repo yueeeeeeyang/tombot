@@ -109,7 +109,7 @@ func isGroupRun(ctx context.Context, tx *sql.Tx, lease Lease) (bool, error) {
 func finishGroupAnswer(ctx context.Context, tx *sql.Tx, lease Lease, outcome Outcome) error {
 	var trigger string
 	var roster []byte
-	if err := tx.QueryRowContext(ctx, `SELECT trigger_message_id,roster FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &roster); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN m.visible_to_bot_id IS NULL THEN d.trigger_message_id ELSE '' END,d.roster FROM tombot.group_deliveries d JOIN tombot.messages m ON m.user_id=d.user_id AND m.id=d.trigger_message_id WHERE d.user_id=$1 AND d.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &roster); err != nil {
 		return err
 	}
 	var members []groupchat.Member

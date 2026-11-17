@@ -8,7 +8,7 @@ import { Avatar } from '../../components/Avatar'
 import { Dialog } from '../../components/Dialog'
 import { ArrowLeftRight, ArrowUp, Check, ChevronRight, Plus, Users, X } from 'lucide-react'
 import type { CatAvatarId } from '../avatars/presets'
-import type { ServerBubble, AgentConversation } from '../desktop/backend'
+import type { ServerBubble, AgentConversation, UserProfile } from '../desktop/backend'
 import { getBackend } from '../desktop/backend'
 import type { Agent, DmNotice } from '../workspace/model'
 import { replyExcerpt } from '../workspace/model'
@@ -24,6 +24,7 @@ import { messageTimeSeparator } from './messageTime'
 
 /** 群聊复用原来的气泡，可以发言和管理成员。猫咪之间的私信不在这里打开。 */
 export function ConversationPanel({
+  userProfile,
   id,
   name,
   composerNotice,
@@ -32,6 +33,7 @@ export function ConversationPanel({
   onError,
   onGroupChange,
 }: {
+  userProfile?: UserProfile
   id: string
   name?: string
   composerNotice?: ReactNode
@@ -406,8 +408,9 @@ export function ConversationPanel({
           {workingAgents.length > 0 && (
             <WorkStatus
               summary={
-                runs[0]?.progress_summary ||
-                (runs.every((run) => run.status === 'queued') ? '正在等待回复' : '正在回复')
+                runs.find((run) => run.progress_summary === '正在输入…')?.progress_summary ||
+                runs.find((run) => run.status !== 'queued')?.progress_summary ||
+                (runs.every((run) => run.status === 'queued') ? '正在等待回复' : '正在思考…')
               }
               agents={workingAgents}
             />
@@ -478,6 +481,7 @@ export function ConversationPanel({
       </main>
       {isDetailsOpen && group && (
         <GroupSidePanel
+          userProfile={userProfile}
           group={group}
           agents={agents}
           onClose={() => setDetailsOpen(false)}

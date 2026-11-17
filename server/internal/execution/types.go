@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"io.yueyang/tom/internal/botmessaging"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
@@ -26,11 +27,12 @@ type Submission struct {
 	IsCreated bool   `json:"is_created"`
 }
 type Block struct {
-	Mentions   []groupchat.Mention `json:"mentions,omitempty"`
-	TaskResult bool                `json:"task_result,omitempty"`
-	Kind       string              `json:"kind"`
-	Text       string              `json:"text"`
-	Reaction   *ReactionChange     `json:"reaction,omitempty"`
+	BotMessage *botmessaging.Reference `json:"bot_message,omitempty"`
+	Mentions   []groupchat.Mention     `json:"mentions,omitempty"`
+	TaskResult bool                    `json:"task_result,omitempty"`
+	Kind       string                  `json:"kind"`
+	Text       string                  `json:"text"`
+	Reaction   *ReactionChange         `json:"reaction,omitempty"`
 }
 
 // ReactionChange 记录一次不可变的表情交互，目标由消息的 reply_to_id 绑定。
@@ -50,6 +52,7 @@ type Reaction struct {
 	Count int    `json:"count"`
 }
 type Message struct {
+	PrivateMessage   bool          `json:"-"`
 	GroupMember      bool          `json:"-"`
 	OwnMessage       bool          `json:"-"`
 	ID               string        `json:"id"`
@@ -116,6 +119,8 @@ type Work struct {
 	HasMemory         bool
 	IsTask            bool
 	GroupContext      string
+	BotDirectory      string
+	PrivateContext    string
 }
 type Operation struct {
 	ID            string          `json:"id"`

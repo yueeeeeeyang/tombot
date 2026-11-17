@@ -49,7 +49,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 	ctx := context.Background()
 	t.Run("并行预留不突破月度额度且重复不计两次", func(t *testing.T) {
 		fixture := newFixture(t, cluster)
-		execute(t, fixture.pool, `UPDATE tombot.user_limits SET monthly_token_limit=4352 WHERE user_id=$1`, fixture.a.UserID)
+		execute(t, fixture.pool, `UPDATE tombot.user_limits SET monthly_token_limit=$2 WHERE user_id=$1`, fixture.a.UserID, executionTestContextLimit+256)
 		fixture.send(t, fixture.a, fixture.first)
 		fixture.send(t, fixture.a, fixture.second)
 		first, second := fixture.claim(t), fixture.claim(t)
@@ -87,7 +87,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			t.Fatal("未得到一成功一拒绝")
 		}
 		known, held := fixture.totals(t, fixture.a.UserID)
-		if known != 0 || held != 4352 {
+		if known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("预留被当作用量或未生效", known, held)
 		}
 		replay, created, err := fixture.service.BeginOperation(ctx, winner.lease, operationRequest("model.1"))
@@ -102,7 +102,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 		}
 		_, _, err = fixture.service.BeginOperation(ctx, loser.lease, operationRequest("model.1"))
 		expect(t, err, modelusage.ErrQuota)
-		execute(t, fixture.pool, `UPDATE tombot.user_limits SET monthly_token_limit=5000 WHERE user_id=$1`, fixture.a.UserID)
+		execute(t, fixture.pool, `UPDATE tombot.user_limits SET monthly_token_limit=$2 WHERE user_id=$1`, fixture.a.UserID, executionTestContextLimit+256+15)
 		if _, created, err = fixture.service.BeginOperation(ctx, loser.lease, operationRequest("model.1")); err != nil || !created {
 			t.Fatal("拒绝请求留下操作记录", err)
 		}
@@ -131,7 +131,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			t.Fatal(err)
 		}
 		known, held := fixture.totals(t, fixture.a.UserID)
-		if known != 0 || held != 4352 {
+		if known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("未知用量被当成免费调用", known, held)
 		}
 		if _, _, err = fixture.service.BeginOperation(ctx, second, operationRequest("model.1")); err != nil {
@@ -162,7 +162,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			t.Fatal("调用超时未对账", count, err)
 		}
 		known, held := fixture.totals(t, lease.UserID)
-		if known != 0 || held != 4352 {
+		if known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("失联预留被清零", known, held)
 		}
 		evidence := ids.New()
@@ -173,7 +173,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			}
 		}
 		known, held = fixture.totals(t, lease.UserID)
-		if known != 0 || held != 4352 {
+		if known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("旧 Worker 直接改写汇总")
 		}
 		if count, err := fixture.service.ReconcileUsage(ctx, 1); err != nil || count != 1 {
@@ -223,7 +223,7 @@ func TestModelAdmissionAndUsage(t *testing.T) {
 			t.Fatal("操作未与用量共同回滚", err)
 		}
 		known, held := fixture.totals(t, lease.UserID)
-		if known != 0 || held != 4352 {
+		if known != 0 || held != executionTestContextLimit+256 {
 			t.Fatal("用量部分结算")
 		}
 		execute(t, fixture.pool, `DROP TRIGGER reject_meter_event ON tombot.user_events`)

@@ -84,7 +84,7 @@ export function GroupMemberPicker({
                 }
               >
                 <Avatar preset={agent.avatar} customAvatar={agent.customAvatar} />
-                <span>{agent.name}</span>
+                <span className="group-member-name">{agent.name}</span>
               </button>
             ))}
             {filtered.length === 0 && <p className="member-picker-empty">没有找到猫咪</p>}

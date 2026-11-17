@@ -127,14 +127,16 @@ func translate(err error) error {
 func event(ctx context.Context, transaction *sql.Tx, userID, kind, id string, payload any) error {
 	// 后台执行事件不能让前台把当前聊天误判为结束或正在回答。
 	if strings.HasPrefix(kind, "run.") {
-		var background, group bool
-		if err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.jobs WHERE user_id=$1 AND run_id=$2 AND execution_kind='task'),EXISTS(SELECT 1 FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2)`, userID, id).Scan(&background, &group); err != nil {
+		var background, group, private bool
+		if err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.jobs WHERE user_id=$1 AND run_id=$2 AND execution_kind='task'),EXISTS(SELECT 1 FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2),EXISTS(SELECT 1 FROM tombot.runs r JOIN tombot.conversations c ON c.user_id=r.user_id AND c.id=r.conversation_id WHERE r.user_id=$1 AND r.id=$2 AND c.kind='bot_dm')`, userID, id).Scan(&background, &group, &private); err != nil {
 			return err
 		}
 		if background {
 			kind = "task." + kind
 		} else if group {
 			kind = "group." + kind
+		} else if private {
+			kind = "private." + kind
 		}
 	}
 	encoded, err := json.Marshal(payload)

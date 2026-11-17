@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io.yueyang/tom/internal/botmemory"
+	"io.yueyang/tom/internal/botmessaging"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/scheduledtasks"
 
@@ -88,7 +89,7 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 			if !allowed {
 				return ErrUnavailable
 			}
-		} else if request.Kind == "computer" || request.Kind == "tool" && request.ToolName != "report_progress" {
+		} else if request.Kind == "computer" || request.Kind == "tool" && request.ToolName != "report_progress" && !botmessaging.IsTool(request.ToolName) {
 			var permitted bool
 			if err := transaction.QueryRowContext(ctx, `SELECT tool_permissions ? $3 FROM tombot.bots WHERE user_id=$1 AND id=$2`, lease.UserID, lease.BotID, request.ToolName).Scan(&permitted); err != nil {
 				return err

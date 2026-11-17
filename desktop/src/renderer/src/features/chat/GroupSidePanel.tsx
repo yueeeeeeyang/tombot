@@ -4,16 +4,19 @@ import { GroupAvatar } from '../../components/GroupAvatar'
 import { GroupMemberPicker } from './GroupMemberPicker'
 import { GroupLibrary } from './GroupLibrary'
 import { Avatar } from '../../components/Avatar'
-import { getBackend, type GroupDetail } from '../desktop/backend'
+import { getBackend, type GroupDetail, type UserProfile } from '../desktop/backend'
 import type { Agent } from '../workspace/model'
+import workspaceCat from '../../assets/cats/workspace-cat.png'
 
 /** 群资料沿用猫咪右栏；修改串行提交，使用服务端版本，失败保留输入。 */
 export function GroupSidePanel({
+  userProfile,
   group,
   agents,
   onClose,
   onChange,
 }: {
+  userProfile?: UserProfile
   group: GroupDetail
   agents: Agent[]
   onClose: () => void
@@ -120,20 +123,28 @@ export function GroupSidePanel({
               群成员 <span>{group.members.length + 1}</span>
             </h3>
             <div className="group-member-row">
-              <Users size={24} />
-              <span>你</span>
-              <span>群主</span>
+              <span className="group-member-avatar">
+                <img src={userProfile?.avatar || workspaceCat} alt="你的头像" draggable={false} />
+              </span>
+              <span className="group-member-name">你</span>
+              <span className="group-member-role">群主</span>
             </div>
             {group.members.map((member) => {
               const cat = agents.find((agent) => agent.id === member.bot_id)
               return (
                 <div className="group-member-row" key={member.bot_id}>
-                  {cat ? (
-                    <Avatar preset={cat.avatar} customAvatar={cat.customAvatar} agentId={cat.id} />
-                  ) : (
-                    <Users size={24} />
-                  )}
-                  <span>{member.name}</span>
+                  <span className="group-member-avatar">
+                    {cat ? (
+                      <Avatar
+                        preset={cat.avatar}
+                        customAvatar={cat.customAvatar}
+                        agentId={cat.id}
+                      />
+                    ) : (
+                      <Users size={24} />
+                    )}
+                  </span>
+                  <span className="group-member-name">{member.name}</span>
                   <button
                     type="button"
                     className="group-member-remove"

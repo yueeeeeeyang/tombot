@@ -14,7 +14,7 @@ import (
 )
 
 // Send 在一个事务中保存消息、回合、运行及任务；返回受理不等于模型已经执行。
-// 当前入口仅处理用户单聊，群聊与机器人私信须由对应编排入口创建任务。
+// 用户单聊与群聊共用入口；猫咪私信只允许受租约保护的内建工具创建。
 func (service *Service) Send(ctx context.Context, principal identity.Principal, conversationID string, request SendRequest) (Submission, error) {
 	if !validID(conversationID) || !validID(request.ClientRequestID) || !validText(request.Content, 32<<10) || request.ReplyToID != "" && !validID(request.ReplyToID) {
 		return Submission{}, ErrInvalidInput
@@ -230,8 +230,8 @@ func scanMessage(row scanner) (Message, error) {
 	}
 	return message, nil
 }
-func listMessages(ctx context.Context, transaction *sql.Tx, userID, conversationID string, before int64, limit int, includeReactions bool) (messages []Message, result error) {
-	rows, err := transaction.QueryContext(ctx, `SELECT `+messageColumns+` FROM `+messageSource+` WHERE messages.user_id=$1 AND messages.conversation_id=$2 AND ($3::bigint=0 OR messages.sequence<$3) AND ($5 OR NOT messages.blocks @> '[{"kind":"reaction"}]'::jsonb) ORDER BY messages.sequence DESC LIMIT $4`, userID, conversationID, before, limit, includeReactions)
+func listMessages(ctx context.Context, transaction *sql.Tx, userID, conversationID string, before int64, limit int, modelBot string) (messages []Message, result error) {
+	rows, err := transaction.QueryContext(ctx, `SELECT `+messageColumns+` FROM `+messageSource+` WHERE messages.user_id=$1 AND messages.conversation_id=$2 AND ($3::bigint=0 OR messages.sequence<$3) AND ($5<>'' OR NOT messages.blocks @> '[{"kind":"reaction"}]'::jsonb) AND (messages.visible_to_bot_id IS NULL OR messages.visible_to_bot_id=NULLIF($5,'')) ORDER BY messages.sequence DESC LIMIT $4`, userID, conversationID, before, limit, modelBot)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func (service *Service) Messages(ctx context.Context, principal identity.Princip
 			return err
 		}
 		var err error
-		messages, err = listMessages(ctx, transaction, principal.UserID, conversationID, before, limit, false)
+		messages, err = listMessages(ctx, transaction, principal.UserID, conversationID, before, limit, "")
 		return err
 	})
 	if err != nil {

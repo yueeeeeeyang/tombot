@@ -699,6 +699,59 @@ try {
       await window.getByRole('button', { name: '关闭弹窗', exact: true }).click();
     }
   }
+  stage = '准备长名称成员';
+  const longPeerName = '负责复杂项目资料核对与归档整理的协作猫咪';
+  await window.getByRole('button', { name: '侧栏伙伴', exact: true }).click({ button: 'right' });
+  await window.getByRole('menuitem', { name: '重命名猫咪', exact: true }).click();
+  const peerNameInput = window.getByRole('textbox', { name: '猫咪名称', exact: true });
+  await peerNameInput.fill(longPeerName);
+  await peerNameInput.press('Enter');
+  await window.getByRole('button', { name: longPeerName, exact: true }).waitFor();
+  stage = '创建用于成员面板验证的群聊';
+  await window.getByRole('button', { name: '新建', exact: true }).click();
+  await window.getByRole('menuitem', { name: '创建群聊', exact: true }).click();
+  const groupDialog = window.getByRole('dialog', { name: '新建群聊', exact: true });
+  await groupDialog.getByRole('textbox', { name: '群名称', exact: true }).fill('协作群');
+  await groupDialog.getByRole('checkbox', { name: '侧栏猫咪', exact: true }).check();
+  await groupDialog.getByRole('button', { name: '创建群聊', exact: true }).click();
+  stage = '打开群成员面板';
+  await window.getByRole('button', { name: '查看协作群群资料', exact: true }).click();
+  const groupPanel = window.getByRole('complementary', { name: '协作群群资料', exact: true });
+  await groupPanel.getByRole('img', { name: '你的头像', exact: true }).waitFor();
+  for (const width of [1073, 860]) {
+    await application.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setContentSize(width, 780), width);
+    for (const theme of ['light', 'dark']) {
+      stage = '群主头像与成员对齐 ' + theme + ' ' + width;
+      await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      const valid = await groupPanel.evaluate(async panel => {
+        const profile = await window.desktop.backend.loadUserProfile();
+        const rows = panel.querySelectorAll('.group-member-row');
+        const owner = rows[0].querySelector('img');
+        await owner.decode();
+        const ownerAvatar = owner.getBoundingClientRect();
+        const memberAvatar = rows[1].querySelector('.avatar').getBoundingClientRect();
+        const label = rows[0].querySelector('.group-member-role').getBoundingClientRect();
+        const ownerName = rows[0].querySelector('.group-member-name').getBoundingClientRect();
+        const memberName = rows[1].querySelector('.group-member-name').getBoundingClientRect();
+        const row = rows[0].getBoundingClientRect();
+        return owner.getAttribute('src') === profile.avatar && owner.naturalWidth > 0 && Math.abs(ownerAvatar.left - memberAvatar.left) < 1 && Math.abs(ownerAvatar.width - memberAvatar.width) < 1 && Math.abs(ownerName.left - memberName.left) < 1 && Math.abs(row.right - label.right - 8) < 1 && panel.scrollWidth <= panel.clientWidth;
+      });
+      if (!valid) throw new Error('群主头像、成员对齐或右侧标签布局错误');
+      if (settings.screenshots) await groupPanel.screenshot({ path: join(settings.screenshots, 'group-owner-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      stage = '添加成员长名称布局 ' + theme + ' ' + width;
+      await groupPanel.getByRole('button', { name: '添加成员', exact: true }).click();
+      const peerOption = groupPanel.getByRole('option', { name: longPeerName, exact: true });
+      const fits = await peerOption.evaluate(option => {
+        const name = option.querySelector('.group-member-name');
+        const menu = option.closest('.member-picker-results');
+        return name !== null && name.scrollWidth > name.clientWidth && getComputedStyle(name).textOverflow === 'ellipsis' && option.scrollWidth <= option.clientWidth && menu.scrollWidth <= menu.clientWidth;
+      });
+      if (!fits) throw new Error('添加成员的长名称未省略或超出菜单');
+      if (settings.screenshots) await groupPanel.screenshot({ path: join(settings.screenshots, 'group-picker-' + theme + '-' + width + '.png'), animations: 'disabled' });
+      await groupPanel.getByRole('textbox', { name: '搜索猫咪名称', exact: true }).press('Escape');
+    }
+  }
+  await groupPanel.getByRole('button', { name: '关闭群资料', exact: true }).click();
   stage = '设置退出登录撤销真实会话';
   await window.getByRole('button', { name: '打开设置', exact: true }).click();
   await window.getByRole('button', { name: '退出登录', exact: true }).click();

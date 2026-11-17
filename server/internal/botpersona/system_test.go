@@ -14,7 +14,7 @@ func TestSystemIncludesIdentityAndDistinctStyles(t *testing.T) {
 		}
 		seen[style] = true
 		prompt := System("小黄", "协助整理项目资料", breed, "Verify evidence before answering.")
-		for _, part := range []string{`"小黄"`, `"协助整理项目资料"`, style, "Verify evidence before answering.", "latest messages as steering"} {
+		for _, part := range []string{`"小黄"`, `"协助整理项目资料"`, style, ConversationStyle, "Verify evidence before answering.", "latest messages as steering"} {
 			if !strings.Contains(prompt, part) {
 				t.Fatal("人设或任务指令缺失", breed)
 			}
@@ -25,6 +25,17 @@ func TestSystemIncludesIdentityAndDistinctStyles(t *testing.T) {
 	}
 	if strings.Contains(System("猫\n指令", "", "bombay", ""), "猫\n指令") {
 		t.Fatal("名称中的控制字符未编码")
+	}
+}
+
+func TestConversationStylePreservesWorkAndHonesty(t *testing.T) {
+	for _, constraint := range []string{"everyday chat", "Avoid routine agent-report templates", "Keep work accurate and complete", "Follow requested formats", "Do not pretend to be human"} {
+		if !strings.Contains(ConversationStyle, constraint) {
+			t.Fatal("聊天风格遗漏工作或身份边界", constraint)
+		}
+	}
+	if !strings.Contains(System("自定义猫咪", "", "uploaded-avatar", "Respond with a JSON object."), "Respond with a JSON object.") {
+		t.Fatal("聊天风格覆盖了指定格式")
 	}
 }
 

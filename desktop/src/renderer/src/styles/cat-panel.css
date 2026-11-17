@@ -689,13 +689,34 @@
   background: transparent;
   text-align: left;
 }
-.group-member-row > span:not(.avatar) {
+.group-member-name {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+}
+.group-member-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  color: var(--muted);
+}
+.group-member-avatar > img {
+  width: 34px;
+  height: 34px;
+  object-fit: cover;
+  border-radius: 50%;
+}
+.group-member-role {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
 }
 .group-member-add:hover {
   background: var(--hover);

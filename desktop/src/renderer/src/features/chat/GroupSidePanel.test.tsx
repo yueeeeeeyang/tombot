@@ -30,6 +30,24 @@ function Panel() {
 }
 
 describe('群资料右栏', () => {
+  it('群主使用当前用户头像，资料刷新后更新，未设置时显示默认头像', () => {
+    const props = { group: initial, agents, onClose: vi.fn(), onChange: vi.fn() }
+    const profile = {
+      username: 'owner',
+      displayName: '本人',
+      avatar: 'data:image/png;base64,dGVzdA==',
+    }
+    const { rerender } = render(<GroupSidePanel {...props} userProfile={profile} />)
+    expect(screen.getByRole('img', { name: '你的头像' })).toHaveAttribute('src', profile.avatar)
+    expect(screen.getByText('群主')).toHaveClass('group-member-role')
+    expect(screen.getByText('你')).toHaveClass('group-member-name')
+    rerender(<GroupSidePanel {...props} userProfile={{ ...profile, avatar: '' }} />)
+    expect(screen.getByRole('img', { name: '你的头像' }).getAttribute('src')).toContain(
+      'workspace-cat.png',
+    )
+    rerender(<GroupSidePanel {...props} />)
+    expect(screen.getByRole('img', { name: '你的头像' })).toBeInTheDocument()
+  })
   it('按最新版本加入和移出，最后一位不可移出', async () => {
     let stored = initial
     const add = vi.fn(async () => {
