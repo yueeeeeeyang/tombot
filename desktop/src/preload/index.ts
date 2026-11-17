@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:trust-server-certificate', address, fingerprint),
       logout: () => invoke('desktop:logout'),
       loadWorkspace: () => invoke('desktop:load-workspace'),
+      loadAbout: () => invoke('desktop:about'),
+      loadConversationPreviews: (ids: string[]) => invoke('desktop:conversation-previews', ids),
       loadAgentConversation: (agentId: string, before?: number) =>
         invoke('desktop:agent-conversation', agentId, before),
       createAgent: (profile: NewAgent, requestId: string) =>

@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { memoryBackend } from './features/desktop/memoryBackend'
+import { SettingsDialog } from './features/settings/SettingsDialog'
 
 describe('通用设置账号', () => {
   beforeEach(() => {
@@ -54,7 +55,9 @@ describe('通用设置账号', () => {
     const account = screen.getByRole('region', { name: '账号' })
     expect(within(account).getByText('正在读取账号信息…')).toBeInTheDocument()
     await act(async () => reject(new Error('资料服务不可用')))
-    expect(within(account).getByRole('alert')).toHaveTextContent('资料服务不可用')
+    expect(
+      within(screen.getByRole('region', { name: '通用' })).getByRole('alert'),
+    ).toHaveTextContent('资料服务不可用')
     expect(within(account).getByText('暂时无法读取账号信息')).toBeInTheDocument()
     await user.click(within(account).getByRole('button', { name: '退出登录' }))
     expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
@@ -96,7 +99,7 @@ describe('通用设置账号', () => {
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     await user.click(screen.getByRole('button', { name: '退出登录' }))
     expect(
-      within(screen.getByRole('region', { name: '账号' })).getByRole('alert'),
+      within(screen.getByRole('region', { name: '通用' })).getByRole('alert'),
     ).toHaveTextContent('注销暂时失败')
     expect(screen.getByRole('button', { name: '退出登录' })).toBeEnabled()
     await user.click(screen.getByRole('button', { name: '退出登录' }))
@@ -128,4 +131,67 @@ describe('通用设置账号', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('会话检查失败')
     expect(screen.getByRole('button', { name: '重新连接' })).toBeInTheDocument()
   })
+})
+
+it('关于页展示实际客户端与服务端信息，失败可重试并返回通用', async () => {
+  const load = vi
+    .spyOn(memoryBackend, 'loadAbout')
+    .mockResolvedValueOnce({
+      clientVersion: '1.2.3',
+      serverUrl: 'https://tom.example.test',
+      serverVersion: '',
+      serverError: '版本查询失败',
+    })
+    .mockResolvedValue({
+      clientVersion: '1.2.3',
+      serverUrl: 'https://tom.example.test',
+      serverVersion: '2.3.4',
+    })
+  const user = userEvent.setup()
+  render(<App />)
+  await user.click(screen.getByRole('button', { name: '打开设置' }))
+  await user.click(screen.getByRole('button', { name: '关于' }))
+  const pane = screen.getByRole('region', { name: '关于' })
+  expect(await within(pane).findByText('1.2.3')).toBeInTheDocument()
+  expect(within(pane).getByText('https://tom.example.test')).toBeInTheDocument()
+  expect(within(pane).getByRole('alert')).toHaveTextContent('版本查询失败')
+  expect(pane.querySelector('h2')?.nextElementSibling).toContainElement(
+    within(pane).getByRole('alert'),
+  )
+  await user.click(
+    within(within(pane).getByRole('alert')).getByRole('button', { name: '重试读取版本' }),
+  )
+  expect(await within(pane).findByText('2.3.4')).toBeInTheDocument()
+  expect(load).toHaveBeenCalledTimes(2)
+  await user.click(screen.getByRole('button', { name: '通用' }))
+  expect(screen.getByRole('combobox', { name: '主题' })).toBeInTheDocument()
+})
+
+it('通用设置的多项错误同时放在标题下方、账号与外观内容上方', () => {
+  render(
+    <SettingsDialog
+      theme="light"
+      themeError="主题保存失败"
+      onThemeChange={vi.fn()}
+      language="zh-CN"
+      languageError="语言保存失败"
+      onLanguageChange={vi.fn()}
+      profileError="资料读取失败"
+      isSigningOut={false}
+      signOutError="退出登录失败"
+      onSignOut={vi.fn().mockResolvedValue(undefined)}
+      onClose={vi.fn()}
+    />,
+  )
+  const pane = screen.getByRole('region', { name: '通用' })
+  const errors = within(pane).getAllByRole('alert')
+  expect(errors.map((error) => error.textContent)).toEqual([
+    '资料读取失败',
+    '退出登录失败',
+    '主题保存失败',
+    '语言保存失败',
+  ])
+  const notices = within(pane).getByRole('heading', { name: '通用' }).nextElementSibling
+  for (const error of errors) expect(notices).toContainElement(error)
+  expect(notices?.nextElementSibling).toBe(within(pane).getByRole('region', { name: '账号' }))
 })

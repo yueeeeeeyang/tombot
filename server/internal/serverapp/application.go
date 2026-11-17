@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"sync/atomic"
 
 	"io.yueyang/tom/internal/accounts"
@@ -232,6 +233,8 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 		application.closeNodes = closer.CloseIdle
 	}
 	router := http.NewServeMux()
+	build, _ := debug.ReadBuildInfo()
+	router.HandleFunc("/api/v2/version", versionHandler(versionFromBuild(releaseVersion, build), logger))
 	router.Handle(nodeenrollment.Path, enrollmentHTTP)
 	router.Handle(nodeenrollment.BootstrapPath, bootstrap)
 	router.Handle("/api/v2/auth/", gate)

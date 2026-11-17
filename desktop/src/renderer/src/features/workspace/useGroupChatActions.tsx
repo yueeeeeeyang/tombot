@@ -131,6 +131,11 @@ export function useGroupChatActions({
     }
   }
   return {
+    move: (id: string, name: string) => {
+      const group = groups.find((group) => group.id === id)
+      if (!group) throw new Error('群聊不存在')
+      move(group, name)
+    },
     openMenu: setAnchor,
     renamingId,
     rename,
@@ -148,13 +153,16 @@ export function useGroupChatActions({
         {anchor && target && (
           <CatContextMenu
             anchor={anchor}
-            agent={{ name: target.name, group: preferences.chatCategories?.[target.id] ?? '群聊' }}
+            agent={{
+              name: target.name,
+              group: preferences.chatCategories?.[target.id] ?? '未分组',
+            }}
             chatType="group"
             groups={[
               ...new Set([
                 ...categories,
                 ...Object.values(preferences.chatCategories ?? {}),
-                '群聊',
+                '未分组',
               ]),
             ]}
             isLead={false}

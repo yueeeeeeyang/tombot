@@ -1,4 +1,4 @@
-import type { GroupSummary, UserProfile } from '../desktop/backend'
+import type { ConversationPreview, GroupSummary, UserProfile } from '../desktop/backend'
 import { GroupAvatar } from '../../components/GroupAvatar'
 import { ChevronRight, MessageSquarePlus, Plus, Search, Settings, UserPlus } from 'lucide-react'
 import {
@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
+  type DragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import type { ConnectionStatus } from '../session/useConnectionStatus'
@@ -23,6 +24,8 @@ export function Sidebar({
   userProfile,
   workspace,
   preferences,
+  previews = {},
+  onMove,
   isCollapsed,
   renamingAgentId,
   editingGroupName,
@@ -51,6 +54,8 @@ export function Sidebar({
   userProfile?: UserProfile
   workspace: Workspace
   preferences: SidebarPreferences
+  previews?: Record<string, ConversationPreview>
+  onMove?: (kind: 'agent' | 'group', id: string, category: string) => void
   isCollapsed: boolean
   renamingAgentId?: string
   editingGroupName?: string
@@ -96,13 +101,43 @@ export function Sidebar({
   const unpinnedAgents = visibleAgents.filter((agent) => !pinnedIds.includes(agent.id))
   const visibleChats = chatGroups.filter((group) => !hiddenIds.includes(group.id))
   const unpinnedChats = visibleChats.filter((group) => !pinnedIds.includes(group.id))
-  const chatCategory = (id: string) => preferences.chatCategories?.[id] ?? '群聊'
+  const chatCategory = (id: string) => preferences.chatCategories?.[id] ?? '未分组'
   const groups = [
     ...new Set([
       ...unpinnedAgents.map((agent) => agent.group),
       ...unpinnedChats.map((group) => chatCategory(group.id)),
+      '未分组',
     ]),
   ]
+  const [dragged, setDragged] = useState<{ kind: 'agent' | 'group'; id: string }>()
+  const [dropCategory, setDropCategory] = useState<string>()
+  function beginDrag(event: DragEvent<HTMLButtonElement>, kind: 'agent' | 'group', id: string) {
+    if (!onMove || id === workspace.leadAgentId) {
+      event.preventDefault()
+      return
+    }
+    setDragged({ kind, id })
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('application/x-tombot-chat', JSON.stringify({ kind, id }))
+    const ghost = document.createElement('div')
+    ghost.className = 'sidebar-drag-preview'
+    const avatar = event.currentTarget.querySelector('.avatar, .group-avatar')
+    if (avatar) ghost.append(avatar.cloneNode(true))
+    const label = document.createElement('span')
+    label.className = 'sidebar-drag-label'
+    label.textContent =
+      kind === 'agent'
+        ? (workspace.agents.find((agent) => agent.id === id)?.name ?? '')
+        : (chatGroups.find((group) => group.id === id)?.name ?? '')
+    ghost.append(label)
+    document.body.append(ghost)
+    event.dataTransfer.setDragImage(ghost, 48, 48)
+    requestAnimationFrame(() => ghost.remove())
+  }
+  function endDrag() {
+    setDragged(undefined)
+    setDropCategory(undefined)
+  }
   function chatButton(group: GroupSummary, pinned = false) {
     const css = pinned ? 'pinned-agent' : 'agent-button'
     if (group.id === renamingChatId && onRenameChat && onCancelRenameChat)
@@ -121,6 +156,9 @@ export function Sidebar({
     return (
       <button
         key={group.id}
+        draggable={!!onMove}
+        onDragStart={(event) => beginDrag(event, 'group', group.id)}
+        onDragEnd={endDrag}
         type="button"
         className={`${css} ${selected.kind === 'group' && selected.id === group.id ? 'is-active' : ''}`}
         aria-label={`${group.name}${unreadIds.includes(group.id) ? '，未读' : ''}`}
@@ -150,7 +188,11 @@ export function Sidebar({
         <GroupAvatar presets={group.avatar_presets} size={pinned ? 'large' : undefined} />
         <span className={pinned ? 'pinned-name' : 'agent-copy'}>
           <span className="agent-name">{group.name}</span>
-          {!pinned && <span className="agent-preview">多只猫咪一起聊</span>}
+          {!pinned && (
+            <span className="agent-preview">
+              {previews[group.conversation_id]?.content || '暂无消息'}
+            </span>
+          )}
         </span>
         {unreadIds.includes(group.id) && <span className="agent-unread-dot" aria-hidden="true" />}
       </button>
@@ -207,6 +249,8 @@ export function Sidebar({
             key={agent.id}
             agent={agent}
             isAssistant={agent.id === workspace.leadAgentId}
+            onDragStart={(event) => beginDrag(event, 'agent', agent.id)}
+            onDragEnd={endDrag}
             isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
             isUnread={isUnread(agent)}
             isRenaming={agent.id === renamingAgentId}
@@ -229,7 +273,27 @@ export function Sidebar({
           const groupCount = groupAgents.length + groupChats.length
           const isGroupCollapsed = collapsed.includes(`cats:${group}`)
           return (
-            <section className="agent-group" key={group}>
+            <section
+              className={`agent-group${dropCategory === group ? ' is-drop-target' : ''}`}
+              key={group}
+              onDragOver={(event) => {
+                if (dragged) {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = 'move'
+                  setDropCategory(group)
+                }
+              }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+                  setDropCategory(undefined)
+              }}
+              onDrop={(event) => {
+                if (!dragged) return
+                event.preventDefault()
+                onMove?.(dragged.kind, dragged.id, group)
+                endDrag()
+              }}
+            >
               {editingGroupName === group ? (
                 <InlineNameInput
                   initialName={group}
@@ -269,6 +333,9 @@ export function Sidebar({
                   <AgentButton
                     key={agent.id}
                     agent={agent}
+                    preview={agent.conversationId ? previews[agent.conversationId] : undefined}
+                    onDragStart={(event) => beginDrag(event, 'agent', agent.id)}
+                    onDragEnd={endDrag}
                     isActive={selected.kind === 'agent' && workspace.activeAgentId === agent.id}
                     isUnread={isUnread(agent)}
                     isRenaming={agent.id === renamingAgentId}
@@ -366,9 +433,13 @@ function PinnedAgent({
   onMenuKeyDown,
   onRename,
   onCancelRename,
+  onDragStart,
+  onDragEnd,
 }: {
   agent: Agent
   isAssistant: boolean
+  onDragStart: (event: DragEvent<HTMLButtonElement>) => void
+  onDragEnd: () => void
   isActive: boolean
   isUnread: boolean
   isRenaming: boolean
@@ -402,6 +473,9 @@ function PinnedAgent({
   }
   return (
     <button
+      draggable={!isAssistant}
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       className={`pinned-agent ${isActive ? 'is-active' : ''}`}
       onClick={() => onSelect(agent.id)}
       onContextMenu={onContextMenu}
@@ -427,6 +501,9 @@ function PinnedAgent({
 /** 展示助手摘要；重命名时在原位切换为输入框。 */
 function AgentButton({
   agent,
+  preview: serverPreview,
+  onDragStart,
+  onDragEnd,
   isActive,
   isUnread,
   isRenaming,
@@ -437,6 +514,9 @@ function AgentButton({
   onCancelRename,
 }: {
   agent: Agent
+  preview?: ConversationPreview
+  onDragStart: (event: DragEvent<HTMLButtonElement>) => void
+  onDragEnd: () => void
   isActive: boolean
   isUnread: boolean
   isRenaming: boolean
@@ -449,9 +529,12 @@ function AgentButton({
   const lastMessage = agent.messages.at(-1)
   const preview = agent.draft
     ? `草稿：${agent.draft}`
-    : lastMessage
+    : lastMessage &&
+        (lastMessage.status !== 'sent' ||
+          !serverPreview ||
+          (lastMessage.sequence ?? 0) >= serverPreview.sequence)
       ? messagePreview(lastMessage)
-      : agent.description
+      : serverPreview?.content || agent.description
   if (isRenaming) {
     return (
       <div className="agent-button is-editing">
@@ -477,6 +560,9 @@ function AgentButton({
   }
   return (
     <button
+      draggable
+      onDragStart={onDragStart}
+      onDragEnd={onDragEnd}
       className={`agent-button ${isActive ? 'is-active' : ''}`}
       aria-label={isUnread ? `${agent.name}，有未读消息` : agent.name}
       title={agent.name}

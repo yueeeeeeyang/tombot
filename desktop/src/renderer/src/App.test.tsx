@@ -355,14 +355,15 @@ describe('客户端交互', () => {
     expect(screen.getByRole('textbox', { name: '给游戏程序发消息' })).toBeInTheDocument()
   })
 
-  it('设置只保留通用分类，主题即时应用并独立保存，语言预览在关闭重开后保留', async () => {
+  it('设置提供通用和关于分类，主题即时应用并独立保存，语言预览在关闭重开后保留', async () => {
     const user = userEvent.setup()
     render(<App />)
     expect(screen.queryByText(/草稿仅保存在这台设备/)).not.toBeInTheDocument()
     expect(screen.queryByText('Enter 保存 · Shift + Enter 换行')).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '打开设置' }))
     const navigation = screen.getByRole('navigation', { name: '设置分类' })
-    expect(within(navigation).getAllByRole('button')).toHaveLength(1)
+    expect(within(navigation).getAllByRole('button')).toHaveLength(2)
+    expect(within(navigation).getByRole('button', { name: '关于' })).toBeInTheDocument()
     expect(screen.getByRole('combobox', { name: '主题' })).toHaveTextContent('跟随系统')
     await chooseOption(user, '主题', '深色')
     await chooseOption(user, '语言', '英语')

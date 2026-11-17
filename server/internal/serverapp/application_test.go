@@ -165,6 +165,7 @@ func TestApplicationIntegration(t *testing.T) {
 			status                     int
 		}{
 			{"GET", "/health/live", "", "", 200},
+			{"POST", "/api/v2/version", "", "", 405},
 			{"GET", "/health/ready", "", "", 200},
 			{"GET", "/admin/", "", "", 200},
 			{"GET", "/activate", "", "", 200},
@@ -200,6 +201,18 @@ func TestApplicationIntegration(t *testing.T) {
 		status, _, _ := request(t, running.client, "GET", "http://"+running.address+"/health/live", "", "")
 		if status != 400 {
 			t.Fatal("明文请求进入业务处理器")
+		}
+		versionStatus, versionBody, versionHeaders := request(t, running.client, "GET", "https://"+running.address+"/api/v2/version", "", "")
+		if (versionStatus != 200 && versionStatus != 503) || versionHeaders.Get("Cache-Control") != "no-store" {
+			t.Fatalf("公共版本接口未挂载：%d", versionStatus)
+		}
+		if versionStatus == 200 {
+			var version map[string]string
+			if err := json.Unmarshal(versionBody, &version); err != nil || len(version) != 1 || version["server_version"] == "" {
+				t.Fatal("公共版本接口未返回构建版本")
+			}
+		} else if strings.TrimSpace(string(versionBody)) != "服务端构建未提供版本信息" {
+			t.Fatal("公共版本接口未明确说明构建版本缺失")
 		}
 		verifyUserRoutes(t, running, pool, testNodeID)
 		if err := application.Close(); err == nil {

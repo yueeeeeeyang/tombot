@@ -351,7 +351,7 @@ export function ConversationPanel({
                       <p className="group-notice">{item.content}</p>
                     ) : (
                       <ChatMessage
-                        mentions={item.mentions}
+                        speakerAgent={agents.find((agent) => agent.id === item.speaker)}
                         message={bubbleMessage(item)}
                         speaker={
                           item.role === 'assistant'

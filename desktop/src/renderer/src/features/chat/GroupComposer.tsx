@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { Avatar } from '../../components/Avatar'
 import type { Agent } from '../workspace/model'
 
@@ -17,6 +17,15 @@ export function GroupComposer({
   onSend: () => void
 }) {
   const input = useRef<HTMLTextAreaElement>(null)
+  const pendingCaret = useRef<{ value: string; position: number } | null>(null)
+  useLayoutEffect(() => {
+    const caret = pendingCaret.current
+    pendingCaret.current = null
+    if (caret && caret.value === draft) {
+      input.current?.focus()
+      input.current?.setSelectionRange(caret.position, caret.position)
+    }
+  }, [draft])
   const [query, setQuery] = useState<{ start: number; end: number; text: string } | null>(null)
   const [active, setActive] = useState(0)
   const [selected, setSelected] = useState<Array<{ id: string; name: string }>>([])
@@ -36,7 +45,13 @@ export function GroupComposer({
     )
     const prefix = value.slice(0, position)
     const match = /(?:^|[^a-zA-Z0-9._%+-])@([^@\n]*)$/u.exec(prefix)
-    setQuery(match ? { start: prefix.lastIndexOf('@'), end: position, text: match[1]! } : null)
+    // 已完成的提及及其后续正文不再参与搜索；名称本身仍可包含空格。
+    const isCompleted = match && members.some((cat) => match[1]!.startsWith(`${cat.name} `))
+    setQuery(
+      match && !isCompleted
+        ? { start: prefix.lastIndexOf('@'), end: position, text: match[1]! }
+        : null,
+    )
     setActive(0)
   }
   function select(cat: Agent) {
@@ -46,17 +61,13 @@ export function GroupComposer({
       { id: cat.id, name: cat.name },
     ]
     const value = draft.slice(0, query.start) + `@${cat.name} ` + draft.slice(query.end)
+    pendingCaret.current = { value, position: query.start + cat.name.length + 2 }
     setSelected(chosen)
     onChange(
       value,
       chosen.map((item) => item.id),
     )
     setQuery(null)
-    const position = query.start + cat.name.length + 2
-    requestAnimationFrame(() => {
-      input.current?.focus()
-      input.current?.setSelectionRange(position, position)
-    })
   }
   return (
     <div className="group-composer-input">

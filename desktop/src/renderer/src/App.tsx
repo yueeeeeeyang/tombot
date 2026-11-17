@@ -1,3 +1,4 @@
+import { useConversationPreviews } from './features/workspace/useConversationPreviews'
 import { parseChatFilePath } from '../../shared/chatFiles'
 import { useGroupChatActions } from './features/workspace/useGroupChatActions'
 import { ulid } from '../../shared/ulid'
@@ -106,6 +107,17 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   const [isCatPanelOpen, setCatPanelOpen] = useState(false)
   const [surface, setSurface] = useState<Surface>({ kind: 'agent', id: '' })
   const [chatGroups, setChatGroups] = useState<GroupSummary[]>([])
+  const conversationPreviews = useConversationPreviews(
+    ready
+      ? [
+          ...workspace.agents.flatMap((agent) =>
+            agent.conversationId ? [agent.conversationId] : [],
+          ),
+          ...chatGroups.map((group) => group.conversation_id),
+        ]
+      : [],
+    setNotice,
+  )
   const [dmThread, setDmThread] = useState<{ notice: DmNotice; selfId: string }>()
   const [pendingMessages, setPendingMessages] = useState<Record<string, string[]>>({})
 
@@ -149,6 +161,9 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   const bannerMessage =
     error || profileError || themeError || sidebarError || languageError || notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
+  const sidebarCategories = [
+    ...new Set([...getAgentGroups(workspace), ...Object.values(preferences.chatCategories ?? {})]),
+  ]
   const groupActions = useGroupChatActions({
     activeGroupId: surface.kind === 'group' ? surface.id : undefined,
     onHide: (id) => {
@@ -156,7 +171,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         setSurface({ kind: 'agent', id: workspace.activeAgentId })
     },
     groups: chatGroups,
-    categories: getAgentGroups(workspace),
+    categories: sidebarCategories,
     ids: agentIds,
     preferences,
     update: updatePreferences,
@@ -316,7 +331,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     closeMenu()
     runAction(() => {
       unpinAgent(target.id)
-      commit((previous) => moveAgent(previous, target.id, group))
+      commit((previous) => moveAgent(previous, target.id, group, sidebarCategories))
       setRenamingAgentId(undefined)
       setEditingGroupName(undefined)
       setNotice(`已将「${target.name}」移至「${group}」`)
@@ -349,6 +364,15 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   function renameCurrentGroup(previousName: string, name: string): boolean {
     try {
       commit((previous) => renameAgentGroup(previous, previousName, name))
+      updatePreferences((previous) => ({
+        ...previous,
+        chatCategories: Object.fromEntries(
+          Object.entries(previous.chatCategories ?? {}).map(([id, category]) => [
+            id,
+            category === previousName ? name.trim() : category,
+          ]),
+        ),
+      }))
       setEditingGroupName(undefined)
       setNotice('')
       return true
@@ -484,6 +508,17 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         onCreate={() => setOpenDialog('create')}
         onSettings={() => openSettings()}
         chatGroups={chatGroups}
+        previews={conversationPreviews}
+        onMove={(kind, id, category) =>
+          runAction(() => {
+            if (kind === 'group') groupActions.move(id, category)
+            else {
+              const next = moveAgent(workspace, id, category, sidebarCategories)
+              unpinAgent(id)
+              commit(() => next)
+            }
+          })
+        }
         selected={
           surface.kind === 'agent' ? { kind: 'agent', id: workspace.activeAgentId } : surface
         }
@@ -657,7 +692,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
           anchor={menuAnchor}
           agent={menuAgent}
           chatType="bot"
-          groups={getAgentGroups(workspace)}
+          groups={sidebarCategories}
           isLead={menuAgent.id === workspace.leadAgentId}
           isPinned={
             menuAgent.id === workspace.leadAgentId || preferences.pinnedIds.includes(menuAgent.id)

@@ -160,3 +160,45 @@
   background: var(--surface-muted);
   border-radius: 10px;
 }
+
+.agent-group {
+  border-radius: 14px;
+  transition: background-color 120ms ease;
+}
+.agent-group.is-drop-target {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.sidebar-drag-preview {
+  position: fixed;
+  left: -1000px;
+  top: 0;
+  width: 104px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  border-radius: 16px;
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: 0 8px 28px #00000018;
+}
+.sidebar-drag-preview .avatar,
+.sidebar-drag-preview .group-avatar {
+  width: 56px;
+  height: 56px;
+}
+/* 拖拽快照不能继承按下压扁和指针倾斜，否则整个拖动过程都会停在变形的姿态。 */
+.sidebar-drag-preview .avatar[data-pose] .cat-tilt,
+.sidebar-drag-preview .avatar[data-pose] .cat-motion {
+  animation: none;
+  transform: none;
+}
+.sidebar-drag-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}

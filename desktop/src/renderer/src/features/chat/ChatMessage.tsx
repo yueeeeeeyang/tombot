@@ -1,3 +1,5 @@
+import { Avatar } from '../../components/Avatar'
+import type { Agent } from '../workspace/model'
 import { MarkdownMessage } from './MarkdownMessage'
 import { Clock3, Ellipsis, FileText, Reply, Smile } from 'lucide-react'
 import {
@@ -12,7 +14,7 @@ import type { ChatMessage as ChatMessageModel, MessageAttachment } from '../work
 export function ChatMessage({
   message,
   speaker,
-  mentions,
+  speakerAgent,
   isPending = false,
   isHighlighted,
   onOpenMenu,
@@ -25,7 +27,7 @@ export function ChatMessage({
 }: {
   message: ChatMessageModel
   speaker?: string
-  mentions?: Array<{ id: string; name: string }>
+  speakerAgent?: Agent
   isPending?: boolean
   isHighlighted: boolean
   onOpenMenu: (messageId: string, x: number, y: number, trigger: HTMLElement) => void
@@ -114,17 +116,16 @@ export function ChatMessage({
               </button>
             )}
             {speaker && message.role === 'assistant' ? (
-              <span className="message-speaker">{speaker}</span>
-            ) : null}
-            {!!mentions?.length && (
-              <div className="group-mentions">
-                {mentions.map((mention) => (
-                  <span key={mention.id} className={mention.id === 'user' ? 'is-self' : ''}>
-                    @{mention.id === 'user' ? '你' : mention.name}
-                  </span>
-                ))}
+              <div className="message-speaker">
+                <Avatar
+                  preset={speakerAgent?.avatar ?? 'bombay'}
+                  customAvatar={speakerAgent?.customAvatar}
+                  agentId={speakerAgent?.id}
+                  size="small"
+                />
+                <span>{speaker}</span>
               </div>
-            )}
+            ) : null}
             {message.role === 'assistant' ? (
               <MarkdownMessage content={message.content} />
             ) : (

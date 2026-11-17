@@ -113,3 +113,15 @@ func (handler *Handler) botActivities(w http.ResponseWriter, r *http.Request) {
 	runs, err := handler.executor.BotActivities(r.Context(), current(r).principal)
 	handler.result(w, r, "runs", runs, err)
 }
+
+// conversationPreviews 只接受有界会话身份列表，用户身份始终来自桌面会话。
+func (handler *Handler) conversationPreviews(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ConversationIDs []string `json:"conversation_ids"`
+	}
+	if !handler.decode(w, r, &request, 4096) {
+		return
+	}
+	previews, err := handler.executor.ConversationPreviews(r.Context(), current(r).principal, request.ConversationIDs)
+	handler.result(w, r, "previews", previews, err)
+}

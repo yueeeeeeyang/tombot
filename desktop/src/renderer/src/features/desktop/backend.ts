@@ -96,7 +96,17 @@ export interface AgentConversation extends MessagePage {
  * 桌面与服务之间的唯一通道。
  * 测试用的内存实现会同步保存；真正的服务调用返回 Promise。
  */
+export type ConversationPreview = { conversation_id: string; sequence: number; content: string }
+export type ApplicationAbout = {
+  clientVersion: string
+  serverUrl: string
+  serverVersion: string
+  serverError?: string
+}
+
 export interface DesktopBackend {
+  loadConversationPreviews: (ids: string[]) => Promise<ConversationPreview[]>
+  loadAbout: () => Promise<ApplicationAbout>
   readClipboardFiles?: () => Promise<Array<{ name: string; type: string; bytes: Uint8Array }>>
   savesSynchronously?: boolean
   trySessionSync?: () => SessionSnapshot

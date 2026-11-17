@@ -22,10 +22,15 @@ export function renameAgent(workspace: Workspace, id: string, name: string): Wor
 }
 
 /** 将猫咪移至已有分组或未分组；默认猫咪保留独立入口，不接受无效目标。 */
-export function moveAgent(workspace: Workspace, id: string, group: string): Workspace {
+export function moveAgent(
+  workspace: Workspace,
+  id: string,
+  group: string,
+  categories = getAgentGroups(workspace),
+): Workspace {
   if (!workspace.agents.some((agent) => agent.id === id)) throw new Error('猫咪不存在')
   if (id === workspace.leadAgentId) throw new Error('默认猫咪不参与分组')
-  if (!getAgentGroups(workspace).includes(group)) throw new Error('目标分组不存在')
+  if (!categories.includes(group)) throw new Error('目标分组不存在')
   return {
     ...workspace,
     agents: workspace.agents.map((agent) => (agent.id === id ? { ...agent, group } : agent)),

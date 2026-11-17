@@ -18,6 +18,9 @@ afterEach(() => {
 
 // jsdom 没有布局引擎和模态框实现；真实窗口行为由 Electron 端到端测试验证。
 Element.prototype.scrollIntoView = vi.fn()
+Element.prototype.scrollTo = function (options?: ScrollToOptions | number, top?: number) {
+  this.scrollTop = typeof options === 'number' ? (top ?? 0) : (options?.top ?? this.scrollTop)
+}
 globalThis.ResizeObserver = class {
   observe() {}
   unobserve() {}

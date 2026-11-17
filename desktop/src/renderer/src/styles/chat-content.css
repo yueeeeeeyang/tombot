@@ -10,7 +10,7 @@
 .message-text.message-markdown > :last-child {
   margin-bottom: 0;
 }
-.message-bubble .message-markdown p,
+.message-text.message-markdown p,
 .message-markdown ul,
 .message-markdown ol,
 .message-markdown blockquote,
@@ -124,21 +124,18 @@
   background: #e25151;
 }
 
-.group-mentions {
+.message-speaker {
   display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 6px;
-  font-size: 11px;
-  opacity: 0.85;
-}
-.group-mentions span {
-  padding: 2px 7px;
-  border-radius: 10px;
-  background: var(--hover-bg);
-}
-.group-mentions .is-self {
+  color: var(--muted);
+  font-size: 12px;
   font-weight: 600;
+}
+.message-speaker .avatar {
+  width: 22px;
+  height: 22px;
 }
 .group-notice {
   margin: 8px 16px;
@@ -151,14 +148,18 @@
 .scroll-to-bottom {
   position: absolute;
   top: -8px;
-  right: 24px;
-  transform: translateY(-100%);
+  left: 50%;
+  transform: translate(-50%, -100%);
   width: 36px;
   height: 36px;
   z-index: 3;
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: 0 3px 12px #00000012;
+}
+/* 全局按钮按压缩放不能覆盖定位变换，否则按下后按钮会移出指针，松开时无法触发点击。 */
+.scroll-to-bottom:active:not(:disabled) {
+  transform: translate(-50%, -100%) scale(0.97);
 }
 .scroll-to-bottom:focus-visible {
   outline: 2px solid var(--text);

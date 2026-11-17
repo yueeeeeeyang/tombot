@@ -1,3 +1,5 @@
+import { loadApplicationAbout } from './applicationAbout'
+import { readConversationPreviews } from './conversationPreviews'
 import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
 import { chatFilePath, parseChatFilePath, type ChatFile } from '../shared/chatFiles'
 import {
@@ -671,6 +673,12 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:logout', () => handle(() => logout()))
+  ipcMain.handle('desktop:about', () =>
+    handle(() => loadApplicationAbout(app.getVersion(), requireServerAddress(), transport())),
+  )
+  ipcMain.handle('desktop:conversation-previews', (_event, ids: string[]) =>
+    handle(() => readConversationPreviews(call, ids)),
+  )
   ipcMain.handle('desktop:load-workspace', () => handle(() => loadWorkspace()))
   ipcMain.handle('desktop:user-profile', () => handle(() => loadUserProfile()))
   ipcMain.handle('desktop:create-agent', (_event, profile: NewAgent, requestId: string) =>

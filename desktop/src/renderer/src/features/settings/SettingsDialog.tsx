@@ -1,4 +1,6 @@
-import { Settings, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { getBackend, type ApplicationAbout } from '../desktop/backend'
+import { Info, Settings, X } from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../../../../../ui/Select'
 import workspaceCat from '../../assets/cats/workspace-cat.png'
@@ -35,58 +37,79 @@ export function SettingsDialog({
   onSignOut,
   onClose,
 }: SettingsDialogProps) {
+  const [section, setSection] = useState<'general' | 'about'>('general')
   return (
     <Dialog title="设置" variant="settings" onClose={onClose}>
       <div className="settings-layout">
         <nav className="settings-navigation" aria-label="设置分类">
-          <button type="button" className="is-active" aria-current="page">
+          <button
+            type="button"
+            className={section === 'general' ? 'is-active' : ''}
+            aria-current={section === 'general' ? 'page' : undefined}
+            onClick={() => setSection('general')}
+          >
             <Settings size={17} strokeWidth={1.7} />
             通用
           </button>
+          <button
+            type="button"
+            className={section === 'about' ? 'is-active' : ''}
+            aria-current={section === 'about' ? 'page' : undefined}
+            onClick={() => setSection('about')}
+          >
+            <Info size={17} strokeWidth={1.7} />
+            关于
+          </button>
         </nav>
         <section className="settings-pane" aria-labelledby="settings-section-title">
-          <h2 id="settings-section-title">通用</h2>
-          <section className="settings-section" aria-labelledby="settings-account-title">
-            <h3 id="settings-account-title">账号</h3>
-            <div className="settings-card settings-account">
-              <div className="settings-account-identity">
-                <img src={userProfile?.avatar || workspaceCat} alt="" draggable={false} />
-                <div className="settings-account-copy">
-                  <strong>{userProfile?.displayName || userProfile?.username || '账号信息'}</strong>
-                  <span>
-                    {userProfile?.username ||
-                      (profileError ? '暂时无法读取账号信息' : '正在读取账号信息…')}
-                  </span>
+          {section === 'about' ? (
+            <AboutSettings />
+          ) : (
+            <>
+              <h2 id="settings-section-title">通用</h2>
+              {(profileError || signOutError || themeError || languageError) && (
+                <div className="settings-errors">
+                  {profileError && <SettingsError message={profileError} />}
+                  {signOutError && <SettingsError message={signOutError} />}
+                  {themeError && <SettingsError message={themeError} />}
+                  {languageError && <SettingsError message={languageError} />}
                 </div>
-              </div>
-              <button
-                type="button"
-                className="settings-sign-out"
-                disabled={isSigningOut}
-                onClick={() => void onSignOut()}
-              >
-                {isSigningOut ? '正在退出…' : '退出登录'}
-              </button>
-            </div>
-            {(profileError || signOutError) && (
-              <p className="form-error" role="alert">
-                {signOutError || profileError}
+              )}
+              <section className="settings-section" aria-labelledby="settings-account-title">
+                <h3 id="settings-account-title">账号</h3>
+                <div className="settings-card settings-account">
+                  <div className="settings-account-identity">
+                    <img src={userProfile?.avatar || workspaceCat} alt="" draggable={false} />
+                    <div className="settings-account-copy">
+                      <strong>
+                        {userProfile?.displayName || userProfile?.username || '账号信息'}
+                      </strong>
+                      <span>
+                        {userProfile?.username ||
+                          (profileError ? '暂时无法读取账号信息' : '正在读取账号信息…')}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="settings-sign-out"
+                    disabled={isSigningOut}
+                    onClick={() => void onSignOut()}
+                  >
+                    {isSigningOut ? '正在退出…' : '退出登录'}
+                  </button>
+                </div>
+              </section>
+              <GeneralSettings
+                language={language}
+                onLanguageChange={onLanguageChange}
+                theme={theme}
+                onThemeChange={onThemeChange}
+              />
+              <p className="settings-preview-note">
+                主题即时生效。语言选择保存在本机，界面仍使用简体中文
               </p>
-            )}
-          </section>
-          <GeneralSettings
-            language={language}
-            onLanguageChange={onLanguageChange}
-            theme={theme}
-            onThemeChange={onThemeChange}
-          />
-          <p className="settings-preview-note">
-            主题即时生效。语言选择保存在本机，界面仍使用简体中文
-          </p>
-          {(themeError || languageError) && (
-            <p className="form-error" role="alert">
-              {themeError || languageError}
-            </p>
+            </>
           )}
         </section>
         <button className="icon-button settings-close" aria-label="关闭设置" onClick={onClose}>
@@ -94,6 +117,20 @@ export function SettingsDialog({
         </button>
       </div>
     </Dialog>
+  )
+}
+
+/** 设置错误集中置于标题下方；重试入口与对应原因保持在同一条提示内。 */
+function SettingsError({ message, onRetry }: { message: string; onRetry?: () => void }) {
+  return (
+    <div role="alert" className="form-error settings-error">
+      <span>{message}</span>
+      {onRetry && (
+        <button type="button" aria-label="重试读取版本" onClick={onRetry}>
+          重试
+        </button>
+      )}
+    </div>
   )
 }
 
@@ -136,5 +173,61 @@ function GeneralSettings({
         </div>
       </div>
     </div>
+  )
+}
+
+/** 关于页展示主进程与当前连接的实际版本；失败提供重试，不用占位版本掩盖错误。 */
+function AboutSettings() {
+  const [about, setAbout] = useState<ApplicationAbout>()
+  const [error, setError] = useState('')
+  const [attempt, setAttempt] = useState(0)
+  useEffect(() => {
+    let cancelled = false
+    void getBackend()
+      .loadAbout()
+      .then(
+        (result) => {
+          if (!cancelled) {
+            setAbout(result)
+            setError(result.serverError ?? '')
+          }
+        },
+        (failure: Error) => {
+          if (!cancelled) setError(failure.message)
+        },
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [attempt])
+  return (
+    <>
+      <h2 id="settings-section-title">关于</h2>
+      {error && (
+        <div className="settings-errors">
+          <SettingsError
+            message={error}
+            onRetry={() => {
+              setError('')
+              setAttempt((value) => value + 1)
+            }}
+          />
+        </div>
+      )}
+      <div className="settings-card settings-about">
+        <div className="setting-row">
+          <span>客户端版本</span>
+          <span>{about?.clientVersion ?? '正在读取…'}</span>
+        </div>
+        <div className="setting-row">
+          <span>服务端地址</span>
+          <span>{about?.serverUrl || '正在读取…'}</span>
+        </div>
+        <div className="setting-row">
+          <span>服务端版本</span>
+          <span>{about?.serverVersion || (error ? '暂时无法获取' : '正在读取…')}</span>
+        </div>
+      </div>
+    </>
   )
 }

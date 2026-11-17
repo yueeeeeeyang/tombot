@@ -196,7 +196,9 @@ describe('群聊持久消息同步', () => {
     const second = screen.getByText('第2位回复').closest('.message-bubble') as HTMLElement
     expect(within(first).getByText(agents[0]!.name)).toBeInTheDocument()
     expect(within(second).getByText(agents[1]!.name)).toBeInTheDocument()
-    expect(screen.getByText('@你')).toBeInTheDocument()
+    expect(screen.queryByText('@你')).toBeNull()
+    expect(first.querySelector('.message-speaker .avatar')).not.toBeNull()
+    expect(second.querySelector('.message-speaker .avatar')).not.toBeNull()
     fireEvent.click(
       within(second.closest('.message-line') as HTMLElement).getByRole('button', { name: '回复' }),
     )

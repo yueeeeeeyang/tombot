@@ -304,6 +304,19 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if len(messages) != 1 || messages[0].ID != submission.MessageID || messages[0].Blocks[0].Text != messageRequest.Content {
 		t.Fatal("消息正文未持久返回")
 	}
+	previewRequest := map[string]any{"conversation_ids": []string{created.Bot.ConversationID}}
+	previews := decode[struct {
+		Previews []execution.ConversationPreview `json:"previews"`
+	}](t, call("POST", "/api/v2/conversations/previews", previewRequest, first, nil), 200).Previews
+	if len(previews) != 1 || previews[0].Content != messageRequest.Content || previews[0].ConversationID != created.Bot.ConversationID {
+		t.Fatal("批量摘要未返回最新正文", previews)
+	}
+	if response := call("POST", "/api/v2/conversations/previews", previewRequest, second, nil); response.status != 404 {
+		t.Fatal("摘要越权未拒绝", response.status)
+	}
+	if response := call("POST", "/api/v2/conversations/previews", map[string]any{"conversation_ids": []string{created.Bot.ConversationID, created.Bot.ConversationID}}, first, nil); response.status != 400 {
+		t.Fatal("重复摘要请求未拒绝", response.status)
+	}
 	if page := decode[messagesReply](t, call("GET", messagePath+"?before=1", nil, first, nil), 200).Messages; len(page) != 0 {
 		t.Fatal("消息游标重复返回记录")
 	}

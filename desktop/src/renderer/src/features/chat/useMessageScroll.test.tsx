@@ -106,12 +106,15 @@ it('前插历史保留锚点，底部读者跟随图片和视口变化，卸载�
 })
 
 it('滚动离开底部才出现按钮，返回底部后自动跟随新消息', () => {
+  vi.useFakeTimers()
   const { element, messages, setHeight, rerender } = setup()
   expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
   element.scrollTop = 120
   fireEvent.scroll(element)
   fireEvent.click(screen.getByRole('button', { name: '回到最新消息' }))
   expect(element.scrollTop).toBe(600)
+  act(() => vi.advanceTimersByTime(32))
+  vi.useRealTimers()
   expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
   setHeight(1200)
   rerender(<Timeline messages={[...messages, message('new')]} />)
@@ -122,4 +125,34 @@ it('滚动离开底部才出现按钮，返回底部后自动跟随新消息', (
   element.scrollTop = 760
   fireEvent.scroll(element)
   expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+})
+
+it('一次点击在下一帧补偿布局变化，旧滚动事件不能取消返回底部', () => {
+  vi.useFakeTimers()
+  const { element, setHeight, resize } = setup()
+  element.scrollTop = 80
+  fireEvent.scroll(element)
+  fireEvent.click(screen.getByRole('button', { name: '回到最新消息' }))
+  setHeight(1600)
+  fireEvent.scroll(element)
+  resize()
+  act(() => vi.advanceTimersByTime(32))
+  expect(element.scrollTop).toBe(1200)
+  expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+  vi.useRealTimers()
+})
+it('返回底部期间主动上翻会取消下一帧定位', () => {
+  vi.useFakeTimers()
+  const { element, setHeight } = setup()
+  element.scrollTop = 80
+  fireEvent.scroll(element)
+  fireEvent.click(screen.getByRole('button', { name: '回到最新消息' }))
+  fireEvent.wheel(element, { deltaY: -200 })
+  element.scrollTop = 200
+  fireEvent.scroll(element)
+  setHeight(1400)
+  act(() => vi.advanceTimersByTime(32))
+  expect(element.scrollTop).toBe(200)
+  expect(screen.getByRole('button', { name: '回到最新消息' })).toBeInTheDocument()
+  vi.useRealTimers()
 })

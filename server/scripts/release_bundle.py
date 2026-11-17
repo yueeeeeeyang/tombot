@@ -203,7 +203,8 @@ def validate_embedded_admin(binary, assets):
     require(all(content in program for content in assets.values()), "服务端未嵌入本次构建的全部管理资源")
 
 
-def compile_artifacts(source, payload):
+def compile_artifacts(source, payload, version):
+    release_version(version)
     environment = build_environment()
     run_command(["npm", "ci", "--no-audit", "--no-fund"], source / "admin", environment, 600, "安装锁定的管理平台依赖")
     run_command(["npm", "run", "build"], source / "admin", environment, 300, "构建管理平台")
@@ -216,7 +217,10 @@ def compile_artifacts(source, payload):
                 continue
             target = payload / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            run_command(["go", "build", "-trimpath", "-o", str(target), "./cmd/" + target.name],
+            arguments = ["go", "build", "-trimpath"]
+            if target.name == "tomd":
+                arguments.extend(["-ldflags", "-X io.yueyang/tom/internal/serverapp.releaseVersion=" + version])
+            run_command(arguments + ["-o", str(target), "./cmd/" + target.name],
                         source / "server", environment, 300, "编译 " + architecture + " " + target.name)
             if target.name == "tomd":
                 validate_embedded_admin(target, assets)
@@ -377,7 +381,7 @@ def build_release(root, target, version):
         stage = Path(temporary)
         source, payload = stage / "source", stage / "payload"
         source_digest = snapshot_sources(root, source)
-        compile_artifacts(source, payload)
+        compile_artifacts(source, payload, version)
         require(snapshot_sources(source) == source_digest, "构建过程修改了已固定的源码输入")
         manifest = payload_manifest(payload, version, source_digest)
         archive = stage / "release.tar.gz"

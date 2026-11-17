@@ -102,7 +102,8 @@ describe('群资料库', () => {
     await waitFor(() => expect(download).toHaveBeenCalledWith('group', 'file'))
     expect(screen.queryByText('文件已保存。')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '关闭弹窗' }))
-    fireEvent.click(screen.getByRole('button', { name: '重命名 方案.txt' }))
+    fireEvent.click(screen.getByRole('button', { name: '更多操作 方案.txt' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '重命名 方案.txt' }))
     fireEvent.change(screen.getByRole('textbox', { name: '文件名称' }), {
       target: { value: '新版.txt' },
     })
@@ -110,7 +111,8 @@ describe('群资料库', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('文件已被修改')
     expect(rename).toHaveBeenCalledWith('group', 'file', 1, '新版.txt')
     fireEvent.click(screen.getByRole('button', { name: '取消' }))
-    fireEvent.click(screen.getByRole('button', { name: '删除 方案.txt' }))
+    fireEvent.click(screen.getByRole('button', { name: '更多操作 方案.txt' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除 方案.txt' }))
     expect(remove).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
     await waitFor(() => expect(remove).toHaveBeenCalledWith('group', 'file', 1))

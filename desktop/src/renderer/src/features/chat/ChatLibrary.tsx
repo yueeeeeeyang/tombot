@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, FileText, Image, Pencil, Search, Trash2 } from 'lucide-react'
+import { Download, Search } from 'lucide-react'
+import { LibraryFileCard } from './LibraryFileCard'
 import { Dialog } from '../../components/Dialog'
 import { getBackend } from '../desktop/backend'
 import {
@@ -159,44 +160,15 @@ function Library({ conversationId }: { conversationId: string }) {
       )}
       <ul className="chat-library-files">
         {files.map((file) => (
-          <li key={file.id}>
-            <button
-              className="chat-library-file"
-              onClick={() => setOperation({ kind: 'preview', file })}
-              aria-label={`预览 ${file.name}`}
-            >
-              {file.media_type.startsWith('image/') ? <Image size={22} /> : <FileText size={22} />}
-              <span>
-                <strong title={file.name}>{file.name}</strong>
-                <small>
-                  {sizeLabel(file.size)} · {new Date(file.created_at).toLocaleDateString('zh-CN')}
-                </small>
-              </span>
-            </button>
-            <div className="chat-library-actions">
-              <button
-                className="icon-button"
-                aria-label={`下载 ${file.name}`}
-                onClick={() => void download(file)}
-              >
-                <Download size={14} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label={`重命名 ${file.name}`}
-                onClick={() => setOperation({ kind: 'rename', file })}
-              >
-                <Pencil size={14} />
-              </button>
-              <button
-                className="icon-button"
-                aria-label={`删除 ${file.name}`}
-                onClick={() => setOperation({ kind: 'delete', file })}
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          </li>
+          <LibraryFileCard
+            key={file.id}
+            file={file}
+            size={sizeLabel(file.size)}
+            onAction={(kind) => {
+              if (kind === 'download') void download(file)
+              else setOperation({ kind, file })
+            }}
+          />
         ))}
       </ul>
       {(error || page?.next) && (

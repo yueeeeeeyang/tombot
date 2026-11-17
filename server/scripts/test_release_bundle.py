@@ -246,8 +246,9 @@ class ReleaseBundleTest(unittest.TestCase):
         source = self.directory / "source"
         make_source(source)
         output = self.directory / "release.tar.gz"
-        def compile_snapshot(snapshot, payload):
+        def compile_snapshot(snapshot, payload, version):
             self.assertNotEqual(snapshot, source)
+            self.assertEqual(version, "0.2.0-test")
             self.assertEqual((snapshot / "admin/package.json").read_text(), "source fixture")
             make_payload(payload)
         with patch.object(release, "compile_artifacts", side_effect=compile_snapshot):
@@ -269,7 +270,8 @@ class ReleaseBundleTest(unittest.TestCase):
         make_source(source)
         for scenario in ("snapshot", "elf"):
             with self.subTest(scenario=scenario):
-                def compile_snapshot(snapshot, payload):
+                def compile_snapshot(snapshot, payload, version):
+                    self.assertEqual(version, "0.2.0-test")
                     make_payload(payload)
                     path = snapshot / "ui/theme.css" if scenario == "snapshot" else payload / "linux-arm64/bin/tomd"
                     path.write_text("changed")
@@ -277,6 +279,25 @@ class ReleaseBundleTest(unittest.TestCase):
                 with patch.object(release, "compile_artifacts", side_effect=compile_snapshot), self.assertRaises(release.ReleaseError):
                     release.build_release(source, output, "0.2.0-test")
                 self.assertFalse(output.exists())
+
+    def test_compile_embeds_release_version_in_each_server(self):
+        source, payload = self.directory / "source", self.directory / "payload"
+        with patch.object(release, "run_command") as run, \
+                patch.object(release, "read_admin_build", return_value={"index.html": b"admin"}), \
+                patch.object(release, "validate_embedded_admin"), \
+                patch.object(release, "copy_artifact"):
+            release.compile_artifacts(source, payload, "0.2.0-test")
+        builds = [call.args[0] for call in run.call_args_list if call.args[0][:2] == ["go", "build"]]
+        self.assertEqual(len(builds), len(release.binary_paths()))
+        servers = [arguments for arguments in builds if arguments[-1] == "./cmd/tomd"]
+        self.assertEqual(len(servers), len(release.ARCHITECTURES))
+        for arguments in servers:
+            self.assertEqual(arguments[arguments.index("-ldflags") + 1],
+                             "-X io.yueyang/tom/internal/serverapp.releaseVersion=0.2.0-test")
+        self.assertTrue(all("-ldflags" not in arguments for arguments in builds if arguments[-1] != "./cmd/tomd"))
+        with patch.object(release, "run_command") as run, self.assertRaises(release.ReleaseError):
+            release.compile_artifacts(source, payload, "invalid version")
+        run.assert_not_called()
 
     def test_embedded_admin_build_boundaries_and_current_binary(self):
         distribution = self.directory / "dist"

@@ -12,6 +12,9 @@ import {
 import { ulid } from '../../../../shared/ulid'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
+  ApplicationAbout,
+  GroupSummary,
+  ConversationPreview,
   DeliveryResult,
   ServerBubble,
   DesktopBackend,
@@ -28,6 +31,30 @@ const modelNotReady = '当前模型策略不可用，请联系管理员检查服
 /** 测试里代替服务端的内存实现。它遵守同一套会话、保存和投递规则，不写 localStorage。 */
 export class MemoryBackend implements DesktopBackend {
   private reactionRequests = new Map<string, string>()
+  listGroups(): Promise<GroupSummary[]> {
+    return Promise.resolve([])
+  }
+  loadConversationPreviews(ids: string[]): Promise<ConversationPreview[]> {
+    return Promise.resolve(
+      ids.map((id) => {
+        const message = this.workspace.agents
+          .find((agent) => agent.conversationId === id)
+          ?.messages.at(-1)
+        return {
+          conversation_id: id,
+          sequence: message?.sequence ?? (message ? 1 : 0),
+          content: message ? replyExcerpt(message.content) : '',
+        }
+      }),
+    )
+  }
+  loadAbout(): Promise<ApplicationAbout> {
+    return Promise.resolve({
+      clientVersion: '0.1.0',
+      serverUrl: this.serverUrl,
+      serverVersion: '测试版本',
+    })
+  }
   readonly savesSynchronously = true
   phase: SessionPhase = 'ready'
   serverUrl = ''
