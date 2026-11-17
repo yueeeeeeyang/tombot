@@ -861,6 +861,7 @@ export function registerDesktopIpc(): void {
       }),
     ),
   )
+  ipcMain.handle('desktop:bot-activities', () => handle(() => call('GET', '/activity')))
   ipcMain.handle('desktop:conversation-activity', (_event, id: string) =>
     handle(() => call('GET', `/conversations/${encodeURIComponent(id)}/activity`)),
   )
@@ -1062,6 +1063,14 @@ type ServerMessage = {
     kind: string
     text?: string
     task_result?: boolean
+    user_message?: boolean
+    bot_message?: { sender_id: string }
+    dm_notice?: {
+      direction: 'sent' | 'received'
+      peer_id: string
+      peer_name: string
+      conversation_id: string
+    }
     mentions?: Array<{ id: string; name: string }>
     group_file?: GroupFile
     artifact?: { path?: string; sha256?: string; media_type?: string }
@@ -1073,6 +1082,12 @@ type ServerMessage = {
 
 function toBubble(message: ServerMessage): {
   isNotice: boolean
+  dmNotice?: {
+    direction: 'sent' | 'received'
+    peerId: string
+    peerName: string
+    conversationId: string
+  }
   id: string
   requestId?: string
   sequence: number
@@ -1092,8 +1107,10 @@ function toBubble(message: ServerMessage): {
     kind: 'image' | 'file'
   }>
 } | null {
+  const notice = message.blocks?.find((block) => block.dm_notice)?.dm_notice
+  const sender = message.blocks?.find((block) => block.bot_message)?.bot_message?.sender_id
   const content = (message.blocks ?? [])
-    .filter((block) => block.kind === 'text')
+    .filter((block) => block.kind === 'text' || block.kind === 'dm_notice')
     .map((block) => block.text ?? '')
     .join('')
   const attachments = (message.blocks ?? []).flatMap((block) => {
@@ -1132,12 +1149,24 @@ function toBubble(message: ServerMessage): {
   return {
     isNotice:
       message.sender_kind === 'system' &&
-      !(message.blocks ?? []).some((block) => block.task_result),
+      !(message.blocks ?? []).some(
+        (block) => block.task_result || block.user_message || block.bot_message,
+      ),
     id: message.id,
     ...(message.client_request_id ? { requestId: message.client_request_id } : {}),
     sequence: message.sequence,
     role: message.sender_kind === 'user' ? 'user' : 'assistant',
-    speaker: message.sender_bot_id ?? '',
+    speaker: message.sender_bot_id ?? sender ?? '',
+    ...(notice
+      ? {
+          dmNotice: {
+            direction: notice.direction,
+            peerId: notice.peer_id,
+            peerName: notice.peer_name,
+            conversationId: notice.conversation_id,
+          },
+        }
+      : {}),
     content: content.trim() || attachments.map((item) => item.name).join('、'),
     createdAt: message.created_at,
     ...(message.reply_to

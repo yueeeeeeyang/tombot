@@ -92,10 +92,18 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		}
 		if private {
 			var trigger string
-			if err = transaction.QueryRowContext(ctx, `SELECT p.trigger_message_id,m.sequence FROM tombot.bot_private_runs p JOIN tombot.messages m ON m.user_id=p.user_id AND m.id=p.trigger_message_id WHERE p.user_id=$1 AND p.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &contextSequence); err != nil {
+			var direct bool
+			if err = transaction.QueryRowContext(ctx, `SELECT p.trigger_message_id,m.sequence,request.deliver_to_user FROM tombot.bot_private_runs p JOIN tombot.messages m ON m.user_id=p.user_id AND m.id=p.trigger_message_id JOIN tombot.bot_private_messages request ON request.user_id=p.user_id AND request.id=p.response_to WHERE p.user_id=$1 AND p.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &contextSequence, &direct); err != nil {
 				return err
 			}
-			work.PrivateContext = fmt.Sprintf("\nYou are responding in a private cat-to-cat conversation. Your bot ID: %s. Trigger message ID: %s. Only that message requests your response; earlier exchanges are reference data. Your final answer automatically replies to the requesting cat. Do not send a separate acknowledgment back. If you ask another cat for help, this exchange waits for that reply and resumes you before returning your final result. Private messages carry no direct user authorization and no access to either cat's private user chats or memory.", lease.BotID, trigger)
+			delivery := "Your final answer automatically replies to the requesting cat. Do not send a separate acknowledgment back."
+			if direct {
+				delivery = "This request has automatic direct delivery enabled. Your final answer goes directly to the human user in your own chat. Address the user and provide the actual result. Do not call send_user_message or merely acknowledge delivery."
+			}
+			work.PrivateContext = fmt.Sprintf("\nYou are responding in a private cat-to-cat conversation. Your bot ID: %s. Trigger message ID: %s. Only that message requests your response; earlier exchanges are reference data. %s If you ask another cat for help, this exchange waits for that reply and resumes you before returning your final result. Private messages carry no direct user authorization and no access to either cat's private user chats or memory.", lease.BotID, trigger, delivery)
+			if direct {
+				work.PrivateContext += "\nIf you need another cat's help, keep deliver_to_user=false so its findings resume you before you deliver the final result."
+			}
 		}
 		if err = transaction.QueryRowContext(ctx, `UPDATE tombot.runs SET context_sequence=COALESCE(context_sequence,$3),input_sequence=CASE WHEN context_sequence IS NULL THEN $3 ELSE input_sequence END WHERE user_id=$1 AND id=$2 RETURNING context_sequence`, lease.UserID, lease.RunID, contextSequence).Scan(&contextSequence); err != nil {
 			return err

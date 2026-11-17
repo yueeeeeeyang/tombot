@@ -1,6 +1,6 @@
 import type { CatTask } from '../../../../shared/tasks'
 import type { GroupFile, GroupFilePage, GroupFilePreview } from '../../../../shared/groupFiles'
-import type { Agent, AppWorkspace, NewAgent } from '../workspace/model'
+import type { Agent, AppWorkspace, NewAgent, DmNotice } from '../workspace/model'
 
 export interface StreamEvent {
   type: string
@@ -49,6 +49,7 @@ export interface WorkspaceSnapshot {
 }
 
 export type ServerBubble = {
+  dmNotice?: DmNotice
   isNotice?: boolean
   id: string
   /** 用户发送时的幂等键，用于合并先于回执到达的服务端消息。 */
@@ -148,6 +149,7 @@ export interface DesktopBackend {
   deleteGroupFile: (id: string, fileId: string, revision: number) => Promise<void>
   groupDetail?: (id: string) => Promise<GroupDetail>
   deleteGroup?: (id: string, revision: number) => Promise<void>
+  loadBotActivities?: () => Promise<{ runs: AgentConversation['runs'] }>
   conversationActivity?: (id: string) => Promise<{ runs: AgentConversation['runs'] }>
   renameGroup?: (id: string, revision: number, name: string) => Promise<GroupDetail>
   addGroupMembers?: (id: string, revision: number, botIds: string[]) => Promise<void>

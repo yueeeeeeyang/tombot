@@ -64,6 +64,7 @@ type Execution interface {
 	MarkRead(context.Context, identity.Principal, string, int64) error
 	GetRun(context.Context, identity.Principal, string) (execution.Run, error)
 	Activity(context.Context, identity.Principal, string) ([]execution.Run, error)
+	BotActivities(context.Context, identity.Principal) ([]execution.Run, error)
 	Cancel(context.Context, identity.Principal, string) (execution.Run, error)
 }
 
@@ -140,6 +141,7 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Post("/api/v2/conversations/{conversationID}/messages", handler.sendMessage)
 	router.Put("/api/v2/messages/{messageID}/reaction", handler.setReaction)
 	router.Post("/api/v2/conversations/{conversationID}/read", handler.markRead)
+	router.Get("/api/v2/activity", handler.botActivities)
 	router.Get("/api/v2/runs/{runID}", handler.getRun)
 	router.Get("/api/v2/conversations/{conversationID}/activity", handler.conversationActivity)
 	router.Post("/api/v2/runs/{runID}/cancel", handler.cancelRun)

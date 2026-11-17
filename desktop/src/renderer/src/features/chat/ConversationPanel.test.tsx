@@ -226,3 +226,11 @@ describe('群聊持久消息同步', () => {
     await waitFor(() => expect(screen.getByRole('textbox')).toHaveValue(''))
   })
 })
+
+it('新建空群聊保留输入框并移除顶部提示及分隔线', async () => {
+  openPanel(vi.fn(async () => ({})))
+  await screen.findByRole('log', { name: '讨论组' })
+  expect(screen.queryByText('在下面说一句，群里的猫咪会一起回应。')).not.toBeInTheDocument()
+  expect(document.querySelector('.saved-messages .local-note')).toBeNull()
+  expect(screen.getByRole('textbox')).toBeInTheDocument()
+})

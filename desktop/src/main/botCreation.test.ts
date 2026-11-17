@@ -488,3 +488,82 @@ describe('服务端创建猫咪与投递', () => {
     })
   })
 })
+
+it('私信请求保留发言者，主动正文和双方入口接入既有消息界面', async () => {
+  const conversationId = ulid()
+  const sender = ulid()
+  const dmConversation = ulid()
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () =>
+      Response.json({
+        messages: [
+          {
+            id: ulid(),
+            sequence: 3,
+            sender_kind: 'system',
+            blocks: [{ kind: 'text', text: '查询结果', user_message: true }],
+            created_at: '2026-11-17T02:00:00Z',
+          },
+          {
+            id: ulid(),
+            sequence: 2,
+            sender_kind: 'system',
+            blocks: [
+              {
+                kind: 'dm_notice',
+                text: '收到小黑的消息',
+                dm_notice: {
+                  direction: 'received',
+                  peer_id: sender,
+                  peer_name: '小黑',
+                  conversation_id: dmConversation,
+                },
+              },
+            ],
+            created_at: '2026-11-17T01:59:00Z',
+          },
+          {
+            id: ulid(),
+            sequence: 1,
+            sender_kind: 'system',
+            blocks: [{ kind: 'text', text: '查询天气', bot_message: { sender_id: sender } }],
+            created_at: '2026-11-17T01:58:00Z',
+          },
+        ],
+      }),
+    ),
+  )
+  expect(await invoke('desktop:conversation-messages', {}, { conversationId })).toMatchObject({
+    ok: true,
+    value: {
+      messages: [
+        { speaker: sender, content: '查询天气', isNotice: false },
+        {
+          dmNotice: {
+            direction: 'received',
+            peerId: sender,
+            peerName: '小黑',
+            conversationId: dmConversation,
+          },
+        },
+        { content: '查询结果', isNotice: false },
+      ],
+    },
+  })
+})
+
+it('全局工作状态使用已登录用户的权威活动接口', async () => {
+  const request = vi.fn(async () =>
+    Response.json({ runs: [{ id: 'run', bot_id: 'bot', status: 'running' }] }),
+  )
+  vi.stubGlobal('fetch', request)
+  expect(await invoke('desktop:bot-activities')).toMatchObject({
+    ok: true,
+    value: { runs: [{ id: 'run', bot_id: 'bot' }] },
+  })
+  expect(request).toHaveBeenCalledWith(
+    'https://desktop.example.test/api/v2/activity',
+    expect.objectContaining({ method: 'GET' }),
+  )
+})

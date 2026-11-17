@@ -213,6 +213,9 @@ try {
   await window.getByRole('checkbox',{name:/协作猫咪/}).check();
   await window.getByRole('button',{name:'创建群聊',exact:true}).click();
   const composer=window.getByRole('textbox',{name:'给协作讨论发消息',exact:true});
+  await composer.waitFor();
+  if(await window.locator('.saved-messages .local-note').count())throw new Error('空群聊仍显示顶部提示');
+  if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'empty-group.png')});
   await composer.fill('@侧');
   await window.getByRole('option',{name:'侧栏猫咪',exact:true}).click();
   await composer.press('End');
@@ -223,7 +226,8 @@ try {
   await window.getByRole('button',{name:'回复',exact:true}).first().click();
   await composer.fill('补充这一点');
   await window.getByRole('button',{name:'发送',exact:true}).click();
-  await window.getByText('补充这一点',{exact:true}).waitFor();
+  await window.locator('.saved-messages').getByText('补充这一点',{exact:true}).waitFor();
+  stage = '读取群消息持久记录';
   const persisted=await window.evaluate(async()=>{
     const backend=window.desktop.backend;
     const groups=await backend.listGroups();
@@ -231,6 +235,7 @@ try {
     return {group,page:await backend.listConversationMessages(group.conversation_id)};
   });
   const userMessages=persisted.page.messages.filter(message=>message.role==='user');
+  stage = '核对群消息元数据：消息数=' + userMessages.length + '，提及数=' + userMessages[0]?.mentions?.length + '，引用匹配=' + (userMessages[1]?.replyTo?.messageId === userMessages[0]?.id);
   if(userMessages.length!==2||userMessages[0].mentions.length!==1||userMessages[1].replyTo.messageId!==userMessages[0].id)throw new Error('群消息元数据未持久化');
   stage = '成员页签和真实增删成员';
   await window.getByRole('button',{name:'查看协作讨论群资料',exact:true}).click();
@@ -261,7 +266,7 @@ try {
   await window.getByRole('menuitem',{name:'置顶',exact:true}).click();
   await window.reload();
   await window.getByRole('button',{name:'方案讨论',exact:true}).click();
-  await window.getByText('补充这一点',{exact:true}).waitFor();
+  await window.locator('.saved-messages').getByText('补充这一点',{exact:true}).waitFor();
   await window.getByRole('button',{name:/查看原消息：/}).waitFor();
   if(await window.getByRole('button',{name:'方案讨论',exact:true}).evaluate(element=>!element.classList.contains('pinned-agent')))throw new Error('群置顶未恢复');
   stage = '群聊删除';

@@ -29,13 +29,16 @@ type Submission struct {
 	IsCreated bool   `json:"is_created"`
 }
 type Block struct {
-	GroupFile  *grouplibrary.File      `json:"group_file,omitempty"`
-	BotMessage *botmessaging.Reference `json:"bot_message,omitempty"`
-	Mentions   []groupchat.Mention     `json:"mentions,omitempty"`
-	TaskResult bool                    `json:"task_result,omitempty"`
-	Kind       string                  `json:"kind"`
-	Text       string                  `json:"text"`
-	Reaction   *ReactionChange         `json:"reaction,omitempty"`
+	DMNotice    *botmessaging.Notice    `json:"dm_notice,omitempty"`
+	UserMessage bool                    `json:"user_message,omitempty"`
+	SourceRunID string                  `json:"source_run_id,omitempty"`
+	GroupFile   *grouplibrary.File      `json:"group_file,omitempty"`
+	BotMessage  *botmessaging.Reference `json:"bot_message,omitempty"`
+	Mentions    []groupchat.Mention     `json:"mentions,omitempty"`
+	TaskResult  bool                    `json:"task_result,omitempty"`
+	Kind        string                  `json:"kind"`
+	Text        string                  `json:"text"`
+	Reaction    *ReactionChange         `json:"reaction,omitempty"`
 }
 
 // ReactionChange 记录一次不可变的表情交互，目标由消息的 reply_to_id 绑定。

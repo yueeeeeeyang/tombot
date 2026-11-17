@@ -231,7 +231,7 @@ func scanMessage(row scanner) (Message, error) {
 	return message, nil
 }
 func listMessages(ctx context.Context, transaction *sql.Tx, userID, conversationID string, before int64, limit int, modelBot string) (messages []Message, result error) {
-	rows, err := transaction.QueryContext(ctx, `SELECT `+messageColumns+` FROM `+messageSource+` WHERE messages.user_id=$1 AND messages.conversation_id=$2 AND ($3::bigint=0 OR messages.sequence<$3) AND ($5<>'' OR NOT messages.blocks @> '[{"kind":"reaction"}]'::jsonb) AND (messages.visible_to_bot_id IS NULL OR messages.visible_to_bot_id=NULLIF($5,'')) ORDER BY messages.sequence DESC LIMIT $4`, userID, conversationID, before, limit, modelBot)
+	rows, err := transaction.QueryContext(ctx, `SELECT `+messageColumns+` FROM `+messageSource+` WHERE messages.user_id=$1 AND messages.conversation_id=$2 AND ($3::bigint=0 OR messages.sequence<$3) AND ($5<>'' OR NOT messages.blocks @> '[{"kind":"reaction"}]'::jsonb) AND ($5='' OR NOT messages.blocks @> '[{"kind":"dm_notice"}]'::jsonb) AND (messages.visible_to_bot_id IS NULL OR messages.visible_to_bot_id=NULLIF($5,'') OR ($5='' AND EXISTS(SELECT 1 FROM tombot.conversations c WHERE c.user_id=messages.user_id AND c.id=messages.conversation_id AND c.kind='bot_dm'))) ORDER BY messages.sequence DESC LIMIT $4`, userID, conversationID, before, limit, modelBot)
 	if err != nil {
 		return nil, err
 	}

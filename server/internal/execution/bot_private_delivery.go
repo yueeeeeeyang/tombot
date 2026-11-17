@@ -30,7 +30,7 @@ func stagePrivateReply(ctx context.Context, tx *sql.Tx, lease Lease, outcome Out
 		return nil
 	}
 	var pending bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.bot_private_messages WHERE user_id=$1 AND parent_id=$2 AND status IN ('pending','waiting','ready'))`, lease.UserID, current.parent).Scan(&pending); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.bot_private_messages WHERE user_id=$1 AND parent_id=$2 AND NOT deliver_to_user AND status IN ('pending','waiting','ready'))`, lease.UserID, current.parent).Scan(&pending); err != nil {
 		return err
 	}
 	status = "ready"
@@ -43,8 +43,7 @@ func stagePrivateReply(ctx context.Context, tx *sql.Tx, lease Lease, outcome Out
 	if status == "waiting" {
 		return nil
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO tombot.bot_private_delivery(user_id,message_id,bot_id,conversation_id) SELECT user_id,id,sender_bot_id,source_conversation_id FROM tombot.bot_private_messages WHERE user_id=$1 AND id=$2`, lease.UserID, current.parent)
-	return err
+	return stagePrivateDelivery(ctx, tx, lease.UserID, current.parent)
 }
 
 type privateDelivery struct{ user, message, bot, conversation string }
@@ -86,9 +85,9 @@ func (service *Service) DeliverPrivateReplies(ctx context.Context, limit int) (i
 				return err
 			}
 			var recipient, name, answer, responseStatus, chain, parent string
-			var canceled bool
+			var canceled, direct bool
 			var path []byte
-			err := tx.QueryRowContext(ctx, `SELECT p.recipient_bot_id,b.name,p.response_text,p.response_status,p.chain_id,COALESCE(p.parent_id,''),p.source_path,(root.status IN ('canceling','canceled') OR origin.status IN ('canceling','canceled')) FROM tombot.bot_private_delivery d JOIN tombot.bot_private_messages p ON p.user_id=d.user_id AND p.id=d.message_id JOIN tombot.bots b ON b.user_id=p.user_id AND b.id=p.recipient_bot_id JOIN tombot.runs root ON root.user_id=p.user_id AND root.id=p.chain_id JOIN tombot.runs origin ON origin.user_id=p.user_id AND origin.id=p.source_run_id WHERE d.user_id=$1 AND d.message_id=$2 AND p.status='ready' FOR UPDATE OF d,p`, item.user, item.message).Scan(&recipient, &name, &answer, &responseStatus, &chain, &parent, &path, &canceled)
+			err := tx.QueryRowContext(ctx, `SELECT p.recipient_bot_id,b.name,p.response_text,p.response_status,p.chain_id,COALESCE(p.parent_id,''),p.source_path,p.deliver_to_user,(root.status IN ('canceling','canceled') OR origin.status IN ('canceling','canceled')) FROM tombot.bot_private_delivery d JOIN tombot.bot_private_messages p ON p.user_id=d.user_id AND p.id=d.message_id JOIN tombot.bots b ON b.user_id=p.user_id AND b.id=p.recipient_bot_id JOIN tombot.runs root ON root.user_id=p.user_id AND root.id=p.chain_id JOIN tombot.runs origin ON origin.user_id=p.user_id AND origin.id=p.source_run_id WHERE d.user_id=$1 AND d.message_id=$2 AND p.status='ready' FOR UPDATE OF d,p`, item.user, item.message).Scan(&recipient, &name, &answer, &responseStatus, &chain, &parent, &path, &direct, &canceled)
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -98,7 +97,7 @@ func (service *Service) DeliverPrivateReplies(ctx context.Context, limit int) (i
 			if canceled {
 				return discardPrivateReply(ctx, tx, item, "SOURCE_CANCELED", "发起运行已取消，私信回复保留记录但不恢复聊天")
 			}
-			if parent != "" {
+			if parent != "" && !direct {
 				var active bool
 				if err = tx.QueryRowContext(ctx, `SELECT status IN ('pending','waiting') FROM tombot.bot_private_messages WHERE user_id=$1 AND id=$2`, item.user, parent).Scan(&active); err != nil {
 					return err
@@ -120,7 +119,7 @@ func (service *Service) DeliverPrivateReplies(ctx context.Context, limit int) (i
 				}
 			}
 			if unavailable {
-				if parent != "" {
+				if parent != "" && !direct {
 					return failPrivateParent(ctx, tx, item, parent)
 				}
 				return delayPrivateReply(ctx, tx, item)
@@ -130,6 +129,26 @@ func (service *Service) DeliverPrivateReplies(ctx context.Context, limit int) (i
 				return err
 			}
 			if busy {
+				return nil
+			}
+			if direct {
+				content := answer
+				if responseStatus != "succeeded" {
+					content = "本次任务未完成，请稍后重试。"
+					if answer != "" {
+						content += "\n" + answer
+					}
+				}
+				if _, err = writeDirectMessage(ctx, tx, item.user, recipient, []Block{{Kind: "text", Text: content, UserMessage: true}}); err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE tombot.bot_private_messages SET status='delivered' WHERE user_id=$1 AND id=$2`, item.user, item.message); err != nil {
+					return err
+				}
+				if _, err = tx.ExecContext(ctx, `DELETE FROM tombot.bot_private_delivery WHERE user_id=$1 AND message_id=$2`, item.user, item.message); err != nil {
+					return err
+				}
+				delivered = true
 				return nil
 			}
 			if err = groupCapacity(ctx, tx, item.user, 1); errors.Is(err, ErrCapacity) {
@@ -180,7 +199,7 @@ func failPrivateParent(ctx context.Context, tx *sql.Tx, item privateDelivery, pa
 	if _, err := tx.ExecContext(ctx, `UPDATE tombot.bot_private_messages SET status='ready',response_status='failed',response_text='',error_code='RESOURCE_UNAVAILABLE' WHERE user_id=$1 AND id=$2`, item.user, parent); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO tombot.bot_private_delivery(user_id,message_id,bot_id,conversation_id) SELECT user_id,id,sender_bot_id,source_conversation_id FROM tombot.bot_private_messages WHERE user_id=$1 AND id=$2`, item.user, parent); err != nil {
+	if err := stagePrivateDelivery(ctx, tx, item.user, parent); err != nil {
 		return err
 	}
 	return discardPrivateReply(ctx, tx, item, "PARENT_UNAVAILABLE", "中间猫咪不可用，已向上级返回失败并保留私信记录")
@@ -209,4 +228,20 @@ func (worker *Worker) deliverPrivateReplies(ctx context.Context) {
 			return
 		}
 	}
+}
+
+// stagePrivateDelivery 统一确定直接交付和普通回复的持久目标，缺失主聊天时明确失败。
+func stagePrivateDelivery(ctx context.Context, tx *sql.Tx, user, message string) error {
+	result, err := tx.ExecContext(ctx, `INSERT INTO tombot.bot_private_delivery(user_id,message_id,bot_id,conversation_id) SELECT p.user_id,p.id,CASE WHEN p.deliver_to_user THEN p.recipient_bot_id ELSE p.sender_bot_id END,CASE WHEN p.deliver_to_user THEN c.id ELSE p.source_conversation_id END FROM tombot.bot_private_messages p JOIN tombot.conversations c ON c.user_id=p.user_id AND c.bot_id=p.recipient_bot_id AND c.kind='direct' WHERE p.user_id=$1 AND p.id=$2`, user, message)
+	if err != nil {
+		return err
+	}
+	count, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return ErrNotFound
+	}
+	return nil
 }

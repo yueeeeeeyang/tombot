@@ -263,3 +263,63 @@ func TestGroupChatBoundaries(t *testing.T) {
 		}
 	})
 }
+
+func TestGroupBroadcastDoesNotQuote(t *testing.T) {
+	cluster := pgtest.Start(t)
+	ctx := context.Background()
+	for _, toolPost := range []bool{false, true} {
+		for _, mentioned := range []bool{false, true} {
+			f := newFixture(t, cluster)
+			if toolPost {
+				f.toolsModel(t)
+			}
+			group := f.group(t)
+			request := SendRequest{ClientRequestID: ids.New(), Content: "大家好"}
+			expected := 2
+			if mentioned {
+				request.Content = "@第一机器人 你好"
+				request.Mentions = []string{f.first.ID}
+				expected = 1
+			}
+			sent, err := f.service.Send(ctx, f.a, group.ConversationID, request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range expected {
+				lease := f.claim(t)
+				if toolPost {
+					calls := 0
+					worker := f.worker(t, callerFunc(func(_ context.Context, _ modelregistry.Configuration, _ []byte, _ modelgateway.Input, emit func(provider.Event) error) (modelgateway.Result, error) {
+						calls++
+						if calls == 1 {
+							return emitMemory(emit, "post_to_group", memoryArguments(t, map[string]any{"message": "你好！", "mentions": []string{}, "reply_to_id": sent.MessageID}))
+						}
+						return emitText(emit, "你好！")
+					}), testTool{})
+					if run, err := worker.Process(ctx, lease); err != nil || run.Status != "succeeded" {
+						t.Fatal("工具发言未完成", run, err)
+					}
+				} else {
+					f.start(t, lease)
+					f.finishPrivateRun(t, lease, "你好！")
+				}
+			}
+			messages, err := f.service.Messages(ctx, f.a, group.ConversationID, 0, 10)
+			if err != nil || len(messages) != expected+1 {
+				t.Fatal(messages, err)
+			}
+			for _, message := range messages {
+				if message.SenderKind != "bot" {
+					continue
+				}
+				if mentioned {
+					if message.ReplyTo == nil || message.ReplyTo.MessageID != sent.MessageID {
+						t.Fatal("提及缺少引用", message)
+					}
+				} else if message.ReplyTo != nil {
+					t.Fatal("广播不应引用原消息", message)
+				}
+			}
+		}
+	}
+}

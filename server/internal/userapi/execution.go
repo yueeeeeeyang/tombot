@@ -108,3 +108,8 @@ func (handler *Handler) conversationActivity(w http.ResponseWriter, r *http.Requ
 	runs, err := handler.executor.Activity(r.Context(), current(r).principal, chi.URLParam(r, "conversationID"))
 	handler.result(w, r, "runs", runs, err)
 }
+
+func (handler *Handler) botActivities(w http.ResponseWriter, r *http.Request) {
+	runs, err := handler.executor.BotActivities(r.Context(), current(r).principal)
+	handler.result(w, r, "runs", runs, err)
+}

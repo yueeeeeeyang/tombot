@@ -63,6 +63,10 @@ func (tool groupPostTool) Execute(ctx context.Context, invocation Invocation) (b
 		if err != nil {
 			return err
 		}
+		input.Reply, err = groupReplyReference(ctx, tx, lease, input.Reply)
+		if err != nil {
+			return err
+		}
 		if replyBot != "" {
 			input.Mentions = append(input.Mentions, replyBot)
 		}
@@ -105,15 +109,36 @@ func isGroupRun(ctx context.Context, tx *sql.Tx, lease Lease) (bool, error) {
 	return group, err
 }
 
-// finishGroupAnswer 将最终回复绑定触发消息；显式 @ 才继续转交，普通答复不会唤醒全群。
+// groupReplyReference 统一工具发言与最终答复的引用规则，仅保留明确提及当前猫咪的公开消息。
+// 工具入口已校验引用归属；隐藏私信触发消息在收尾时只返回空引用。
+func groupReplyReference(ctx context.Context, tx *sql.Tx, lease Lease, message string) (string, error) {
+	if message == "" {
+		return "", nil
+	}
+	var mentioned bool
+	err := tx.QueryRowContext(ctx, `SELECT visible_to_bot_id IS NULL AND blocks @> jsonb_build_array(jsonb_build_object('mentions',jsonb_build_array(jsonb_build_object('id',$4::text)))) FROM tombot.messages WHERE user_id=$1 AND conversation_id=$2 AND id=$3`, lease.UserID, lease.ConversationID, message, lease.BotID).Scan(&mentioned)
+	if err != nil {
+		return "", err
+	}
+	if !mentioned {
+		return "", nil
+	}
+	return message, nil
+}
+
+// finishGroupAnswer 只在触发消息明确提及当前猫咪时绑定引用；显式 @ 才继续转交，普通答复不会唤醒全群。
 func finishGroupAnswer(ctx context.Context, tx *sql.Tx, lease Lease, outcome Outcome) error {
 	var trigger string
 	var roster []byte
-	if err := tx.QueryRowContext(ctx, `SELECT CASE WHEN m.visible_to_bot_id IS NULL THEN d.trigger_message_id ELSE '' END,d.roster FROM tombot.group_deliveries d JOIN tombot.messages m ON m.user_id=d.user_id AND m.id=d.trigger_message_id WHERE d.user_id=$1 AND d.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &roster); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT trigger_message_id,roster FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &roster); err != nil {
 		return err
 	}
 	var members []groupchat.Member
 	if err := json.Unmarshal(roster, &members); err != nil {
+		return err
+	}
+	trigger, err := groupReplyReference(ctx, tx, lease, trigger)
+	if err != nil {
 		return err
 	}
 	mentions, err := groupchat.Mentions(outcome.Answer, members, nil)

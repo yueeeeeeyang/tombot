@@ -517,3 +517,110 @@ it('历史分页按服务端序号合并，不因时间相同而乱序或重复'
   ])
   expect(result.current.historyPages.assistant?.hasMore).toBe(false)
 })
+
+it('私信执行独立更新双方状态，回复到达才重新点亮发起方', async () => {
+  const { result, backend } = setup({ messages: [], hasMore: false, runs: [] })
+  await waitFor(() => expect(backend.loadAgentConversation).toHaveBeenCalled())
+  let sequence = 0
+  const publish = (kind: string, botId: string, runId: string) =>
+    memoryBackend.publishEvent({
+      sequence: ++sequence,
+      kind,
+      resource_id: runId,
+      payload: { bot_id: botId, status: 'succeeded' },
+      created_at: '',
+    })
+  act(() => {
+    publish('run.started', 'assistant', 'sender')
+    publish('private.run.queued', 'developer', 'recipient')
+    publish('run.finished', 'assistant', 'sender')
+  })
+  expect(result.current.workStates.assistant).toBeUndefined()
+  expect(result.current.workStates.developer).toBeDefined()
+  act(() => publish('private.run.finished', 'developer', 'recipient'))
+  expect(result.current.workStates.developer).toBeUndefined()
+  act(() => publish('run.queued', 'assistant', 'reply'))
+  expect(result.current.workStates.assistant).toBeDefined()
+  await waitFor(() => expect(backend.loadAgentConversation).toHaveBeenCalledWith('developer'))
+  act(() =>
+    memoryBackend.publishEvent({
+      sequence: 2,
+      kind: 'private.run.progress',
+      resource_id: 'recipient',
+      payload: { bot_id: 'developer', text: '过期进度' },
+      created_at: '',
+    }),
+  )
+  expect(result.current.workStates.developer).toBeUndefined()
+})
+
+it('主动推送给未打开的猫咪时同步正文和私信入口', async () => {
+  const { result, backend } = setup({ messages: [], hasMore: false, runs: [] })
+  await waitFor(() => expect(backend.loadAgentConversation).toHaveBeenCalled())
+  const dmNotice = {
+    direction: 'received' as const,
+    peerId: 'assistant',
+    peerName: '小黑',
+    conversationId: 'private-chat',
+  }
+  vi.mocked(backend.loadAgentConversation!).mockResolvedValueOnce({
+    messages: [
+      { ...bubble('notice', '收到小黑的消息', 1), role: 'assistant', dmNotice },
+      { ...bubble('result', '上海天气结果', 2), role: 'assistant' },
+    ],
+    hasMore: false,
+    runs: [],
+  })
+  act(() =>
+    memoryBackend.publishEvent({
+      sequence: 1,
+      kind: 'message.created',
+      resource_id: 'result',
+      payload: { bot_id: 'developer' },
+      created_at: '',
+    }),
+  )
+  await waitFor(() =>
+    expect(
+      result.current.workspace.agents.find((agent) => agent.id === 'developer')?.messages,
+    ).toHaveLength(2),
+  )
+  expect(result.current.workspace.activeAgentId).toBe('assistant')
+  expect(
+    result.current.workspace.agents.find((agent) => agent.id === 'developer')?.messages[0]
+      ?.dmNotice,
+  ).toEqual(dmNotice)
+})
+
+it('重新打开时恢复未选中猫咪的私信和后台活动，断流后清除过期状态', async () => {
+  memoryBackend.loadFixture({ workspace: createWorkspace(), isModelPolicyAvailable: true })
+  const backend = Object.create(memoryBackend) as DesktopBackend
+  backend.loadAgentConversation = vi.fn(async () => ({ messages: [], hasMore: false, runs: [] }))
+  backend.loadBotActivities = vi.fn(async () => ({
+    runs: [
+      {
+        id: 'private-run',
+        bot_id: 'developer',
+        status: 'running',
+        progress_summary: '正在查询天气',
+      },
+    ],
+  }))
+  window.desktop = { ...desktop!, backend }
+  const { result } = renderHook(() => {
+    const activity = useWorkActivity()
+    return { ...useWorkspace(activity.receiveActivity, activity.clearActivity), ...activity }
+  })
+  await waitFor(() => expect(result.current.workStates.developer?.summary).toBe('正在查询天气'))
+  vi.mocked(backend.loadBotActivities).mockResolvedValueOnce({ runs: [] })
+  act(() =>
+    memoryBackend.publishEvent({
+      sequence: 1,
+      kind: 'stream.reset',
+      resource_id: '',
+      payload: {},
+      created_at: '',
+    }),
+  )
+  await waitFor(() => expect(result.current.workStates.developer).toBeUndefined())
+})

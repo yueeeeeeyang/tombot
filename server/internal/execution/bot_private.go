@@ -58,6 +58,32 @@ func (tool botMessageTool) Execute(ctx context.Context, invocation Invocation) (
 			} else {
 				output, err = listBotDirectory(ctx, tx, lease.UserID, lease.BotID, query, tool.maximum)
 			}
+		} else if invocation.Call.Name == "send_user_message" {
+			var input botmessaging.UserMessage
+			if decodeToolInput(invocation.Call.Arguments, &input, tool.schema) != nil || !validText(input.Message, 32<<10) {
+				result = botagent.ToolResult{IsError: true, Content: "INVALID_MESSAGE: Provide nonempty text up to 32768 bytes. Nothing was sent."}
+			} else {
+				var automatic bool
+				err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.bot_private_runs r JOIN tombot.bot_private_messages p ON p.user_id=r.user_id AND p.id=r.response_to WHERE r.user_id=$1 AND r.run_id=$2 AND p.deliver_to_user)`, lease.UserID, lease.RunID).Scan(&automatic)
+				if err != nil {
+					return err
+				}
+				if automatic {
+					result = botagent.ToolResult{IsError: true, Content: "AUTOMATIC_DELIVERY: Your final answer will be sent directly to the user. Finish with the actual result; do not send a separate message."}
+				} else {
+					if err = lockDispatch(ctx, tx, lease.UserID); err != nil {
+						return err
+					}
+					var message string
+					message, err = writeDirectMessage(ctx, tx, lease.UserID, lease.BotID, []Block{{Kind: "text", Text: input.Message, UserMessage: true, SourceRunID: lease.RunID}})
+					if errors.Is(err, ErrUnavailable) {
+						result = botagent.ToolResult{IsError: true, Content: "USER_CHAT_UNAVAILABLE: Your user chat is unavailable. Nothing was sent."}
+						err = nil
+					} else if err == nil {
+						output = map[string]string{"message_id": message, "status": "delivered"}
+					}
+				}
+			}
 		} else {
 			var input botmessaging.Send
 			if decodeToolInput(invocation.Call.Arguments, &input, tool.schema) != nil || !validID(input.BotID) || !validText(input.Message, botmessaging.MaxMessageBytes) || !validBotQuery(botmessaging.Query{BotID: input.BotID, RequiredTools: input.RequiredTools}) {
@@ -259,7 +285,7 @@ func (service *Service) sendPrivateMessage(ctx context.Context, tx *sql.Tx, leas
 	if err != nil {
 		return nil, err
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.bot_private_messages(user_id,id,chain_id,parent_id,sender_bot_id,recipient_bot_id,source_run_id,source_conversation_id,source_path,conversation_id,request_message_id) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11)`, lease.UserID, operation, current.chain, current.parent, lease.BotID, target, lease.RunID, origin, path, conversation, submitted.MessageID); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.bot_private_messages(user_id,id,chain_id,parent_id,sender_bot_id,recipient_bot_id,source_run_id,source_conversation_id,source_path,conversation_id,request_message_id,deliver_to_user) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,$11,$12)`, lease.UserID, operation, current.chain, current.parent, lease.BotID, target, lease.RunID, origin, path, conversation, submitted.MessageID, input.DeliverToUser); err != nil {
 		return nil, err
 	}
 	current.parent = operation
@@ -267,7 +293,14 @@ func (service *Service) sendPrivateMessage(ctx context.Context, tx *sql.Tx, leas
 	if err = attachPrivateContext(ctx, tx, lease.UserID, conversation, submitted, current); err != nil {
 		return nil, err
 	}
-	return map[string]string{"message_id": operation, "recipient_id": target, "status": "accepted", "reply": "Your peer's final response will resume you asynchronously. Do not poll or wait."}, nil
+	if err = writePrivateNotices(ctx, tx, lease.UserID, lease.BotID, target, conversation); err != nil {
+		return nil, err
+	}
+	reply := "Your peer's final response will resume you asynchronously. Do not poll or wait."
+	if input.DeliverToUser {
+		reply = "Your peer's final result will be delivered directly in its own chat with the user. End this turn or continue independent work; do not wait, poll or relay the result."
+	}
+	return map[string]string{"message_id": operation, "recipient_id": target, "status": "accepted", "reply": reply}, nil
 }
 
 // newPrivateInput 只由持有会话锁及用户受理锁的服务端调用，来源元数据和运行身份不接受模型覆盖。

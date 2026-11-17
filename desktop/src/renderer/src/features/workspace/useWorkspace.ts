@@ -37,6 +37,7 @@ function toChatMessage(bubble: ServerBubble): ChatMessage {
     createdAt: bubble.createdAt,
     status: 'sent',
     replyTo: bubble.replyTo,
+    dmNotice: bubble.dmNotice,
     reactionRevision: bubble.reactionRevision,
     reactions: bubble.reactions.flatMap((reaction) =>
       isReactionEmoji(reaction.emoji) ? [{ emoji: reaction.emoji, count: reaction.count }] : [],
@@ -127,6 +128,7 @@ export function useWorkspace(
   const paging = useRef(new Set<string>())
   const refreshing = useRef(new Map<string, { dirty: boolean }>())
   const activityRevisions = useRef(new Map<string, number>())
+  const activitySequences = useRef(new Map<string, number>())
   const refreshConversation = useCallback(
     async (agentId: string) => {
       if (!backend.loadAgentConversation || !agentId) return
@@ -162,6 +164,7 @@ export function useWorkspace(
           setWorkspace(current.current)
           // 请求期间到达的运行事件更新，旧快照不能把刚开始的动画关闭或把已结束的任务重新点亮。
           if (activityRevision !== activityRevisions.current.get(agentId)) continue
+          activityRevisions.current.set(agentId, (activityRevision ?? 0) + 1)
           const source = `server:${agentId}`
           clearActivity?.(source)
           for (const run of page.runs) {
@@ -212,7 +215,10 @@ export function useWorkspace(
     return backend.watchEvents?.(
       (event) => {
         const botId = typeof event.payload.bot_id === 'string' ? event.payload.bot_id : ''
-        if (botId && event.kind.startsWith('run.')) {
+        if (botId && /^(?:private\.|group\.|task\.)?run\./.test(event.kind)) {
+          // 断流重播或乱序事件不能复活已经结束的运行。
+          if (event.sequence <= (activitySequences.current.get(botId) ?? -1)) return
+          activitySequences.current.set(botId, event.sequence)
           activityRevisions.current.set(botId, (activityRevisions.current.get(botId) ?? 0) + 1)
           const source = `server:${botId}`
           receiveActivity?.(source, {
@@ -220,10 +226,10 @@ export function useWorkspace(
             text: '',
             botId,
             runId: event.resource_id,
-            isWorking: event.kind !== 'run.finished',
-            isFinished: event.kind === 'run.finished',
+            isWorking: !event.kind.endsWith('run.finished'),
+            isFinished: event.kind.endsWith('run.finished'),
           })
-          if (event.kind === 'run.progress' && typeof event.payload.text === 'string') {
+          if (event.kind.endsWith('run.progress') && typeof event.payload.text === 'string') {
             receiveActivity?.(source, {
               type: 'process',
               text: event.payload.text,
@@ -231,22 +237,80 @@ export function useWorkspace(
               runId: event.resource_id,
             })
           }
-          if (event.kind === 'run.finished' && event.payload.status !== 'succeeded') {
+          if (event.kind.endsWith('run.finished') && event.payload.status !== 'succeeded') {
             setError('消息已接收，但本次任务未完成。请重试或联系管理员查看运行日志。')
           }
         }
         if (
-          event.kind === 'run.finished' ||
+          event.kind.endsWith('run.finished') ||
           event.kind === 'message.created' ||
           event.kind === 'message.reactions_changed' ||
           event.kind === 'workspace.refresh'
         ) {
-          void refreshConversation(current.current.activeAgentId)
+          void refreshConversation(botId || current.current.activeAgentId)
         }
       },
       (failure) => setError(failure.message),
     )
   }, [backend, ready, isBlocked, receiveActivity, refreshConversation])
+
+  useEffect(() => {
+    if (!ready || isBlocked || !backend.loadBotActivities) return
+    let cancelled = false
+    let refreshing = false
+    async function refreshActivities() {
+      if (refreshing) return
+      refreshing = true
+      const revisions = new Map(activityRevisions.current)
+      try {
+        const { runs } = await backend.loadBotActivities!()
+        if (cancelled) return
+        for (const agent of current.current.agents) {
+          if (revisions.get(agent.id) !== activityRevisions.current.get(agent.id)) continue
+          activityRevisions.current.set(agent.id, (revisions.get(agent.id) ?? 0) + 1)
+          const source = `server:${agent.id}`
+          clearActivity?.(source)
+          for (const run of runs.filter((run) => run.bot_id === agent.id)) {
+            receiveActivity?.(source, {
+              type: 'activity',
+              text: '',
+              botId: agent.id,
+              runId: run.id,
+              isWorking: true,
+            })
+            if (run.progress_summary)
+              receiveActivity?.(source, {
+                type: 'process',
+                text: run.progress_summary,
+                botId: agent.id,
+                runId: run.id,
+              })
+          }
+        }
+      } catch (failure) {
+        if (!cancelled) setError((failure as Error).message)
+      } finally {
+        refreshing = false
+      }
+    }
+    void refreshActivities()
+    const timer = setInterval(() => void refreshActivities(), 10_000)
+    const unwatch = backend.watchEvents?.(
+      (event) => {
+        if (event.kind === 'stream.reset' || event.kind.endsWith('run.finished'))
+          void refreshActivities()
+      },
+      (failure) => setError(failure.message),
+    )
+    const focus = () => void refreshActivities()
+    window.addEventListener('focus', focus)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      unwatch?.()
+      window.removeEventListener('focus', focus)
+    }
+  }, [backend, ready, isBlocked, clearActivity, receiveActivity])
 
   async function loadEarlier(agentId: string): Promise<void> {
     const pageState = historyPages[agentId]

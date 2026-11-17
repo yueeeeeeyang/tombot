@@ -338,9 +338,6 @@ export function ConversationPanel({
                   {isLoadingEarlier ? '正在加载更早的消息…' : '加载更早的消息'}
                 </button>
               ) : null}
-              {shown.length === 0 ? (
-                <p className="local-note">在下面说一句，群里的猫咪会一起回应。</p>
-              ) : null}
               {shown.map((item, index) => {
                 const label = messageTimeSeparator(
                   item.createdAt,

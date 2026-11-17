@@ -139,6 +139,7 @@ contextBridge.exposeInMainWorld(
       groupDetail: (id: string) => invoke('desktop:group', id),
       deleteGroup: (id: string, revision: number) =>
         invoke('desktop:group-delete', { id, revision }),
+      loadBotActivities: () => invoke('desktop:bot-activities'),
       conversationActivity: (id: string) => invoke('desktop:conversation-activity', id),
       renameGroup: (id: string, revision: number, name: string) =>
         invoke('desktop:group-rename', { id, revision, name }),
