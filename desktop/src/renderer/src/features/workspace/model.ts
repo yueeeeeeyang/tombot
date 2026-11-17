@@ -188,6 +188,7 @@ export function isComputerUrl(value: string): boolean {
 
 export const agentSchema = z
   .object({
+    conversationId: z.string().min(1).optional(),
     id: z.string().min(1),
     name: z.string().trim().min(1, '请输入助手名称').max(24, '助手名称最多 24 个字'),
     description: z.string().trim().max(120, '助手介绍最多 120 个字'),

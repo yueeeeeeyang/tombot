@@ -2,7 +2,7 @@ import { Users, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { GroupAvatar } from '../../components/GroupAvatar'
 import { GroupMemberPicker } from './GroupMemberPicker'
-import { GroupLibrary } from './GroupLibrary'
+import { ChatLibrary } from './ChatLibrary'
 import { Avatar } from '../../components/Avatar'
 import { getBackend, type GroupDetail, type UserProfile } from '../desktop/backend'
 import type { Agent } from '../workspace/model'
@@ -111,7 +111,7 @@ export function GroupSidePanel({
         id={`group-panel-${tab}`}
         aria-labelledby={`group-tab-${tab}`}
       >
-        {tab === 'library' && <GroupLibrary groupId={group.id} />}
+        {tab === 'library' && <ChatLibrary conversationId={group.conversation_id} />}
         {error && (
           <p role="alert" className="form-error">
             {error}

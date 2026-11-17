@@ -28,7 +28,7 @@ func (service *Service) Send(ctx context.Context, principal identity.Principal, 
 		if kind == "group" {
 			return service.sendGroupInput(ctx, transaction, principal.UserID, conversationID, request, nil, &submitted)
 		}
-		if len(request.Mentions) > 0 || len(request.FileIDs) > 0 {
+		if len(request.Mentions) > 0 {
 			return ErrInvalidInput
 		}
 		return service.submitInput(ctx, transaction, principal.UserID, conversationID, request, nil, "chat", &submitted)
@@ -46,7 +46,8 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 		Content        string
 		ReplyToID      string          `json:",omitempty"`
 		Reaction       *ReactionChange `json:",omitempty"`
-	}{conversationID, request.Content, request.ReplyToID, reaction})
+		FileIDs        []string        `json:",omitempty"`
+	}{conversationID, request.Content, request.ReplyToID, reaction, request.FileIDs})
 	if err != nil {
 		return err
 	}
@@ -85,6 +86,11 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	if err != nil {
 		return err
 	}
+	attachments, err := chatFileBlocks(ctx, transaction, userID, conversationID, request.FileIDs)
+	if err != nil {
+		return err
+	}
+	input := append(inputBlocks(request, reaction), attachments...)
 	var activeRun, activeTurn string
 	err = transaction.QueryRowContext(ctx, `SELECT r.id,r.turn_id FROM tombot.runs r JOIN tombot.turns t ON t.user_id=r.user_id AND t.id=r.turn_id
             WHERE r.user_id=$1 AND r.conversation_id=$2 AND t.status IN ('queued','running','canceling') AND r.status IN ('queued','running','canceling') ORDER BY r.id DESC LIMIT 1`, userID, conversationID).Scan(&activeRun, &activeTurn)
@@ -92,7 +98,7 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 		if source == "routine" {
 			return ErrConflict
 		}
-		return service.appendInput(ctx, transaction, userID, conversationID, activeTurn, activeRun, request, inputBlocks(request, reaction), reply, digest[:], submitted)
+		return service.appendInput(ctx, transaction, userID, conversationID, activeTurn, activeRun, request, input, reply, digest[:], submitted)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
@@ -141,7 +147,7 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	if _, err = transaction.ExecContext(ctx, `INSERT INTO tombot.runs(user_id,id,turn_id,conversation_id,bot_id,bot_revision,bot_snapshot,status) VALUES($1,$2,$3,$4,$5,$6,$7,'queued')`, userID, submitted.RunID, submitted.TurnID, conversationID, botID, revision, snapshot); err != nil {
 		return err
 	}
-	blocks, err := json.Marshal(inputBlocks(request, reaction))
+	blocks, err := json.Marshal(input)
 	if err != nil {
 		return err
 	}

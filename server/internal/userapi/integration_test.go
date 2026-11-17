@@ -19,8 +19,8 @@ import (
 
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/chatlibrary"
 	"io.yueyang/tom/internal/execution"
-	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
 	"io.yueyang/tom/internal/infra/ids"
@@ -390,20 +390,29 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if result := decode[groupReply](t, call("POST", "/api/v2/groups", groupRequest, first, nil), 200); result.IsCreated || result.Group.ID != group.Group.ID {
 		t.Fatal("群组重试不幂等")
 	}
-	fileRequest := grouplibrary.Upload{ClientRequestID: ids.New(), Name: "接口资料.txt", Content: []byte("真实群文件内容")}
+	libraryPath := "/api/v2/conversations/" + group.Group.ConversationID + "/files"
+	fileRequest := chatlibrary.Upload{ClientRequestID: ids.New(), Name: "接口资料.txt", Content: []byte("真实群文件内容")}
 	uploaded := decode[struct {
-		File grouplibrary.File `json:"file"`
-	}](t, call("POST", groupPath+"/files", fileRequest, first, nil), 200).File
-	filePath := groupPath + "/files/" + uploaded.ID
-	files := decode[grouplibrary.Page](t, call("GET", groupPath+"/files?q=接口", nil, first, nil), 200)
+		File chatlibrary.File `json:"file"`
+	}](t, call("POST", libraryPath, fileRequest, first, nil), 200).File
+	filePath := libraryPath + "/" + uploaded.ID
+	staged := decode[chatlibrary.Page](t, call("GET", libraryPath, nil, first, nil), 200)
+	if len(staged.Files) != 0 {
+		t.Fatal("未发送附件进入目录")
+	}
+	decode[struct {
+		Submission execution.Submission `json:"submission"`
+	}](t, call("POST", "/api/v2/conversations/"+group.Group.ConversationID+"/messages", execution.SendRequest{ClientRequestID: ids.New(), Content: "发送附件", FileIDs: []string{uploaded.ID}}, first, nil), 202)
+
+	files := decode[chatlibrary.Page](t, call("GET", libraryPath+"?q=接口", nil, first, nil), 200)
 	if len(files.Files) != 1 || files.Files[0].ID != uploaded.ID {
 		t.Fatal("资料库目录错误")
 	}
-	content := decode[grouplibrary.Content](t, call("GET", filePath+"/content", nil, first, nil), 200)
+	content := decode[chatlibrary.Content](t, call("GET", filePath+"/content", nil, first, nil), 200)
 	if string(content.Bytes) != "真实群文件内容" {
 		t.Fatal("文件内容损坏")
 	}
-	for _, path := range []string{groupPath + "/files", filePath + "/content"} {
+	for _, path := range []string{libraryPath, filePath + "/content"} {
 		if response := call("GET", path, nil, second, nil); response.status != 404 {
 			t.Fatal("跨用户群文件泄漏", response.status)
 		}
@@ -412,12 +421,12 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		}
 	}
 	for _, query := range []string{"?before=bad", "?q=a&q=b", "?path=other", "?q=%00"} {
-		if response := call("GET", groupPath+"/files"+query, nil, first, nil); response.status != 400 {
+		if response := call("GET", libraryPath+query, nil, first, nil); response.status != 400 {
 			t.Fatal("无效文件查询被接受", query, response.status)
 		}
 	}
 	renamed := decode[struct {
-		File grouplibrary.File `json:"file"`
+		File chatlibrary.File `json:"file"`
 	}](t, call("PUT", filePath, map[string]any{"expected_revision": 1, "name": "新资料.txt"}, first, nil), 200).File
 	if renamed.Revision != 2 {
 		t.Fatal("重命名缺少版本推进")

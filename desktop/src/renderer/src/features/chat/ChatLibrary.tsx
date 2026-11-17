@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Download, FileText, Image, Pencil, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import { Download, FileText, Image, Pencil, Search, Trash2 } from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { getBackend } from '../desktop/backend'
 import {
-  GROUP_FILE_MAX_BYTES,
-  type GroupFile,
-  type GroupFilePage,
-  type GroupFilePreview,
-} from '../../../../shared/groupFiles'
-import { ulid } from '../../../../shared/ulid'
+  type ChatFile,
+  type ChatFilePage,
+  type ChatFilePreview,
+} from '../../../../shared/chatFiles'
 
 function sizeLabel(bytes: number): string {
   return bytes < 1024
@@ -21,13 +19,13 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '文件操作失败，请重试。'
 }
 
-/** 切换群组时销毁查询与弹窗状态，旧请求不能污染新群。 */
-export function GroupLibrary({ groupId }: { groupId: string }) {
-  return <Library key={groupId} groupId={groupId} />
+/** 切换会话时销毁查询与弹窗状态，旧请求不能污染新会话。 */
+export function ChatLibrary({ conversationId }: { conversationId: string }) {
+  return <Library key={conversationId} conversationId={conversationId} />
 }
-function Library({ groupId }: { groupId: string }) {
-  const [files, setFiles] = useState<GroupFile[]>([])
-  const [page, setPage] = useState<GroupFilePage>()
+function Library({ conversationId }: { conversationId: string }) {
+  const [files, setFiles] = useState<ChatFile[]>([])
+  const [page, setPage] = useState<ChatFilePage>()
   const [query, setQuery] = useState('')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -36,21 +34,18 @@ function Library({ groupId }: { groupId: string }) {
   const [notice, setNotice] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [failedCursor, setFailedCursor] = useState('')
-  const [uploading, setUploading] = useState(false)
-  const [remaining, setRemaining] = useState<Array<{ file: File; id: string }>>([])
   const [operation, setOperation] = useState<{
     kind: 'preview' | 'rename' | 'delete'
-    file: GroupFile
+    file: ChatFile
   }>()
   const sequence = useRef({ value: 0 })
-  const input = useRef<HTMLInputElement>(null)
-  const uploadLock = useRef(false)
   const load = useCallback(
     async (before = '') => {
       const current = ++sequence.current.value
       setLoading(true)
       try {
-        const result = await getBackend().listGroupFiles(groupId, before, query)
+        if (!conversationId) throw new Error('尚未获取聊天会话，请刷新工作台后重试。')
+        const result = await getBackend().listChatFiles(conversationId, before, query)
         if (current !== sequence.current.value) return
         setFiles((previous) =>
           before
@@ -72,7 +67,7 @@ function Library({ groupId }: { groupId: string }) {
         if (current === sequence.current.value) setLoading(false)
       }
     },
-    [groupId, query],
+    [conversationId, query],
   )
   useEffect(() => {
     const requests = sequence.current
@@ -88,7 +83,8 @@ function Library({ groupId }: { groupId: string }) {
       (event) => {
         if (
           event.kind === 'workspace.refresh' ||
-          (event.kind === 'group.library.changed' && event.payload.group_id === groupId)
+          (event.kind === 'chat.library.changed' &&
+            event.payload.conversation_id === conversationId)
         )
           reload()
       },
@@ -99,84 +95,19 @@ function Library({ groupId }: { groupId: string }) {
       stop?.()
       window.removeEventListener('focus', reload)
     }
-  }, [groupId])
-  async function upload(entries: Array<{ file: File; id: string }>) {
-    if (uploadLock.current) return
-    uploadLock.current = true
-    setUploading(true)
-    setActionError('')
-    setNotice('')
-    let uploaded = 0
+  }, [conversationId])
+  async function download(file: ChatFile) {
     try {
-      for (const entry of entries) {
-        setNotice(`正在上传 ${uploaded + 1}/${entries.length}：${entry.file.name}`)
-        await getBackend().uploadGroupFile(
-          groupId,
-          { name: entry.file.name, bytes: new Uint8Array(await entry.file.arrayBuffer()) },
-          entry.id,
-        )
-        uploaded++
-      }
-      setRemaining([])
-      setNotice(`已上传 ${uploaded} 个文件`)
-    } catch (failure) {
-      setRemaining(entries.slice(uploaded))
-      setActionError(errorText(failure))
-      setNotice(uploaded ? `已上传 ${uploaded} 个文件，其余文件可重试。` : '')
-    } finally {
-      uploadLock.current = false
-      setUploading(false)
-      setRefresh((value) => value + 1)
-    }
-  }
-  async function download(file: GroupFile) {
-    try {
-      if (await getBackend().downloadGroupFile(groupId, file.id)) setNotice(`已保存 ${file.name}`)
+      if (await getBackend().downloadChatFile(conversationId, file.id))
+        setNotice(`已保存 ${file.name}`)
     } catch (failure) {
       setActionError(errorText(failure))
     }
   }
   return (
-    <section className="group-library" aria-label="群组资料库">
-      <div className="group-library-toolbar">
-        <button
-          className="primary-button"
-          disabled={uploading}
-          onClick={() => input.current?.click()}
-        >
-          <Upload size={15} />
-          上传文件
-        </button>
-        <button
-          className="icon-button"
-          aria-label="刷新资料库"
-          disabled={loading}
-          onClick={() => setRefresh((value) => value + 1)}
-        >
-          <RefreshCw size={16} />
-        </button>
-        <input
-          ref={input}
-          aria-label="选择群文件"
-          type="file"
-          multiple
-          hidden
-          disabled={uploading}
-          onChange={(event) => {
-            const selected = Array.from(event.target.files ?? [])
-            event.target.value = ''
-            if (!selected.length) return
-            if (selected.length > 20 || selected.some((file) => file.size > GROUP_FILE_MAX_BYTES)) {
-              setActionError('每次最多上传 20 个文件，单个文件最多 16 MB。')
-              return
-            }
-            setRemaining([])
-            void upload(selected.map((file) => ({ file, id: ulid() })))
-          }}
-        />
-      </div>
+    <section className="chat-library" aria-label="聊天资料库">
       <form
-        className="group-library-search"
+        className="chat-library-search"
         role="search"
         onSubmit={(event) => {
           event.preventDefault()
@@ -189,7 +120,7 @@ function Library({ groupId }: { groupId: string }) {
         }}
       >
         <input
-          aria-label="搜索群文件"
+          aria-label="搜索聊天文件"
           placeholder="搜索文件名称"
           maxLength={240}
           value={search}
@@ -199,14 +130,14 @@ function Library({ groupId }: { groupId: string }) {
           <Search size={16} />
         </button>
       </form>
-      <p className="group-library-help">群里分享的文件会自动收录。单个文件最多 16 MB。</p>
+      <p className="chat-library-help">聊天中你和猫咪发出的文件会自动收录。</p>
       {page && (
-        <p className="group-library-help">
-          全部群组已用 {sizeLabel(page.used_bytes)} / {sizeLabel(page.max_bytes)}
+        <p className="chat-library-help">
+          已用 {sizeLabel(page.used_bytes)} / {sizeLabel(page.max_bytes)}
         </p>
       )}
       {notice && (
-        <p role="status" className="group-library-help">
+        <p role="status" className="chat-library-help">
           {notice}
         </p>
       )}
@@ -220,26 +151,17 @@ function Library({ groupId }: { groupId: string }) {
           {actionError}
         </p>
       )}
-      {remaining.length > 0 && (
-        <button
-          className="secondary-button"
-          disabled={uploading}
-          onClick={() => void upload(remaining)}
-        >
-          重试上传（{remaining.length}）
-        </button>
-      )}
       {loading && <p role="status">正在读取资料库…</p>}
       {!loading && !error && files.length === 0 && (
         <p role="status" className="cat-panel-empty">
-          {query ? '没有找到匹配的文件。' : '资料库还是空的。上传文件，或在群聊中分享附件。'}
+          {query ? '没有找到匹配的文件。' : '资料库还是空的。在聊天中发送文件后会显示在这里。'}
         </p>
       )}
-      <ul className="group-library-files">
+      <ul className="chat-library-files">
         {files.map((file) => (
           <li key={file.id}>
             <button
-              className="group-library-file"
+              className="chat-library-file"
               onClick={() => setOperation({ kind: 'preview', file })}
               aria-label={`预览 ${file.name}`}
             >
@@ -251,7 +173,7 @@ function Library({ groupId }: { groupId: string }) {
                 </small>
               </span>
             </button>
-            <div className="group-library-actions">
+            <div className="chat-library-actions">
               <button
                 className="icon-button"
                 aria-label={`下载 ${file.name}`}
@@ -289,7 +211,7 @@ function Library({ groupId }: { groupId: string }) {
       {operation && (
         <FileDialog
           key={`${operation.kind}:${operation.file.id}`}
-          groupId={groupId}
+          conversationId={conversationId}
           operation={operation}
           onClose={() => setOperation(undefined)}
           onChanged={() => {
@@ -302,13 +224,13 @@ function Library({ groupId }: { groupId: string }) {
   )
 }
 function FileDialog({
-  groupId,
+  conversationId,
   operation,
   onClose,
   onChanged,
 }: {
-  groupId: string
-  operation: { kind: 'preview' | 'rename' | 'delete'; file: GroupFile }
+  conversationId: string
+  operation: { kind: 'preview' | 'rename' | 'delete'; file: ChatFile }
   onClose: () => void
   onChanged: () => void
 }) {
@@ -316,7 +238,7 @@ function FileDialog({
   const [name, setName] = useState(file.name)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [preview, setPreview] = useState<GroupFilePreview>()
+  const [preview, setPreview] = useState<ChatFilePreview>()
   const [imageFailed, setImageFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
   const [notice, setNotice] = useState('')
@@ -324,7 +246,7 @@ function FileDialog({
     if (kind !== 'preview') return
     let cancelled = false
     void getBackend()
-      .previewGroupFile(groupId, file.id)
+      .previewChatFile(conversationId, file.id)
       .then((result) => {
         if (!cancelled) {
           setPreview(result)
@@ -337,15 +259,15 @@ function FileDialog({
     return () => {
       cancelled = true
     }
-  }, [groupId, file.id, kind, attempt])
+  }, [conversationId, file.id, kind, attempt])
   async function save() {
     if (busy) return
     setBusy(true)
     setError('')
     try {
       if (kind === 'rename')
-        await getBackend().renameGroupFile(groupId, file.id, file.revision, name.trim())
-      else await getBackend().deleteGroupFile(groupId, file.id, file.revision)
+        await getBackend().renameChatFile(conversationId, file.id, file.revision, name.trim())
+      else await getBackend().deleteChatFile(conversationId, file.id, file.revision)
       onChanged()
     } catch (failure) {
       setError(errorText(failure))
@@ -357,7 +279,7 @@ function FileDialog({
     setBusy(true)
     setError('')
     try {
-      if (await getBackend().downloadGroupFile(groupId, file.id)) setNotice('文件已保存。')
+      if (await getBackend().downloadChatFile(conversationId, file.id)) setNotice('文件已保存。')
     } catch (failure) {
       setError(errorText(failure))
     } finally {
@@ -370,13 +292,13 @@ function FileDialog({
       onClose={onClose}
       isDismissible={!busy}
     >
-      <p className="group-file-name">{preview?.file.name ?? file.name}</p>
+      <p className="chat-file-name">{preview?.file.name ?? file.name}</p>
       {kind === 'preview' ? (
         <>
           {!preview && !error && <p role="status">正在读取文件…</p>}
           {preview?.image && !imageFailed && (
             <img
-              className="group-file-preview-image"
+              className="chat-file-preview-image"
               src={preview.image}
               alt={preview.file.name}
               onError={() => {
@@ -386,7 +308,7 @@ function FileDialog({
             />
           )}
           {preview?.text !== undefined && (
-            <pre className="group-file-preview-text">{preview.text || '（空文件）'}</pre>
+            <pre className="chat-file-preview-text">{preview.text || '（空文件）'}</pre>
           )}
           {preview?.truncated && <p>仅预览前 64 KB，请下载查看完整内容。</p>}
           {preview && preview.text === undefined && !preview.image && (

@@ -76,6 +76,7 @@ export function workspaceFromSnapshot(
       if (bot.conversation_id) conversations.set(bot.id, bot.conversation_id)
       return {
         id: bot.id,
+        conversationId: bot.conversation_id,
         name: bot.name,
         description: bot.description,
         group: bot.category || '未分组',

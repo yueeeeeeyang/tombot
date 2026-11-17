@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld(
         clientRequestId: string,
         onEvent?: (event: StreamEvent) => void,
         replyToId?: string,
+        attachments?: Array<{ path: string; sha256: string }>,
       ) => {
         const requestId = crypto.randomUUID()
         const listener = (
@@ -97,6 +98,7 @@ contextBridge.exposeInMainWorld(
           requestId,
           clientRequestId,
           replyToId,
+          attachments,
         }).finally(() => {
           ipcRenderer.removeListener('desktop:stream-event', listener)
         })
@@ -124,18 +126,18 @@ contextBridge.exposeInMainWorld(
       listGroups: () => invoke('desktop:groups'),
       createGroup: (name: string, memberIds: string[], requestId: string) =>
         invoke('desktop:group-create', { name, memberIds, requestId }),
-      listGroupFiles: (id: string, before?: string, query?: string) =>
-        invoke('desktop:group-files', { id, before, query }),
-      uploadGroupFile: (id: string, file: { name: string; bytes: Uint8Array }, requestId: string) =>
-        invoke('desktop:group-file-upload', { id, file, requestId }),
-      previewGroupFile: (id: string, fileId: string) =>
-        invoke('desktop:group-file-preview', { id, fileId }),
-      downloadGroupFile: (id: string, fileId: string) =>
-        invoke('desktop:group-file-download', { id, fileId }),
-      renameGroupFile: (id: string, fileId: string, revision: number, name: string) =>
-        invoke('desktop:group-file-rename', { id, fileId, revision, name }),
-      deleteGroupFile: (id: string, fileId: string, revision: number) =>
-        invoke('desktop:group-file-delete', { id, fileId, revision }),
+      listChatFiles: (id: string, before?: string, query?: string) =>
+        invoke('desktop:chat-files', { id, before, query }),
+      uploadChatFile: (id: string, file: { name: string; bytes: Uint8Array }, requestId: string) =>
+        invoke('desktop:chat-file-upload', { id, file, requestId }),
+      previewChatFile: (id: string, fileId: string) =>
+        invoke('desktop:chat-file-preview', { id, fileId }),
+      downloadChatFile: (id: string, fileId: string) =>
+        invoke('desktop:chat-file-download', { id, fileId }),
+      renameChatFile: (id: string, fileId: string, revision: number, name: string) =>
+        invoke('desktop:chat-file-rename', { id, fileId, revision, name }),
+      deleteChatFile: (id: string, fileId: string, revision: number) =>
+        invoke('desktop:chat-file-delete', { id, fileId, revision }),
       groupDetail: (id: string) => invoke('desktop:group', id),
       deleteGroup: (id: string, revision: number) =>
         invoke('desktop:group-delete', { id, revision }),

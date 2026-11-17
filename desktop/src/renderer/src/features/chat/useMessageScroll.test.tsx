@@ -15,9 +15,11 @@ function message(id: string, overrides: Partial<ChatMessage> = {}): ChatMessage 
   }
 }
 function Timeline({ messages }: { messages: ChatMessage[] }) {
-  const { viewportRef, contentRef, onScroll } = useMessageScroll(messages)
+  const { viewportRef, contentRef, onScroll, showScrollToBottom, scrollToBottom } =
+    useMessageScroll(messages)
   return (
     <section ref={viewportRef} onScroll={onScroll} aria-label="会话">
+      {showScrollToBottom && <button onClick={scrollToBottom}>回到最新消息</button>}
       <div ref={contentRef}>
         {messages.map((item) => (
           <div key={item.requestId ?? item.id}>{item.content}</div>
@@ -101,4 +103,23 @@ it('前插历史保留锚点，底部读者跟随图片和视口变化，卸载�
   expect(element.scrollTop).toBe(1100)
   unmount()
   expect(disconnect).toHaveBeenCalledOnce()
+})
+
+it('滚动离开底部才出现按钮，返回底部后自动跟随新消息', () => {
+  const { element, messages, setHeight, rerender } = setup()
+  expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+  element.scrollTop = 120
+  fireEvent.scroll(element)
+  fireEvent.click(screen.getByRole('button', { name: '回到最新消息' }))
+  expect(element.scrollTop).toBe(600)
+  expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+  setHeight(1200)
+  rerender(<Timeline messages={[...messages, message('new')]} />)
+  expect(element.scrollTop).toBe(800)
+  element.scrollTop = 750
+  fireEvent.scroll(element)
+  expect(screen.getByRole('button', { name: '回到最新消息' })).toBeInTheDocument()
+  element.scrollTop = 760
+  fireEvent.scroll(element)
+  expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
 })

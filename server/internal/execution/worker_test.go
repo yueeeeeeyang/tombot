@@ -169,7 +169,7 @@ func TestPersistentWorker(t *testing.T) {
 				if strings.Contains(input.System, botpersona.ProgressInstructions) {
 					t.Error("纯文本猫咪被要求调用未提供的进度工具")
 				}
-				if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 3 || input.Tools[0].Name != "list_bots" || input.Tools[1].Name != "send_bot_message" || input.Tools[2].Name != "send_user_message" || len(input.Messages) != 1 || input.Messages[0].Role != "user" || !strings.HasPrefix(input.System, botpersona.System(bot.Name, bot.Description, bot.AvatarRef, bot.SystemPrompt)) || !strings.Contains(input.System, "Your bot ID: "+bot.ID) {
+				if configuration.ModelKey != "execution-fixture" || string(credential) != "execution-credential" || len(input.Tools) != 6 || input.Tools[3].Name != "chat_file_list" || input.Tools[4].Name != "chat_file_read" || input.Tools[5].Name != "chat_file_create" || input.Tools[0].Name != "list_bots" || input.Tools[1].Name != "send_bot_message" || input.Tools[2].Name != "send_user_message" || len(input.Messages) != 1 || input.Messages[0].Role != "user" || !strings.HasPrefix(input.System, botpersona.System(bot.Name, bot.Description, bot.AvatarRef, bot.SystemPrompt)) || !strings.Contains(input.System, "Your bot ID: "+bot.ID) {
 					t.Error("模型调用未使用所属运行快照")
 				}
 				return emitText(emit, "已经完成资料核对。")

@@ -7,10 +7,10 @@ import (
 
 	"io.yueyang/tom/internal/botmessaging"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/chatlibrary"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/groupchat"
-	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/provider"
 )
@@ -32,7 +32,7 @@ type Block struct {
 	DMNotice    *botmessaging.Notice    `json:"dm_notice,omitempty"`
 	UserMessage bool                    `json:"user_message,omitempty"`
 	SourceRunID string                  `json:"source_run_id,omitempty"`
-	GroupFile   *grouplibrary.File      `json:"group_file,omitempty"`
+	ChatFile    *chatlibrary.File       `json:"chat_file,omitempty"`
 	BotMessage  *botmessaging.Reference `json:"bot_message,omitempty"`
 	Mentions    []groupchat.Mention     `json:"mentions,omitempty"`
 	TaskResult  bool                    `json:"task_result,omitempty"`

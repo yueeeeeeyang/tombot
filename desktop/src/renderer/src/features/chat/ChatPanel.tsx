@@ -15,6 +15,7 @@ import { pasteFiles } from './pasteFiles'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
 import { messageTimeSeparator } from './messageTime'
+import { ScrollToBottom } from './ScrollToBottom'
 import { useMessageScroll } from './useMessageScroll'
 
 type ChatPanelProps = {
@@ -36,6 +37,7 @@ type ChatPanelProps = {
   onNotice: (message: string) => void
   onError: (message: string) => void
   onUpload?: (file: File) => Promise<MessageAttachment>
+  onDownload?: (attachment: MessageAttachment) => Promise<void>
   onPreview?: (attachment: MessageAttachment) => Promise<string>
   peers?: readonly Agent[]
   onOpenDm?: (notice: DmNotice) => void
@@ -62,10 +64,12 @@ export function ChatPanel({
   onError,
   onUpload,
   onPreview,
+  onDownload,
   peers = [],
   onOpenDm,
 }: ChatPanelProps) {
-  const { viewportRef, contentRef, onScroll } = useMessageScroll(agent.messages)
+  const { viewportRef, contentRef, onScroll, showScrollToBottom, scrollToBottom } =
+    useMessageScroll(agent.messages)
   const composer = useRef<HTMLTextAreaElement>(null)
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
@@ -238,6 +242,15 @@ export function ChatPanel({
                       onReact={onReact}
                       onReveal={revealMessage}
                       onPreview={onPreview}
+                      onDownload={
+                        onDownload
+                          ? (attachment) => {
+                              void onDownload(attachment).catch((failure: Error) =>
+                                onError(failure.message),
+                              )
+                            }
+                          : undefined
+                      }
                     />
                   )}
                 </div>
@@ -273,9 +286,8 @@ export function ChatPanel({
           void addFiles([...event.dataTransfer.files])
         }}
       >
-        <div className="work-status-slot">
-          {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
-        </div>
+        {showScrollToBottom && <ScrollToBottom onClick={scrollToBottom} />}
+        {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
         {pendingAttachments.length > 0 && (
           <div className="composer-files">
             {pendingAttachments.map((item) => (

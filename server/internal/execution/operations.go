@@ -9,7 +9,7 @@ import (
 	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/botmessaging"
 	"io.yueyang/tom/internal/bots"
-	"io.yueyang/tom/internal/grouplibrary"
+	"io.yueyang/tom/internal/chatlibrary"
 	"io.yueyang/tom/internal/scheduledtasks"
 
 	"io.yueyang/tom/internal/infra/ids"
@@ -74,13 +74,17 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 			return err
 		}
 		// 内建记忆和任务逐次核验私人单聊范围，业务工具仍逐次检查权限。
-		if request.Kind == "tool" && (request.ToolName == "post_to_group" || grouplibrary.IsTool(request.ToolName)) {
+		if request.Kind == "tool" && request.ToolName == "post_to_group" {
 			allowed, err := isGroupRun(ctx, transaction, lease)
 			if err != nil {
 				return err
 			}
 			if !allowed {
 				return ErrUnavailable
+			}
+		} else if request.Kind == "tool" && chatlibrary.IsTool(request.ToolName) {
+			if _, _, err := libraryConversation(ctx, transaction, lease); err != nil {
+				return err
 			}
 		} else if request.Kind == "tool" && (botmemory.IsTool(request.ToolName) || scheduledtasks.IsTool(request.ToolName)) {
 			allowed, err := memoryPermitted(ctx, transaction, lease)

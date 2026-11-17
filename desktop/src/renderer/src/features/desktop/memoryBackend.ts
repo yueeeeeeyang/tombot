@@ -153,9 +153,9 @@ export class MemoryBackend implements DesktopBackend {
     this.pristine = false
   }
 
-  listGroupFiles(
-    ..._args: Parameters<DesktopBackend['listGroupFiles']>
-  ): ReturnType<DesktopBackend['listGroupFiles']> {
+  listChatFiles(
+    ..._args: Parameters<DesktopBackend['listChatFiles']>
+  ): ReturnType<DesktopBackend['listChatFiles']> {
     void _args
     return Promise.resolve({
       files: [],
@@ -165,27 +165,27 @@ export class MemoryBackend implements DesktopBackend {
       max_file_bytes: 16 * 1024 * 1024,
     })
   }
-  uploadGroupFile(
-    ..._args: Parameters<DesktopBackend['uploadGroupFile']>
-  ): ReturnType<DesktopBackend['uploadGroupFile']> {
+  uploadChatFile(
+    ..._args: Parameters<DesktopBackend['uploadChatFile']>
+  ): ReturnType<DesktopBackend['uploadChatFile']> {
     void _args
     return Promise.reject(new Error('请连接服务端后上传。'))
   }
-  previewGroupFile(
-    ..._args: Parameters<DesktopBackend['previewGroupFile']>
-  ): ReturnType<DesktopBackend['previewGroupFile']> {
+  previewChatFile(
+    ..._args: Parameters<DesktopBackend['previewChatFile']>
+  ): ReturnType<DesktopBackend['previewChatFile']> {
     void _args
     return Promise.reject(new Error('文件不存在。'))
   }
-  downloadGroupFile(..._args: Parameters<DesktopBackend['downloadGroupFile']>): Promise<boolean> {
+  downloadChatFile(..._args: Parameters<DesktopBackend['downloadChatFile']>): Promise<boolean> {
     void _args
     return Promise.reject(new Error('文件不存在。'))
   }
-  renameGroupFile(..._args: Parameters<DesktopBackend['renameGroupFile']>): Promise<void> {
+  renameChatFile(..._args: Parameters<DesktopBackend['renameChatFile']>): Promise<void> {
     void _args
     return Promise.reject(new Error('文件不存在。'))
   }
-  deleteGroupFile(..._args: Parameters<DesktopBackend['deleteGroupFile']>): Promise<void> {
+  deleteChatFile(..._args: Parameters<DesktopBackend['deleteChatFile']>): Promise<void> {
     void _args
     return Promise.reject(new Error('文件不存在。'))
   }

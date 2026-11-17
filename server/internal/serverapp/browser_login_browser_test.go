@@ -121,14 +121,19 @@ try {
       const area = document.querySelector('.composer-area');
       const input = area.querySelector('.composer').getBoundingClientRect();
       const cards = [...area.querySelectorAll('.error-banner, .composer-reply')];
-      return cards.length === expectedCount && document.documentElement.scrollWidth <= innerWidth && cards.every((element, index) => {
+      // 错误通知可能随任务终态出现或关闭；数量与几何必须在同一帧读取，回复卡片仍须恰好一张。
+      const count = expectedCount ?? area.querySelectorAll('.error-banner').length + 1;
+      return cards.length === count && document.documentElement.scrollWidth <= innerWidth && cards.every((element, index) => {
         const card = element.getBoundingClientRect();
         const next = cards[index + 1]?.getBoundingClientRect() ?? input;
         const close = element.querySelector('button')?.getBoundingClientRect();
         return Math.abs(card.left - input.left) <= 1 && Math.abs(card.right - input.right) <= 1 && Math.abs(next.top - card.bottom - 6) <= 1 && card.right <= innerWidth && (!close || close.left >= card.left && close.right <= card.right) && element.scrollWidth <= element.clientWidth;
       });
     }, expectedCount);
-    if (!fits) throw new Error('提示或回复卡片未与输入框对齐，或间距与关闭按钮越界');
+    if (!fits) {
+      stage += '：卡片数量或几何校验失败';
+      throw new Error('提示或回复卡片未与输入框对齐，或间距与关闭按钮越界');
+    }
   };
 
   await application.evaluate(({ shell }) => { shell.openExternal = async address => { Reflect.set(globalThis, '__loginTestURL', address); }; });
@@ -377,10 +382,13 @@ try {
     const log = document.querySelector('.saved-messages');
     const viewport = document.querySelector('.messages-scroll');
     const history = [...log.querySelectorAll('.message-entry')];
-    // 提示卡片会占用真实输入区高度；扣除这部分后，消息与工作事件仍不能改变视口。
+    // 空闲时不预留状态高度；只扣除正在显示的提示和工作状态，继续检查消息同步引发的额外跳变。
     const availableHeight = () => {
-      const banner = document.querySelector('.error-banner');
-      return viewport.getBoundingClientRect().height + (banner ? banner.getBoundingClientRect().height + parseFloat(getComputedStyle(banner).marginBottom) : 0);
+      if (document.querySelector('.work-status-slot')) throw new Error('空闲状态仍保留占位');
+      return [...document.querySelectorAll('.error-banner, .work-status')].reduce((height, element) => {
+        const style = getComputedStyle(element);
+        return height + element.getBoundingClientRect().height + parseFloat(style.marginTop) + parseFloat(style.marginBottom);
+      }, viewport.getBoundingClientRect().height);
     };
     const height = availableHeight();
     const state = { outgoing: null, isStable: true, height };
@@ -417,7 +425,7 @@ try {
   await window.getByRole('textbox', { name: '给联调猫咪发消息', exact: true }).fill('这是对第一条消息的回复');
   for (const theme of ['light', 'dark']) {
     await window.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-    await verifyComposerCards(await window.locator('.error-banner').count() + 1);
+    await verifyComposerCards();
     if (settings.screenshots) await window.screenshot({ path: join(settings.screenshots, 'reply-composer-' + theme + '.png'), animations: 'disabled' });
   }
   await window.getByRole('button', { name: '发送', exact: true }).click();
@@ -754,20 +762,26 @@ try {
   }
   stage = '群资料库上传真实文件';
   await groupPanel.getByRole('tab', { name: '资料库', exact: true }).click();
-  await groupPanel.getByText('资料库还是空的。上传文件，或在群聊中分享附件。').waitFor();
+  await groupPanel.getByText('资料库还是空的。在聊天中发送文件后会显示在这里。').waitFor();
   const libraryText = '共享项目资料：上传、预览、下载与持久化。';
-  await groupPanel.getByLabel('选择群文件').setInputFiles([
+  await groupPanel.getByRole('button',{name:'关闭群资料',exact:true}).click();
+  await window.locator('#chat-file').setInputFiles([
     {name:'群资料.txt',mimeType:'text/plain',buffer:Buffer.from(libraryText)},
     {name:'设计预览.png',mimeType:'image/png',buffer:Buffer.from(avatarPNG,'base64')},
     {name:'用于核对超长中文文件名称省略显示与按钮布局的设计说明文档.txt',mimeType:'text/plain',buffer:Buffer.from('设计说明')}
   ]);
-  await groupPanel.getByRole('button', {name:'预览 群资料.txt',exact:true}).waitFor();
-  await groupPanel.getByText('已上传 3 个文件', {exact:true}).waitFor();
+  await window.locator('.composer-files').getByText('用于核对超长中文文件名称省略显示与按钮布局的设计说明文档.txt',{exact:true}).waitFor();
+  await window.getByRole('textbox',{name:'给协作群发消息',exact:true}).fill('分享群资料');
+  await window.getByRole('button',{name:'发送',exact:true}).click();
+  await window.locator('.saved-messages').getByText('分享群资料',{exact:true}).waitFor();
+  await window.getByRole('button',{name:'查看协作群群资料',exact:true}).click();
+  await groupPanel.getByRole('tab',{name:'资料库',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 群资料.txt',exact:true}).waitFor();
   for (const width of [1073,860]) {
     await application.evaluate(({BrowserWindow},width)=>BrowserWindow.getAllWindows()[0].setContentSize(width,780),width);
     for (const theme of ['light','dark']) {
       await window.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
-      if (!(await groupPanel.evaluate(panel=>panel.scrollWidth<=panel.clientWidth && [...panel.querySelectorAll('.group-library-files li')].every(row=>row.scrollWidth<=row.clientWidth)))) throw new Error('群资料库布局溢出');
+      if (!(await groupPanel.evaluate(panel=>panel.scrollWidth<=panel.clientWidth && [...panel.querySelectorAll('.chat-library-files li')].every(row=>row.scrollWidth<=row.clientWidth)))) throw new Error('群资料库布局溢出');
       if(settings.screenshots) await groupPanel.screenshot({path:join(settings.screenshots,'group-library-'+theme+'-'+width+'.png'),animations:'disabled'});
     }
   }
@@ -795,7 +809,7 @@ try {
   await renameFile.getByRole('textbox',{name:'文件名称',exact:true}).fill('更新后的群资料.txt');
   await renameFile.getByRole('button',{name:'保存名称',exact:true}).click();
   await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor();
-  await groupPanel.getByRole('textbox',{name:'搜索群文件',exact:true}).fill('不存在');
+  await groupPanel.getByRole('textbox',{name:'搜索聊天文件',exact:true}).fill('不存在');
   await groupPanel.getByRole('button',{name:'搜索文件',exact:true}).click();
   await groupPanel.getByText('没有找到匹配的文件。',{exact:true}).waitFor();
   await window.reload();
@@ -805,7 +819,7 @@ try {
   await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor();
   stage = '群聊附件自动收录';
   await groupPanel.getByRole('button',{name:'关闭群资料',exact:true}).click();
-  await window.locator('#group-file').setInputFiles({name:'聊天附件.txt',mimeType:'text/plain',buffer:Buffer.from('附件内容')});
+  await window.locator('#chat-file').setInputFiles({name:'聊天附件.txt',mimeType:'text/plain',buffer:Buffer.from('附件内容')});
   await window.locator('.composer-files').getByText('聊天附件.txt',{exact:true}).waitFor();
   await window.getByRole('textbox',{name:'给协作群发消息',exact:true}).fill('请查看附件');
   await window.getByRole('button',{name:'发送',exact:true}).click();
@@ -861,7 +875,8 @@ try {
         (SELECT count(*) FROM tombot.message_reactions WHERE user_id=u.id),
         (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]')
         FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions)
-	if err != nil || bots != 1 || messages != 1 || runs != 7 || reactions != 0 || interactions != 2 {
+	// 三个资料库文件现在通过一条真实群消息分享，额外产生一次群成员运行。
+	if err != nil || bots != 1 || messages != 1 || runs != 8 || reactions != 0 || interactions != 2 {
 		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 错误=%v", bots, messages, runs, reactions, interactions, err)
 	}
 	t.Log(string(output))

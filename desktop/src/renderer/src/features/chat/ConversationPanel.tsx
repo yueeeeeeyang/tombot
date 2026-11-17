@@ -1,4 +1,6 @@
-import { parseGroupFilePath } from '../../../../shared/groupFiles'
+import { parseChatFilePath } from '../../../../shared/chatFiles'
+import { useMessageScroll } from './useMessageScroll'
+import { ScrollToBottom } from './ScrollToBottom'
 import { readGroupHistory } from './groupHistory'
 import { ReplyPreview } from './ReplyPreview'
 import { GroupAvatar } from '../../components/GroupAvatar'
@@ -76,13 +78,19 @@ export function ConversationPanel({
   const [runs, setRuns] = useState<AgentConversation['runs']>([])
   const request = useRef<{ key: string; id: string } | undefined>(undefined)
   const alive = useRef(true)
-  const nearBottom = useRef(true)
   const [highlighted, setHighlighted] = useState('')
   const [menu, setMenu] = useState<MessageMenuAnchor>()
   const [isDetailsOpen, setDetailsOpen] = useState(false)
   const [hasEarlier, setHasEarlier] = useState(false)
   const [isLoadingEarlier, setLoadingEarlier] = useState(false)
-  const log = useRef<HTMLElement>(null)
+  const {
+    viewportRef: log,
+    contentRef,
+    onScroll,
+    showScrollToBottom,
+    scrollToBottom,
+    pauseFollowing,
+  } = useMessageScroll(messages)
   const [busy, setBusy] = useState(false)
   const workingAgents = agents.filter((agent) => runs.some((run) => run.bot_id === agent.id))
   const names = new Map<string, string>()
@@ -177,14 +185,10 @@ export function ConversationPanel({
     try {
       const page = await getBackend().listConversationMessages?.(conversationId, oldest.sequence)
       if (!page) return
-      const previousHeight = log.current?.scrollHeight ?? 0
       setMessages((current) => [
         ...page.messages.filter((item) => !current.some((saved) => saved.id === item.id)),
         ...current,
       ])
-      requestAnimationFrame(() => {
-        if (log.current) log.current.scrollTop += log.current.scrollHeight - previousHeight
-      })
       setHasEarlier(page.hasMore)
     } catch (failure) {
       onError((failure as Error).message)
@@ -192,11 +196,6 @@ export function ConversationPanel({
       setLoadingEarlier(false)
     }
   }, [conversationId, messages, isLoadingEarlier, onError])
-
-  useEffect(() => {
-    const element = log.current
-    if (element && nearBottom.current) element.scrollTop = element.scrollHeight
-  }, [messages])
 
   function bubbleMessage(item: ServerBubble) {
     return {
@@ -235,7 +234,7 @@ export function ConversationPanel({
       setMentions([])
       setPending([])
       setReplyToId(undefined)
-      nearBottom.current = true
+      scrollToBottom()
       await reload()
     } catch (failure) {
       onError((failure as Error).message)
@@ -266,7 +265,7 @@ export function ConversationPanel({
       }
       if (!current.some((item) => item.id === messageId))
         throw new Error('原消息尚未加载，请继续查看更早的消息。')
-      nearBottom.current = false
+      pauseFollowing()
       setMessages(current)
       setHighlighted(messageId)
       requestAnimationFrame(() =>
@@ -321,12 +320,9 @@ export function ConversationPanel({
           ref={log}
           className="messages-scroll"
           aria-label={`与${title}的会话`}
-          onScroll={() => {
-            const el = log.current
-            if (el) nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-          }}
+          onScroll={onScroll}
         >
-          <div className="conversation">
+          <div ref={contentRef} className="conversation">
             <div className="saved-messages" role="log" aria-label={title} aria-live="polite">
               {hasEarlier ? (
                 <button
@@ -375,8 +371,8 @@ export function ConversationPanel({
                         onDownload={(attachment) => {
                           void (async () => {
                             try {
-                              const { groupId, fileId } = parseGroupFilePath(attachment.path)
-                              if (await getBackend().downloadGroupFile(groupId, fileId))
+                              const { conversationId, fileId } = parseChatFilePath(attachment.path)
+                              if (await getBackend().downloadChatFile(conversationId, fileId))
                                 onNotice('文件已保存。')
                             } catch (failure) {
                               onError(failure instanceof Error ? failure.message : '文件下载失败。')
@@ -422,6 +418,7 @@ export function ConversationPanel({
             )
           }}
         >
+          {showScrollToBottom && <ScrollToBottom onClick={scrollToBottom} />}
           {workingAgents.length > 0 && (
             <WorkStatus
               summary={
@@ -456,8 +453,9 @@ export function ConversationPanel({
           >
             <input
               type="file"
+              multiple
               hidden
-              id="group-file"
+              id="chat-file"
               onChange={(event) => {
                 void addFiles([...(event.target.files ?? [])]).catch((failure: Error) =>
                   onError(failure.message),
@@ -469,7 +467,7 @@ export function ConversationPanel({
               className="composer-add"
               type="button"
               aria-label="添加附件"
-              onClick={() => document.getElementById('group-file')?.click()}
+              onClick={() => document.getElementById('chat-file')?.click()}
             >
               <Plus size={20} />
             </button>

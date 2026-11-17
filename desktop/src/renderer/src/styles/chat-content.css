@@ -82,9 +82,6 @@
 .message-markdown input {
   margin-right: 6px;
 }
-.work-status-slot {
-  min-height: 32px;
-}
 .message-status.message-pending {
   background: transparent;
   color: var(--muted);
@@ -149,4 +146,21 @@
   font-size: 12px;
   line-height: 1.6;
   color: var(--text-muted);
+}
+
+.scroll-to-bottom {
+  position: absolute;
+  top: -8px;
+  right: 24px;
+  transform: translateY(-100%);
+  width: 36px;
+  height: 36px;
+  z-index: 3;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: 0 3px 12px #00000012;
+}
+.scroll-to-bottom:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: 3px;
 }

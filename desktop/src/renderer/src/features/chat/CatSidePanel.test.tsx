@@ -2,11 +2,11 @@ import { taskFixture } from '../../../../shared/tasks.fixture'
 import { render, screen, within, waitFor, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { createWorkspace, type Artifact } from '../workspace/model'
+import { createWorkspace } from '../workspace/model'
 import { CatSidePanel } from './CatSidePanel'
 import { memoryBackend } from '../desktop/memoryBackend'
 
-const agent = createWorkspace().agents[0]!
+const agent = { ...createWorkspace().agents[0]!, conversationId: 'direct-chat' }
 
 describe('猫咪侧栏面板', () => {
   it('动态内展示电脑和任务卡片，仅保留动态和资料库页签', async () => {
@@ -35,7 +35,7 @@ describe('猫咪侧栏面板', () => {
     expect(screen.queryByText('由服务端管理')).not.toBeInTheDocument()
     expect(screen.queryByRole('combobox', { name: '模型' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('tab', { name: '资料库' }))
-    expect(screen.getByRole('status')).toHaveTextContent('资料库还是空的')
+    expect(await screen.findByText(/资料库还是空的/)).toBeInTheDocument()
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('tab', { name: '动态', selected: true })).toHaveFocus()
     await user.click(screen.getByRole('button', { name: '小黑的电脑' }))
@@ -133,39 +133,33 @@ describe('猫咪侧栏面板', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
-  it('资料库默认只显示每组前 5 条，展开后能看到其余产物', async () => {
+  it('单聊资料库按会话读取用户与猫咪的附件，搜索包含历史文件', async () => {
     const user = userEvent.setup()
-    const now = new Date(2026, 10, 10, 18, 0, 0)
-    const artifacts: Artifact[] = Array.from({ length: 6 }, (_, index) => ({
-      id: `today-${index}`,
-      title: `今天的文件 ${index + 1}`,
-      kind: 'file',
-      createdAt: new Date(2026, 10, 10, 10 + index, 0, 0).toISOString(),
+    const files = ['用户上传.txt', '猫咪报告.md'].map((name, i) => ({
+      id: `file-${i}`,
+      conversation_id: agent.conversationId,
+      name,
+      media_type: 'text/plain',
+      size: 6,
+      sha256: 'a'.repeat(64),
+      revision: 1,
+      created_at: '2026-11-17T00:00:00Z',
     }))
-    artifacts.push({
-      id: 'week',
-      title: '本周笔记',
-      kind: 'video',
-      createdAt: new Date(2026, 10, 9, 12, 0, 0).toISOString(),
+    const load = vi.spyOn(memoryBackend, 'listChatFiles').mockResolvedValue({
+      files,
+      next: '',
+      used_bytes: 12,
+      max_bytes: 1024,
+      max_file_bytes: 1024,
     })
-    render(
-      <CatSidePanel
-        agent={{ ...agent, artifacts }}
-        onClose={vi.fn()}
-        onComputerUrl={vi.fn()}
-        now={now}
-      />,
-    )
+    render(<CatSidePanel agent={agent} onClose={vi.fn()} onComputerUrl={vi.fn()} />)
     await user.click(screen.getByRole('tab', { name: '资料库' }))
-    const today = screen.getByRole('region', { name: '今天' })
-    const heading = within(today).getByRole('heading', { name: '今天' })
-    expect(heading.closest('.artifact-card')).toBeNull()
-    expect(heading.nextElementSibling).toHaveClass('artifact-card')
-    expect(today.querySelector('.artifact-card button')).toHaveTextContent('展开')
-    expect(screen.queryByText('今天的文件 1')).not.toBeInTheDocument()
-    expect(screen.getByText('今天的文件 6')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: '展开' }))
-    expect(screen.getByText('今天的文件 1')).toBeInTheDocument()
-    expect(screen.getByText('本周笔记')).toBeInTheDocument()
+    expect(await screen.findByText('用户上传.txt')).toBeInTheDocument()
+    expect(screen.getByText('猫咪报告.md')).toBeInTheDocument()
+    expect(load).toHaveBeenCalledWith('direct-chat', '', '')
+    await user.type(screen.getByRole('textbox', { name: '搜索聊天文件' }), '报告')
+    await user.click(screen.getByRole('button', { name: '搜索文件' }))
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith('direct-chat', '', '报告'))
+    expect(screen.queryByRole('button', { name: '上传文件' })).toBeNull()
   })
 })

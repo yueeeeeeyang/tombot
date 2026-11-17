@@ -1,5 +1,5 @@
 import type { CatTask } from '../../../../shared/tasks'
-import type { GroupFile, GroupFilePage, GroupFilePreview } from '../../../../shared/groupFiles'
+import type { ChatFile, ChatFilePage, ChatFilePreview } from '../../../../shared/chatFiles'
 import type { Agent, AppWorkspace, NewAgent, DmNotice } from '../workspace/model'
 
 export interface StreamEvent {
@@ -125,6 +125,7 @@ export interface DesktopBackend {
     clientRequestId: string,
     onEvent?: (event: StreamEvent) => void,
     replyToId?: string,
+    attachments?: Array<{ path: string; sha256: string }>,
   ) => Promise<DeliveryResult>
   openComputer?: (agentId: string) => Promise<string>
   listTasks?: (agentId: string) => Promise<CatTask[]>
@@ -137,16 +138,16 @@ export interface DesktopBackend {
   deleteTask?: (agentId: string, id: string, revision: number) => Promise<void>
   listGroups?: () => Promise<GroupSummary[]>
   createGroup?: (name: string, memberIds: string[], requestId: string) => Promise<GroupSummary>
-  listGroupFiles: (id: string, before?: string, query?: string) => Promise<GroupFilePage>
-  uploadGroupFile: (
+  listChatFiles: (id: string, before?: string, query?: string) => Promise<ChatFilePage>
+  uploadChatFile: (
     id: string,
     file: { name: string; bytes: Uint8Array },
     requestId: string,
-  ) => Promise<GroupFile>
-  previewGroupFile: (id: string, fileId: string) => Promise<GroupFilePreview>
-  downloadGroupFile: (id: string, fileId: string) => Promise<boolean>
-  renameGroupFile: (id: string, fileId: string, revision: number, name: string) => Promise<void>
-  deleteGroupFile: (id: string, fileId: string, revision: number) => Promise<void>
+  ) => Promise<ChatFile>
+  previewChatFile: (id: string, fileId: string) => Promise<ChatFilePreview>
+  downloadChatFile: (id: string, fileId: string) => Promise<boolean>
+  renameChatFile: (id: string, fileId: string, revision: number, name: string) => Promise<void>
+  deleteChatFile: (id: string, fileId: string, revision: number) => Promise<void>
   groupDetail?: (id: string) => Promise<GroupDetail>
   deleteGroup?: (id: string, revision: number) => Promise<void>
   loadBotActivities?: () => Promise<{ runs: AgentConversation['runs'] }>

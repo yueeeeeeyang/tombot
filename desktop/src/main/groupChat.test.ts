@@ -47,14 +47,14 @@ describe('群聊服务协议', () => {
     const fileID = '01J00000000000000000000002'
     await sendGroupMessage(call, {
       ...input,
-      attachments: [{ path: `group-files/01J00000000000000000000001/${fileID}`, sha256: 'digest' }],
+      attachments: [{ path: `chat-files/01J00000000000000000000001/${fileID}`, sha256: 'digest' }],
     })
     expect(call.mock.calls.at(-1)?.[2].file_ids).toEqual([fileID])
     call.mockResolvedValue({})
     await expect(sendGroupMessage(call, input)).rejects.toThrow()
     await expect(
       sendGroupMessage(call, { ...input, attachments: [{ path: 'file', sha256: 'digest' }] }),
-    ).rejects.toThrow('群文件地址无效')
+    ).rejects.toThrow('聊天文件地址无效')
   })
   it('未设置预算时原样保留空值', async () => {
     const call = vi.fn().mockResolvedValue({ group: { ...group, max_cost_micro: null } })

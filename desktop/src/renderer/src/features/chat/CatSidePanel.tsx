@@ -3,7 +3,7 @@ import { X } from 'lucide-react'
 import { useEffect, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { Avatar } from '../../components/Avatar'
 import type { Agent } from '../workspace/model'
-import { ArtifactLibrary } from './ArtifactLibrary'
+import { ChatLibrary } from './ChatLibrary'
 import { ComputerPane } from './ComputerPane'
 import { getBackend } from '../desktop/backend'
 import { TaskPane } from './TaskPane'
@@ -23,7 +23,6 @@ export function CatSidePanel({
   onComputerUrl,
   onConnectComputer,
   onPrepareComputer,
-  now,
 }: {
   agent: Agent
   isLead?: boolean
@@ -31,7 +30,6 @@ export function CatSidePanel({
   onComputerUrl: (computerUrl: string) => void
   onConnectComputer?: () => void
   onPrepareComputer?: () => void
-  now?: Date
 }) {
   const [tab, setTab] = useState<PanelTab>('activity')
 
@@ -133,7 +131,7 @@ export function CatSidePanel({
           id="cat-panel-library"
           aria-labelledby="cat-tab-library"
         >
-          <ArtifactLibrary artifacts={agent.artifacts} now={now} />
+          <ChatLibrary conversationId={agent.conversationId ?? ''} />
         </div>
       )}
     </aside>

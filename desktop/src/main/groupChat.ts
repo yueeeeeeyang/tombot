@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { parseGroupFilePath } from '../shared/groupFiles'
+import { parseChatFilePath } from '../shared/chatFiles'
 
 type Call = (method: string, path: string, body?: unknown) => Promise<unknown>
 const groupSchema = z.object({
@@ -93,7 +93,7 @@ export async function sendGroupMessage(
     mentions: string[]
   },
 ): Promise<{ acceptedMessageId: string }> {
-  const fileIds = input.attachments.map((attachment) => parseGroupFilePath(attachment.path).fileId)
+  const fileIds = input.attachments.map((attachment) => parseChatFilePath(attachment.path).fileId)
   const accepted = parseResponse(
     z.object({ submission: z.object({ message_id: z.string().min(1) }) }),
     await call('POST', `/conversations/${encodeURIComponent(input.conversationId)}/messages`, {

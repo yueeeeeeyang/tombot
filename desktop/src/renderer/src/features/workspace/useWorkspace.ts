@@ -502,6 +502,7 @@ export function useWorkspace(
           clientRequestId,
           receiveEvent,
           replyToId,
+          outgoing?.attachments,
         )
         if (result.acceptedMessageId || result.messages) {
           const acceptedId = result.acceptedMessageId

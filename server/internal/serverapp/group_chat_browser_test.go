@@ -88,6 +88,8 @@ try {
     }
   }
   await window.getByLabel('证书 SHA-256 指纹', { exact: true }).fill(settings.certificateFingerprint);
+  await window.getByLabel('证书 SHA-256 指纹', { exact: true }).press('Tab');
+  if(await window.getByLabel('证书 SHA-256 指纹', { exact: true }).inputValue()!==settings.certificateFingerprint)throw new Error('指纹输入未完整写入');
   await window.getByRole('button', { name: '验证并信任证书', exact: true }).click();
   await window.getByText('证书已验证并保存，可以继续登录。').waitFor();
   await window.getByRole('button', { name: '在浏览器中登录', exact: true }).click();
@@ -199,6 +201,26 @@ try {
   await window.getByRole('button', { name: '招聘猫咪', exact: true }).click();
   await window.getByRole('textbox', { name: '给侧栏猫咪发消息', exact: true }).waitFor();
 
+  stage = '单聊附件与资料库';
+  await window.locator('.composer input[type=file]').setInputFiles({name:'单聊需求.txt',mimeType:'text/plain',buffer:Buffer.from('单聊文件内容')});
+  await window.locator('.composer-files').getByText('单聊需求.txt',{exact:true}).waitFor();
+  await window.getByRole('button',{name:'发送',exact:true}).click();
+  await window.locator('.saved-messages').getByText('单聊需求.txt',{exact:true}).first().waitFor();
+  await window.getByRole('button',{name:'查看侧栏猫咪资料',exact:true}).click();
+  let libraryPanel=window.getByRole('complementary',{name:'侧栏猫咪',exact:true});
+  await libraryPanel.getByRole('tab',{name:'资料库',exact:true}).click();
+  await libraryPanel.getByRole('button',{name:'预览 单聊需求.txt',exact:true}).waitFor();
+  if(await libraryPanel.getByRole('button',{name:'上传文件',exact:true}).count())throw new Error('资料库仍包含上传入口');
+  await libraryPanel.getByRole('textbox',{name:'搜索聊天文件',exact:true}).fill('不存在');
+  await libraryPanel.getByRole('button',{name:'搜索文件',exact:true}).click();
+  await libraryPanel.getByText('没有找到匹配的文件。',{exact:true}).waitFor();
+  await libraryPanel.getByRole('textbox',{name:'搜索聊天文件',exact:true}).fill('需求');
+  await libraryPanel.getByRole('button',{name:'搜索文件',exact:true}).click();
+  await libraryPanel.getByRole('button',{name:'预览 单聊需求.txt',exact:true}).waitFor();
+  if(await window.locator('.work-status-slot').count())throw new Error('输入框仍有空白占位');
+  if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'direct-library.png')});
+  await libraryPanel.getByRole('button',{name:'关闭猫咪面板',exact:true}).click();
+
   stage = '招聘第二位群成员';
   await window.getByRole('button',{name:'新建',exact:true}).click();
   await window.getByRole('menuitem',{name:'招聘猫咪',exact:true}).click();
@@ -218,8 +240,7 @@ try {
   if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'empty-group.png')});
   await composer.fill('@侧');
   await window.getByRole('option',{name:'侧栏猫咪',exact:true}).click();
-  await composer.press('End');
-  await composer.pressSequentially('请检查这个方案');
+  await composer.fill('@侧栏猫咪 请检查这个方案');
   await window.getByRole('button',{name:'发送',exact:true}).click();
   await window.getByText('@侧栏猫咪 请检查这个方案',{exact:true}).waitFor();
   stage = '引用消息及再次发送';
@@ -254,6 +275,26 @@ try {
       if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'group-'+theme+'-'+width+'.png'),animations:'disabled'});
     }
   }
+  await panel.getByRole('button',{name:'关闭群资料',exact:true}).click();
+  stage = '群附件收录与回到底部';
+  await window.locator('.composer input[type=file]').setInputFiles({name:'群聊资料.txt',mimeType:'text/plain',buffer:Buffer.from('群聊资料正文')});
+  await window.locator('.composer-files').getByText('群聊资料.txt',{exact:true}).waitFor();
+  await composer.fill(Array.from({length:40},(_,i)=>'滚动验证第'+(i+1)+'行').join('\n'));
+  await window.getByRole('button',{name:'发送',exact:true}).click();
+  await window.locator('.saved-messages').getByText('群聊资料.txt',{exact:true}).waitFor();
+  await window.locator('.messages-scroll').evaluate(element=>{element.scrollTop=0;element.dispatchEvent(new Event('scroll',{bubbles:true}));});
+  await window.getByRole('button',{name:'回到最新消息',exact:true}).click();
+  await window.getByRole('button',{name:'回到最新消息',exact:true}).waitFor({state:'hidden'});
+  if(await window.locator('.messages-scroll').evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight>48))throw new Error('没有返回消息底部');
+  await window.getByRole('button',{name:'查看协作讨论群资料',exact:true}).click();
+  await panel.getByRole('tab',{name:'资料库',exact:true}).click();
+  await panel.getByRole('button',{name:'预览 群聊资料.txt',exact:true}).waitFor();
+  if(await panel.getByText('单聊需求.txt',{exact:true}).count())throw new Error('群资料库混入单聊文件');
+  if(await panel.locator('.chat-library-search').evaluate(form=>{
+    const input=form.querySelector('input').getBoundingClientRect(),button=form.querySelector('button').getBoundingClientRect();
+    return button.left<input.left || button.right>input.right || button.top<input.top || button.bottom>input.bottom;
+  }))throw new Error('搜索图标没有置于输入框内');
+  if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'group-library.png')});
   await panel.getByRole('button',{name:'关闭群资料',exact:true}).click();
   stage = '侧栏重命名、置顶和重新打开';
   let item=window.getByRole('button',{name:'协作讨论',exact:true});

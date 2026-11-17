@@ -14,8 +14,8 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"io.yueyang/tom/internal/botmemory"
+	"io.yueyang/tom/internal/chatlibrary"
 	"io.yueyang/tom/internal/groupchat"
-	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/modelusage"
@@ -105,7 +105,7 @@ func translate(err error) error {
 	if errors.Is(err, groupchat.ErrMention) {
 		return groupchat.ErrMention
 	}
-	for _, known := range []error{grouplibrary.ErrInput, grouplibrary.ErrNotFound, grouplibrary.ErrConflict, grouplibrary.ErrCapacity, scheduledtasks.ErrInput, scheduledtasks.ErrNotFound, scheduledtasks.ErrConflict, scheduledtasks.ErrCapacity, ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{chatlibrary.ErrInput, chatlibrary.ErrNotFound, chatlibrary.ErrConflict, chatlibrary.ErrCapacity, scheduledtasks.ErrInput, scheduledtasks.ErrNotFound, scheduledtasks.ErrConflict, scheduledtasks.ErrCapacity, ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { ulid } from '../shared/ulid'
 import { createBot } from './botCreation'
@@ -566,4 +566,93 @@ it('全局工作状态使用已登录用户的权威活动接口', async () => {
     'https://desktop.example.test/api/v2/activity',
     expect.objectContaining({ method: 'GET' }),
   )
+})
+
+it('单聊上传走会话文件接口，发送附带文件标识并还原双方附件', async () => {
+  const botId = ulid(),
+    conversationId = ulid(),
+    fileId = ulid(),
+    messageId = ulid()
+  const bytes = new TextEncoder().encode('附件内容')
+  const file = {
+    id: fileId,
+    conversation_id: conversationId,
+    name: '需求.txt',
+    media_type: 'text/plain',
+    size: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    revision: 1,
+    created_at: new Date().toISOString(),
+  }
+  const fetcher = vi.fn(async (url: string, options: RequestInit) => {
+    const path = new URL(url).pathname
+    if (path === '/api/v2/workspace')
+      return Response.json({
+        snapshot: {
+          bots: [{ id: botId, conversation_id: conversationId, name: '小黑', revision: 1 }],
+          groups: [],
+          workspace: { revision: 1 },
+          event_sequence: 0,
+        },
+      })
+    if (path === `/api/v2/conversations/${conversationId}/files`) {
+      expect(options.method).toBe('POST')
+      expect(JSON.parse(String(options.body))).toMatchObject({
+        client_request_id: fileId,
+        name: '需求.txt',
+      })
+      return Response.json({ file })
+    }
+    if (path.endsWith('/activity')) return Response.json({ runs: [] })
+    if (path === `/api/v2/conversations/${conversationId}/messages`) {
+      if (options.method === 'POST') {
+        expect(JSON.parse(String(options.body))).toMatchObject({ file_ids: [fileId] })
+        return Response.json({ submission: { run_id: ulid(), message_id: messageId } })
+      }
+      return Response.json({
+        messages: [
+          {
+            id: messageId,
+            sequence: 1,
+            sender_kind: 'system',
+            created_at: file.created_at,
+            blocks: [
+              { kind: 'text', text: '需求.txt', user_message: true },
+              { kind: 'chat_file', chat_file: file },
+            ],
+          },
+        ],
+      })
+    }
+    throw new Error('出现非会话附件请求')
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const uploaded = await invoke(
+    'desktop:upload',
+    {},
+    { botId, name: file.name, type: 'text/plain', bytes, requestId: fileId },
+  )
+  const path = `chat-files/${conversationId}/${fileId}`
+  expect(uploaded).toEqual({ ok: true, value: { path, sha256: file.sha256 } })
+  expect(
+    await invoke(
+      'desktop:deliver',
+      {},
+      {
+        agentId: botId,
+        content: '需求',
+        requestId: ulid(),
+        clientRequestId: messageId,
+        attachments: [{ path, sha256: file.sha256 }],
+      },
+    ),
+  ).toMatchObject({ ok: true, value: { acceptedMessageId: messageId } })
+  expect(await invoke('desktop:agent-conversation', {}, botId)).toMatchObject({
+    ok: true,
+    value: {
+      messages: [
+        { role: 'assistant', attachments: [{ path, name: file.name, sha256: file.sha256 }] },
+      ],
+    },
+  })
 })

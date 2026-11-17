@@ -307,7 +307,14 @@ it('回复发送失败后重试仍使用原消息标识与同一个幂等键', a
   })
   expect(backend.deliverMessage).toHaveBeenCalledTimes(2)
   for (const call of vi.mocked(backend.deliverMessage).mock.calls) {
-    expect(call).toEqual(['assistant', '这是回复', 'request', expect.any(Function), 'original'])
+    expect(call).toEqual([
+      'assistant',
+      '这是回复',
+      'request',
+      expect.any(Function),
+      'original',
+      undefined,
+    ])
   }
   expect(result.current.workspace.agents[0]?.messages[1]).toMatchObject({
     id: 'reply',
@@ -373,6 +380,7 @@ it('原消息尚未受理时明确拒绝引用发送，确认后引用自动更�
     'request',
     expect.any(Function),
     'confirmed',
+    undefined,
   )
 })
 
@@ -623,4 +631,41 @@ it('重新打开时恢复未选中猫咪的私信和后台活动，断流后清�
     }),
   )
   await waitFor(() => expect(result.current.workStates.developer).toBeUndefined())
+})
+
+it('单聊上传附件在首次发送和重试时保留同一文件引用', async () => {
+  const { result, backend } = setup({ messages: [], hasMore: false, runs: [] })
+  await waitFor(() => expect(result.current.ready).toBe(true))
+  const attachment = {
+    name: '资料.txt',
+    path: 'chat-files/conversation/file',
+    sha256: 'a'.repeat(64),
+    kind: 'file' as const,
+    mediaType: 'text/plain',
+  }
+  backend.deliverMessage = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('连接中断'))
+    .mockResolvedValue({ acceptedMessageId: 'sent' })
+  act(() =>
+    result.current.commit((workspace) =>
+      saveMessage(
+        updateDraft(workspace, 'assistant', '请阅读'),
+        'assistant',
+        'upload-request',
+        new Date().toISOString(),
+        undefined,
+        [attachment],
+      ),
+    ),
+  )
+  await act(async () => {
+    await result.current.deliver('assistant', '请阅读', 'upload-request')
+  })
+  await act(async () => {
+    await result.current.deliver('assistant', '请阅读', 'upload-request')
+  })
+  expect(backend.deliverMessage).toHaveBeenCalledTimes(2)
+  for (const call of vi.mocked(backend.deliverMessage).mock.calls)
+    expect(call[5]).toEqual([attachment])
 })

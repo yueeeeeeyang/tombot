@@ -364,76 +364,6 @@
 .cat-panel-export {
   align-self: flex-start;
 }
-.artifact-library {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.artifact-group h3 {
-  margin: 0 0 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 500;
-  text-align: left;
-}
-.artifact-card {
-  padding: 6px 10px 8px;
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  background: var(--surface);
-}
-.artifact-group ul {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.artifact-group li {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 6px 4px;
-  border-radius: 8px;
-}
-.artifact-group img,
-.artifact-group svg {
-  width: 28px;
-  height: 28px;
-  flex-shrink: 0;
-  border-radius: 6px;
-  background: var(--surface-muted);
-  color: var(--muted);
-  object-fit: cover;
-}
-.artifact-group svg {
-  padding: 6px;
-}
-.artifact-group li span {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.artifact-card > button {
-  display: block;
-  width: 100%;
-  margin-top: 4px;
-  padding: 6px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 12px;
-}
-.artifact-card > button:hover,
-.artifact-card > button:focus-visible {
-  background: var(--hover);
-  color: var(--text);
-}
 .computer-pane {
   display: flex;
   flex-direction: column;
@@ -1033,53 +963,68 @@
   }
 }
 
-.group-library {
+.chat-library {
   display: grid;
   gap: 12px;
   min-width: 0;
 }
-.group-library-toolbar,
-.group-library .group-library-search,
-.group-library-actions {
+.chat-library-actions {
   display: flex;
-  flex-direction: row;
   align-items: center;
   gap: 6px;
 }
-.group-library-toolbar {
-  justify-content: space-between;
+.chat-library .chat-library-search {
+  position: relative;
+  display: flex;
+  margin: 0;
 }
-.group-library-toolbar .primary-button,
-.group-library .primary-button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-}
-.group-library-search input {
+.chat-library-search input {
+  width: 100%;
   min-width: 0;
-  flex: 1;
+  height: 38px;
+  padding: 8px 42px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
 }
-.group-library-help {
+.chat-library-search input::placeholder {
+  color: var(--muted);
+}
+.chat-library-search input:focus-visible {
+  outline: 1px solid var(--text-secondary);
+}
+.chat-library-search .icon-button {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+}
+.chat-library-help {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
 }
-.group-library-files {
+.chat-library-files {
   display: grid;
   gap: 8px;
   list-style: none;
   padding: 0;
   margin: 0;
 }
-.group-library-files li {
+.chat-library-files li {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 10px;
   min-width: 0;
 }
-.group-library-file {
+.chat-library-file {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1092,14 +1037,14 @@
   color: inherit;
   cursor: pointer;
 }
-.group-library-file > svg {
+.chat-library-file > svg {
   flex-shrink: 0;
 }
-.group-library-file > span {
+.chat-library-file > span {
   min-width: 0;
   flex: 1;
 }
-.group-library-file strong {
+.chat-library-file strong {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1107,31 +1052,31 @@
   font-size: 13px;
   font-weight: 500;
 }
-.group-library-file small {
+.chat-library-file small {
   display: block;
   margin-top: 5px;
   color: var(--muted);
   font-size: 11px;
 }
-.group-library-actions {
+.chat-library-actions {
   justify-content: flex-end;
   margin-top: 6px;
 }
-.group-library-actions .icon-button {
+.chat-library-actions .icon-button {
   width: 28px;
   height: 28px;
 }
-.group-file-name {
+.chat-file-name {
   overflow-wrap: anywhere;
 }
-.group-file-preview-image {
+.chat-file-preview-image {
   display: block;
   max-width: 100%;
   max-height: 55vh;
   object-fit: contain;
   margin: 12px auto;
 }
-.group-file-preview-text {
+.chat-file-preview-text {
   max-height: 55vh;
   overflow: auto;
   white-space: pre-wrap;

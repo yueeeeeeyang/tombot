@@ -104,7 +104,7 @@ func (service *Service) sendGroupInput(ctx context.Context, tx *sql.Tx, user, co
 	if err != nil {
 		return err
 	}
-	attachments, err := groupFileBlocks(ctx, tx, user, conversation, request.FileIDs)
+	attachments, err := chatFileBlocks(ctx, tx, user, conversation, request.FileIDs)
 	if err != nil {
 		return err
 	}

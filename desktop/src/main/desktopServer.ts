@@ -1,13 +1,13 @@
 import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
-import { groupFilePath, parseGroupFilePath, type GroupFile } from '../shared/groupFiles'
+import { chatFilePath, parseChatFilePath, type ChatFile } from '../shared/chatFiles'
 import {
-  listGroupFiles,
-  uploadGroupFile,
-  previewGroupFile,
-  readGroupFile,
-  renameGroupFile,
-  deleteGroupFile,
-} from './groupFiles'
+  listChatFiles,
+  uploadChatFile,
+  previewChatFile,
+  readChatFile,
+  renameChatFile,
+  deleteChatFile,
+} from './chatFiles'
 import { listTasks } from './tasks'
 import { loginResultPage } from './loginResultPage'
 import { app, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
@@ -730,6 +730,7 @@ export function registerDesktopIpc(): void {
         content: string
         requestId: string
         clientRequestId: string
+        attachments?: Array<{ path: string; sha256: string }>
         replyToId?: string
       },
     ) =>
@@ -803,33 +804,33 @@ export function registerDesktopIpc(): void {
       }),
   )
   ipcMain.handle(
-    'desktop:group-files',
+    'desktop:chat-files',
     (_event, input: { id: string; before?: string; query?: string }) =>
-      handle(() => listGroupFiles(call, input.id, input.before, input.query)),
+      handle(() => listChatFiles(call, input.id, input.before, input.query)),
   )
   ipcMain.handle(
-    'desktop:group-file-upload',
+    'desktop:chat-file-upload',
     (_event, input: { id: string; file: { name: string; bytes: Uint8Array }; requestId: string }) =>
-      handle(() => uploadGroupFile(call, input.id, input.file, input.requestId)),
+      handle(() => uploadChatFile(call, input.id, input.file, input.requestId)),
   )
-  ipcMain.handle('desktop:group-file-preview', (_event, input: { id: string; fileId: string }) =>
-    handle(() => previewGroupFile(call, input.id, input.fileId)),
+  ipcMain.handle('desktop:chat-file-preview', (_event, input: { id: string; fileId: string }) =>
+    handle(() => previewChatFile(call, input.id, input.fileId)),
   )
   ipcMain.handle(
-    'desktop:group-file-rename',
+    'desktop:chat-file-rename',
     (_event, input: { id: string; fileId: string; revision: number; name: string }) =>
-      handle(() => renameGroupFile(call, input.id, input.fileId, input.revision, input.name)),
+      handle(() => renameChatFile(call, input.id, input.fileId, input.revision, input.name)),
   )
   ipcMain.handle(
-    'desktop:group-file-delete',
+    'desktop:chat-file-delete',
     (_event, input: { id: string; fileId: string; revision: number }) =>
-      handle(() => deleteGroupFile(call, input.id, input.fileId, input.revision)),
+      handle(() => deleteChatFile(call, input.id, input.fileId, input.revision)),
   )
-  ipcMain.handle('desktop:group-file-download', (_event, input: { id: string; fileId: string }) =>
+  ipcMain.handle('desktop:chat-file-download', (_event, input: { id: string; fileId: string }) =>
     handle(async () => {
-      const { file, bytes } = await readGroupFile(call, input.id, input.fileId)
+      const { file, bytes } = await readChatFile(call, input.id, input.fileId)
       const selected = await dialog.showSaveDialog({
-        title: '保存群文件',
+        title: '保存聊天文件',
         defaultPath: join(app.getPath('downloads'), file.name),
         buttonLabel: '保存',
       })
@@ -902,7 +903,7 @@ export function registerDesktopIpc(): void {
     ) => handle(() => uploadFile(input)),
   )
   ipcMain.handle('desktop:preview', (_event, input: { path: string; botId?: string }) =>
-    handle(() => previewFile(input.path, input.botId)),
+    handle(() => previewFile(input.path)),
   )
   ipcMain.handle(
     'desktop:reaction',
@@ -968,6 +969,7 @@ async function deliverMessage(
     content: string
     requestId: string
     clientRequestId: string
+    attachments?: Array<{ path: string; sha256: string }>
     replyToId?: string
   },
 ): Promise<unknown> {
@@ -978,6 +980,13 @@ async function deliverMessage(
     {
       client_request_id: input.clientRequestId,
       content: input.content,
+      ...(input.attachments?.length
+        ? {
+            file_ids: input.attachments.map(
+              (attachment) => parseChatFilePath(attachment.path).fileId,
+            ),
+          }
+        : {}),
       ...(input.replyToId ? { reply_to_id: input.replyToId } : {}),
     },
   )) as { submission?: { run_id?: string; message_id?: string } }
@@ -1072,7 +1081,7 @@ type ServerMessage = {
       conversation_id: string
     }
     mentions?: Array<{ id: string; name: string }>
-    group_file?: GroupFile
+    chat_file?: ChatFile
     artifact?: { path?: string; sha256?: string; media_type?: string }
   }>
   reply_to?: { message_id: string; excerpt: string }
@@ -1114,12 +1123,12 @@ function toBubble(message: ServerMessage): {
     .map((block) => block.text ?? '')
     .join('')
   const attachments = (message.blocks ?? []).flatMap((block) => {
-    if (block.kind === 'group_file' && block.group_file) {
-      const file = block.group_file
+    if (block.kind === 'chat_file' && block.chat_file) {
+      const file = block.chat_file
       return [
         {
           name: file.name,
-          path: groupFilePath(file),
+          path: chatFilePath(file),
           sha256: file.sha256,
           mediaType: file.media_type,
           kind:
@@ -1188,66 +1197,24 @@ async function uploadFile(input: {
   groupId?: string
   requestId?: string
 }): Promise<{ path: string; sha256: string }> {
-  if (input.groupId) {
-    const file = await uploadGroupFile(call, input.groupId, input, input.requestId ?? '')
-    return { path: groupFilePath(file), sha256: file.sha256 }
-  }
-  await loadSession()
-  const form = new FormData()
-  form.append(
-    'file',
-    new Blob([Buffer.from(input.bytes)], { type: input.type || 'application/octet-stream' }),
-    input.name,
-  )
-  const query = input.shared ? 'scope=shared' : `bot_id=${encodeURIComponent(input.botId ?? '')}`
-  const response = await transport().fetch(`${requireServerAddress()}/api/v1/fs/upload?${query}`, {
-    method: 'POST',
-    headers: { ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
-    body: form,
-    signal: AbortSignal.timeout(60_000),
-  })
-  const payload = (await response.json()) as {
-    path?: string
-    sha256?: string
-    error?: { message?: string }
-  }
-  if (!response.ok || !payload.path || !payload.sha256) {
-    throw Object.assign(new Error(payload.error?.message ?? '文件没有上传成功。'), {
-      code: 'UPLOAD_FAILED',
-    })
-  }
-  return { path: payload.path, sha256: payload.sha256 }
+  if (Boolean(input.groupId) === Boolean(input.botId) || input.shared)
+    throw new Error('请选择一个有效的聊天会话。')
+  const conversationId = input.groupId
+    ? (
+        (await call('GET', `/groups/${encodeURIComponent(input.groupId)}`)) as {
+          group: ServerGroup
+        }
+      ).group.conversation_id
+    : await conversationFor(input.botId!)
+  const file = await uploadChatFile(call, conversationId, input, input.requestId ?? '')
+  return { path: chatFilePath(file), sha256: file.sha256 }
 }
 
-async function previewFile(path: string, botId?: string): Promise<string> {
-  if (path.startsWith('group-files/')) {
-    const { groupId, fileId } = parseGroupFilePath(path)
-    const preview = await previewGroupFile(call, groupId, fileId)
-    if (!preview.image) throw new Error('该文件没有图片预览，请在群资料库下载。')
-    return preview.image
-  }
-  await loadSession()
-  const query = path.startsWith('shared/')
-    ? `scope=shared&path=${encodeURIComponent(path)}`
-    : `bot_id=${encodeURIComponent(botId ?? '')}&path=${encodeURIComponent(path)}`
-  const response = await transport().fetch(
-    `${requireServerAddress()}/api/v1/fs/download?${query}`,
-    {
-      headers: { ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}) },
-      signal: AbortSignal.timeout(20_000),
-    },
-  )
-  if (!response.ok) throw Object.assign(new Error('附件暂时无法显示。'), { code: 'PREVIEW_FAILED' })
-  const bytes = Buffer.from(await response.arrayBuffer())
-  if (bytes.length > 1_500_000)
-    throw Object.assign(new Error('图片太大，无法在气泡里预览。'), { code: 'PREVIEW_FAILED' })
-  const lower = path.toLowerCase()
-  const type = lower.endsWith('.png')
-    ? 'image/png'
-    : lower.endsWith('.jpg') || lower.endsWith('.jpeg')
-      ? 'image/jpeg'
-      : 'application/octet-stream'
-  return `data:${type};base64,${bytes.toString('base64')}`
+async function previewFile(path: string): Promise<string> {
+  const { conversationId, fileId } = parseChatFilePath(path)
+  const preview = await previewChatFile(call, conversationId, fileId)
+  if (!preview.image) throw new Error('该文件没有图片预览，请在资料库下载。')
+  return preview.image
 }
 
 interface LoginInput {

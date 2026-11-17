@@ -1,7 +1,8 @@
+import { parseChatFilePath } from '../../shared/chatFiles'
 import { useGroupChatActions } from './features/workspace/useGroupChatActions'
 import { ulid } from '../../shared/ulid'
 import type { GroupSummary } from './features/desktop/backend'
-import { useCallback, useEffect, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { installAgentActivityEvents } from './features/avatars/activity'
 import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
@@ -237,6 +238,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   function openSettings(): void {
     setOpenDialog('settings')
   }
+  const uploadIds = useRef(new WeakMap<File, string>())
+
   async function createAgent(profile: NewAgent, requestId: string): Promise<void> {
     const id = await create(profile, requestId)
     setSurface({ kind: 'agent', id })
@@ -585,11 +588,14 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
             onNotice={setNotice}
             onError={setNotice}
             onUpload={async (file) => {
+              const requestId = uploadIds.current.get(file) ?? ulid()
+              uploadIds.current.set(file, requestId)
               const uploaded = await getBackend().uploadAttachment?.(
                 {
                   name: file.name,
                   type: file.type,
                   bytes: new Uint8Array(await file.arrayBuffer()),
+                  requestId,
                 },
                 { botId: agent.id },
               )
@@ -603,6 +609,11 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
                 mediaType: file.type,
                 kind,
               }
+            }}
+            onDownload={async (attachment) => {
+              const { conversationId, fileId } = parseChatFilePath(attachment.path)
+              if (await getBackend().downloadChatFile(conversationId, fileId))
+                setNotice('文件已保存。')
             }}
             onPreview={(attachment) =>
               getBackend().previewAttachment?.(attachment.path, agent.id) ?? Promise.resolve('')

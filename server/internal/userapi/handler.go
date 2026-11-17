@@ -15,9 +15,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/chatlibrary"
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/groupchat"
-	"io.yueyang/tom/internal/grouplibrary"
 	"io.yueyang/tom/internal/httpjson"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/scheduledtasks"
@@ -50,11 +50,11 @@ var _ Catalog = (*bots.Service)(nil)
 
 // Execution 只暴露用户消息和运行查询，不把调度租约、模型绑定或操作写入权交给客户端。
 type Execution interface {
-	GroupFiles(context.Context, identity.Principal, string, string, string) (grouplibrary.Page, error)
-	GroupFileContent(context.Context, identity.Principal, string, string) (grouplibrary.Content, error)
-	UploadGroupFile(context.Context, identity.Principal, string, grouplibrary.Upload) (grouplibrary.File, error)
-	RenameGroupFile(context.Context, identity.Principal, string, string, int64, string) (grouplibrary.File, error)
-	DeleteGroupFile(context.Context, identity.Principal, string, string, int64) error
+	ChatFiles(context.Context, identity.Principal, string, string, string) (chatlibrary.Page, error)
+	ChatFileContent(context.Context, identity.Principal, string, string) (chatlibrary.Content, error)
+	UploadChatFile(context.Context, identity.Principal, string, chatlibrary.Upload) (chatlibrary.File, error)
+	RenameChatFile(context.Context, identity.Principal, string, string, int64, string) (chatlibrary.File, error)
+	DeleteChatFile(context.Context, identity.Principal, string, string, int64) error
 	Tasks(context.Context, identity.Principal, string, string) (scheduledtasks.Page, error)
 	SetTaskEnabled(context.Context, identity.Principal, string, string, int64, bool) (scheduledtasks.Task, error)
 	DeleteTask(context.Context, identity.Principal, string, string, int64) error
@@ -128,11 +128,11 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Get("/api/v2/groups", handler.listGroups)
 	router.Post("/api/v2/groups", handler.createGroup)
 	router.Get("/api/v2/groups/{groupID}", handler.getGroup)
-	router.Get("/api/v2/groups/{groupID}/files", handler.listGroupFiles)
-	router.Post("/api/v2/groups/{groupID}/files", handler.uploadGroupFile)
-	router.Get("/api/v2/groups/{groupID}/files/{fileID}/content", handler.groupFileContent)
-	router.Put("/api/v2/groups/{groupID}/files/{fileID}", handler.renameGroupFile)
-	router.Delete("/api/v2/groups/{groupID}/files/{fileID}", handler.deleteGroupFile)
+	router.Get("/api/v2/conversations/{conversationID}/files", handler.listChatFiles)
+	router.Post("/api/v2/conversations/{conversationID}/files", handler.uploadChatFile)
+	router.Get("/api/v2/conversations/{conversationID}/files/{fileID}/content", handler.chatFileContent)
+	router.Put("/api/v2/conversations/{conversationID}/files/{fileID}", handler.renameChatFile)
+	router.Delete("/api/v2/conversations/{conversationID}/files/{fileID}", handler.deleteChatFile)
 	router.Put("/api/v2/groups/{groupID}", handler.updateGroup)
 	router.Post("/api/v2/groups/{groupID}/state", handler.groupState)
 	router.Get("/api/v2/conversations", handler.listConversations)
@@ -149,7 +149,7 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	protected, err := gate.Protect("desktop", func(w http.ResponseWriter, r *http.Request, principal identity.Principal, attempt identity.Attempt) {
 		r = r.WithContext(context.WithValue(r.Context(), requestKey{}, requestIdentity{principal, attempt}))
 		messagesPath := strings.HasPrefix(r.URL.Path, "/api/v2/conversations/") && strings.HasSuffix(r.URL.Path, "/messages")
-		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || r.URL.Path == "/api/v2/events" || messagesPath || strings.HasPrefix(r.URL.Path, "/api/v2/groups/") && strings.HasSuffix(r.URL.Path, "/files") || strings.HasPrefix(r.URL.Path, "/api/v2/bots/") && strings.HasSuffix(r.URL.Path, "/tasks"))
+		allowsQuery := r.Method == "GET" && (r.URL.Path == "/api/v2/bots" || r.URL.Path == "/api/v2/groups" || r.URL.Path == "/api/v2/conversations" || r.URL.Path == "/api/v2/workspace" || r.URL.Path == "/api/v2/events" || messagesPath || strings.HasPrefix(r.URL.Path, "/api/v2/conversations/") && strings.HasSuffix(r.URL.Path, "/files") || strings.HasPrefix(r.URL.Path, "/api/v2/bots/") && strings.HasSuffix(r.URL.Path, "/tasks"))
 		if r.URL.RawQuery != "" && !allowsQuery {
 			handler.failure(w, r, 400, "INPUT_INVALID", "此接口不接受查询参数")
 			return
@@ -200,14 +200,14 @@ func (handler *Handler) failure(w http.ResponseWriter, r *http.Request, status i
 func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := 503, "USER_SERVICE_UNAVAILABLE", "用户资源服务暂不可用"
 	switch {
-	case errors.Is(err, grouplibrary.ErrInput):
-		status, code, message = 400, "GROUP_FILE_INPUT_INVALID", grouplibrary.ErrInput.Error()
-	case errors.Is(err, grouplibrary.ErrNotFound):
-		status, code, message = 404, "GROUP_FILE_NOT_FOUND", grouplibrary.ErrNotFound.Error()
-	case errors.Is(err, grouplibrary.ErrConflict):
-		status, code, message = 409, "GROUP_FILE_CONFLICT", grouplibrary.ErrConflict.Error()
-	case errors.Is(err, grouplibrary.ErrCapacity):
-		status, code, message = 409, "GROUP_FILE_CAPACITY", grouplibrary.ErrCapacity.Error()
+	case errors.Is(err, chatlibrary.ErrInput):
+		status, code, message = 400, "CHAT_FILE_INPUT_INVALID", chatlibrary.ErrInput.Error()
+	case errors.Is(err, chatlibrary.ErrNotFound):
+		status, code, message = 404, "CHAT_FILE_NOT_FOUND", chatlibrary.ErrNotFound.Error()
+	case errors.Is(err, chatlibrary.ErrConflict):
+		status, code, message = 409, "CHAT_FILE_CONFLICT", chatlibrary.ErrConflict.Error()
+	case errors.Is(err, chatlibrary.ErrCapacity):
+		status, code, message = 409, "CHAT_FILE_CAPACITY", chatlibrary.ErrCapacity.Error()
 	case errors.Is(err, scheduledtasks.ErrInput):
 		status, code, message = 400, "TASK_INPUT_INVALID", scheduledtasks.ErrInput.Error()
 	case errors.Is(err, scheduledtasks.ErrNotFound):

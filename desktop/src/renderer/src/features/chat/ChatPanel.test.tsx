@@ -374,3 +374,21 @@ it('工作动画和真实任务摘要显示时仍可发送补充消息', async (
   await userEvent.setup().click(screen.getByRole('button', { name: '发送' }))
   expect(props.onSave).toHaveBeenCalledOnce()
 })
+
+it('空闲输入框不保留工作状态空白，上翻消息后可用图标回到底部', () => {
+  renderPanel()
+  expect(document.querySelector('.work-status-slot')).toBeNull()
+  expect(document.querySelector('.work-status')).toBeNull()
+  const viewport = screen.getByRole('region', { name: '与小黑的会话' })
+  Object.defineProperties(viewport, {
+    scrollHeight: { value: 1000 },
+    clientHeight: { value: 400 },
+  })
+  viewport.scrollTop = 100
+  fireEvent.scroll(viewport)
+  const back = screen.getByRole('button', { name: '回到最新消息' })
+  expect(back.querySelector('svg')).not.toBeNull()
+  fireEvent.click(back)
+  expect(viewport.scrollTop).toBe(1000)
+  expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+})
