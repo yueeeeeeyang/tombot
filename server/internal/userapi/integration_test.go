@@ -134,7 +134,7 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(catalog, executor, userEvents, gate, logger)
+	handler, err := New(catalog, executor, unavailableConsole{}, userEvents, gate, logger)
 	if err != nil {
 		t.Fatal(err)
 	}

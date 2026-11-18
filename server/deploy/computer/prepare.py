@@ -79,6 +79,8 @@ def prepare_layout(workspace, runtime, temporary, root_uid, root_gid, shared_gid
                 pass
         with ensure_directory(shared, ".tmp", root_uid, root_gid, shared_gid, SHARED_MODE):
             pass
+        with ensure_directory(shared, "Downloads", root_uid, root_gid, shared_gid, SHARED_MODE):
+            pass
         with ensure_directory(run, "bot-desktops", root_uid, root_gid, root_gid, 0o711):
             pass
         with ensure_directory(run, "tombot-browser", root_uid, root_gid, root_gid, 0o711):

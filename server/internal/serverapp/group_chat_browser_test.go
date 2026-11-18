@@ -276,24 +276,56 @@ try {
     }
   }
   await panel.getByRole('button',{name:'关闭群资料',exact:true}).click();
-  stage = '群附件收录与回到底部';
+  stage = '选入群附件草稿';
   await window.locator('.composer input[type=file]').setInputFiles({name:'群聊资料.txt',mimeType:'text/plain',buffer:Buffer.from('群聊资料正文')});
-  await window.locator('.composer-files').getByText('群聊资料.txt',{exact:true}).waitFor();
-  await composer.fill(Array.from({length:40},(_,i)=>'滚动验证第'+(i+1)+'行').join('\n'));
+  const attachmentDraft = window.getByRole('list', { name: '待发送附件', exact: true });
+  await attachmentDraft.getByRole('button', { name: '移除群聊资料.txt', exact: true }).waitFor();
+  stage = '发送群附件和长消息';
+  const historyLines = Array.from({ length: 40 }, (_, index) => '滚动验证第' + (index + 1) + '行');
+  await composer.fill(historyLines.join('\n'));
   await window.getByRole('button',{name:'发送',exact:true}).click();
-  await window.locator('.saved-messages').getByText('群聊资料.txt',{exact:true}).waitFor();
-  await window.locator('.messages-scroll').evaluate(element=>{element.scrollTop=0;element.dispatchEvent(new Event('scroll',{bubbles:true}));});
-  await window.getByRole('button',{name:'回到最新消息',exact:true}).click();
-  await window.getByRole('button',{name:'回到最新消息',exact:true}).waitFor({state:'hidden'});
-  if(await window.locator('.messages-scroll').evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight>48))throw new Error('没有返回消息底部');
+  const groupHistory = window.getByRole('log', { name: '协作讨论', exact: true });
+  await groupHistory.getByRole('button', { name: '下载 群聊资料.txt', exact: true }).waitFor();
+  await groupHistory.getByText(historyLines.at(-1)).waitFor();
+  stage = '滚到群历史并返回最新消息';
+  const history = window.getByRole('region', { name: '与协作讨论的会话', exact: true });
+  const overflow = await history.evaluate(async element => {
+    // 发送后的贴底定位还会在下一帧复核。等待这次定位完成后再模拟用户阅读历史。
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const distance = element.scrollHeight - element.clientHeight;
+    element.scrollTo({ top: 0, behavior: 'instant' });
+    return distance;
+  });
+  if (overflow <= 48) {
+    stage += '，超出视口的高度=' + overflow;
+    throw new Error('长消息未形成可滚动的历史');
+  }
+  const returnToLatest = window.getByRole('button', { name: '回到最新消息', exact: true });
+  await returnToLatest.click();
+  await returnToLatest.waitFor({ state: 'hidden' });
+  await window.waitForFunction(() => {
+    const element = document.querySelector('.messages-scroll');
+    return element && element.scrollHeight - element.scrollTop - element.clientHeight < 2;
+  });
+  stage = '打开群资料库';
   await window.getByRole('button',{name:'查看协作讨论群资料',exact:true}).click();
   await panel.getByRole('tab',{name:'资料库',exact:true}).click();
-  await panel.getByRole('button',{name:'预览 群聊资料.txt',exact:true}).waitFor();
-  if(await panel.getByText('单聊需求.txt',{exact:true}).count())throw new Error('群资料库混入单聊文件');
-  if(await panel.locator('.chat-library-search').evaluate(form=>{
-    const input=form.querySelector('input').getBoundingClientRect(),button=form.querySelector('button').getBoundingClientRect();
-    return button.left<input.left || button.right>input.right || button.top<input.top || button.bottom>input.bottom;
-  }))throw new Error('搜索图标没有置于输入框内');
+  const groupLibrary = panel.getByRole('tabpanel', { name: '资料库', exact: true });
+  const search = groupLibrary.getByRole('search');
+  await search.waitFor();
+  stage = '核对已发送群附件收录';
+  await groupLibrary.getByRole('button', { name: '预览 群聊资料.txt', exact: true }).waitFor();
+  stage = '核对群资料库与单聊隔离';
+  if (await groupLibrary.getByRole('button', { name: '预览 单聊需求.txt', exact: true }).count()) throw new Error('群资料库混入单聊文件');
+  stage = '核对群资料库搜索控件对齐';
+  const searchLayout = await search.evaluate(form => {
+    const bounds = form.getBoundingClientRect();
+    const field = form.querySelector('input').getBoundingClientRect();
+    const button = form.querySelector('button').getBoundingClientRect();
+    const within = rect => rect.left >= bounds.left && rect.right <= bounds.right && rect.top >= bounds.top && rect.bottom <= bounds.bottom;
+    return within(field) && within(button) && field.right <= button.left;
+  });
+  if (!searchLayout) throw new Error('搜索输入与按钮没有并排置于搜索框内');
   if(settings.screenshots)await window.screenshot({path:join(settings.screenshots,'group-library.png')});
   await panel.getByRole('button',{name:'关闭群资料',exact:true}).click();
   stage = '侧栏重命名、置顶和重新打开';

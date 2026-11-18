@@ -10,7 +10,6 @@ import {
   REPLY_EXCERPT_LENGTH,
   saveMessage,
   searchAgents,
-  setAgentComputerUrl,
   setAgentModel,
   toggleReaction,
   toModelTranscript,
@@ -33,7 +32,7 @@ describe('工作空间领域规则', () => {
     expect(appWorkspaceSchema.safeParse(workspace).success).toBe(true)
     expect(workspace.version).toBe(5)
     expect(
-      workspace.agents.every((agent) => agent.artifacts.length === 0 && agent.computerUrl === ''),
+      workspace.agents.every((agent) => agent.artifacts.length === 0 && !('computerUrl' in agent)),
     ).toBe(true)
     expect(workspace.agents.every((agent) => agent.modelId === 'gpt-4o')).toBe(true)
     expect(workspace.agents).toHaveLength(8)
@@ -316,18 +315,15 @@ describe('工作空间领域规则', () => {
     expect(workspace.agents[0]?.modelId).toBe(DEFAULT_CAT_MODEL_ID)
   })
 
-  it('保存远端电脑地址时规范化，拒绝凭据和未知猫咪', () => {
-    const workspace = createWorkspace()
-    const saved = setAgentComputerUrl(workspace, 'assistant', 'https://desktop.example.test/view')
-    expect(saved.agents[0]?.computerUrl).toBe('https://desktop.example.test/view')
-    expect(workspace.agents[0]?.computerUrl).toBe('')
-    expect(setAgentComputerUrl(saved, 'assistant', '  ').agents[0]?.computerUrl).toBe('')
-    expect(() =>
-      setAgentComputerUrl(workspace, 'assistant', 'https://user:secret@desktop.example.test'),
-    ).toThrow('登录凭据')
-    expect(() => setAgentComputerUrl(workspace, 'missing', 'https://desktop.example.test')).toThrow(
-      '助手不存在',
-    )
-    expect(workspace.agents[0]?.computerUrl).toBe('')
+  it('旧电脑地址不会进入当前工作空间或驱动远端画面', () => {
+    const previous = createWorkspace()
+    const restored = appWorkspaceSchema.parse({
+      ...previous,
+      agents: previous.agents.map((agent) => ({
+        ...agent,
+        computerUrl: 'https://desktop.example.test/',
+      })),
+    })
+    expect(restored.agents.every((agent) => !('computerUrl' in agent))).toBe(true)
   })
 })

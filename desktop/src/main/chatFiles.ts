@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { z } from 'zod'
+import { attachmentMediaType } from '../shared/attachmentMedia'
+import { parseChatFilePath } from '../shared/chatFiles'
 import {
   CHAT_FILE_MAX_BYTES,
   type ChatFile,
@@ -111,6 +113,15 @@ export async function readChatFile(
     throw new Error('文件内容校验失败，请重新下载。')
   return { file: result.file, bytes }
 }
+/** 消息预览与下载使用相同的会话授权、文件大小及摘要校验。 */
+export async function previewMessageFile(call: Call, path: string): Promise<string> {
+  const { conversationId, fileId } = parseChatFilePath(path)
+  const { file, bytes } = await readChatFile(call, conversationId, fileId)
+  const type = attachmentMediaType(file.name, file.media_type)
+  if (!type) throw new Error('此格式无法在客户端预览。')
+  return `data:${type};base64,${bytes.toString('base64')}`
+}
+
 /** 只展示静态图片和转义后的纯文本；HTML、SVG 及其他二进制不会作为页面执行。 */
 export async function previewChatFile(
   call: Call,

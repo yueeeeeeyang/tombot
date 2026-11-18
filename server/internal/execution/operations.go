@@ -82,6 +82,20 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 			if !allowed {
 				return ErrUnavailable
 			}
+		} else if chatlibrary.IsComputerTool(request.ToolName) {
+			var permitted bool
+			if request.Kind != "computer" {
+				return ErrUnavailable
+			}
+			if err := transaction.QueryRowContext(ctx, `SELECT tool_permissions ?| ARRAY['computer_shell','computer_browser','computer_screenshot','computer_input'] FROM tombot.bots WHERE user_id=$1 AND id=$2`, lease.UserID, lease.BotID).Scan(&permitted); err != nil {
+				return err
+			}
+			if !permitted {
+				return ErrUnavailable
+			}
+			if _, _, err := libraryConversation(ctx, transaction, lease); err != nil {
+				return err
+			}
 		} else if request.Kind == "tool" && chatlibrary.IsTool(request.ToolName) {
 			if _, _, err := libraryConversation(ctx, transaction, lease); err != nil {
 				return err

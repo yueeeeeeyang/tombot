@@ -254,11 +254,9 @@ func (controller *BrowserController) execute(ctx context.Context, operation brow
 		}
 	}()
 	bounded, cancel := context.WithDeadline(ctx, deadline)
-	bounded, cancelCall := context.WithTimeout(bounded, controller.options.CallTimeout)
 	stopShutdown := context.AfterFunc(controller.lifetime, cancel)
 	defer stopShutdown()
 	defer cancel()
-	defer cancelCall()
 	select {
 	case controller.gate <- struct{}{}:
 	case <-bounded.Done():

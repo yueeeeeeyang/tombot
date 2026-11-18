@@ -9,11 +9,13 @@ export function GroupComposer({
   members,
   onChange,
   onSend,
+  readOnly,
 }: {
   title: string
   draft: string
   members: Agent[]
   onChange: (value: string, mentions: string[]) => void
+  readOnly?: boolean
   onSend: () => void
 }) {
   const input = useRef<HTMLTextAreaElement>(null)
@@ -92,6 +94,7 @@ export function GroupComposer({
       )}
       <textarea
         ref={input}
+        readOnly={readOnly}
         rows={1}
         value={draft}
         aria-label={`给${title}发消息`}

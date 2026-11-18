@@ -19,6 +19,11 @@ func (router *Router) Ensure(ctx context.Context, input computer.Specification) 
 func (router *Router) Remove(ctx context.Context, input computer.Specification) (computer.Observation, error) {
 	return routeCall[computer.Observation](ctx, router, input.NodeID, "remove", input)
 }
+
+// UpgradeComputer 按已登记节点地址发送迁移请求，目标与原电脑必须属于同一节点。
+func (router *Router) UpgradeComputer(ctx context.Context, input computer.ImageUpgrade) (computer.Observation, error) {
+	return routeCall[computer.Observation](ctx, router, input.Target.NodeID, "computer_upgrade", input)
+}
 func (router *Router) Open(ctx context.Context, input computer.SessionCommand) (computer.SessionObservation, error) {
 	return routeCall[computer.SessionObservation](ctx, router, input.Session.NodeID, "open", input)
 }
@@ -69,8 +74,21 @@ func (router *Router) ReadAgent(ctx context.Context, input computer.AgentRead) (
 }
 
 var _ computer.Runtime = (*Router)(nil)
+var _ computer.ImageUpgrader = (*Router)(nil)
 var _ computer.NodeRuntime = (*Router)(nil)
 var _ computer.SessionRuntime = (*Router)(nil)
 var _ computer.TerminalRuntime = (*Router)(nil)
 var _ computer.DesktopRuntime = (*Router)(nil)
 var _ computer.AgentRuntime = (*Router)(nil)
+
+func (router *Router) TransferFile(ctx context.Context, input computer.FileRequest) (computer.FileReceipt, error) {
+	return routeCall[computer.FileReceipt](ctx, router, input.Session.NodeID, "file_transfer", input)
+}
+
+var _ computer.FileRuntime = (*Router)(nil)
+
+func (router *Router) Console(ctx context.Context, input computer.ConsoleRequest) (computer.ConsoleReceipt, error) {
+	return routeCall[computer.ConsoleReceipt](ctx, router, input.Session.NodeID, "console", input)
+}
+
+var _ computer.ConsoleRuntime = (*Router)(nil)

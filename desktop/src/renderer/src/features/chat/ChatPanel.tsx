@@ -1,6 +1,6 @@
 import { ReplyPreview } from './ReplyPreview'
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowUp, ChevronRight, Mic, Plus, X } from 'lucide-react'
+import { ArrowUp, ChevronRight, Mic, Plus } from 'lucide-react'
 import { Avatar } from '../../components/Avatar'
 import {
   MAX_MESSAGE_LENGTH,
@@ -10,6 +10,7 @@ import {
   type MessageAttachment,
 } from '../workspace/model'
 import { WorkStatus } from './WorkStatus'
+import { ComposerFiles } from './ComposerFiles'
 import { useAttachments } from './useAttachments'
 import { pasteFiles } from './pasteFiles'
 import { ChatMessage } from './ChatMessage'
@@ -74,11 +75,11 @@ export function ChatPanel({
   const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [isAttachmentOpen, setAttachmentOpen] = useState(false)
   const {
-    pending: pendingAttachments,
-    setPending: setPendingAttachments,
-    addFiles: uploadFiles,
-    isUploading,
-    uploading,
+    draftFiles,
+    addFiles: stageFiles,
+    removeFile,
+    sendFiles,
+    isSending,
   } = useAttachments(async (file) => {
     if (!onUpload) throw new Error('还不能添加附件。')
     return onUpload(file)
@@ -132,25 +133,27 @@ export function ChatPanel({
       onError('复制失败，请检查剪贴板权限后重试。')
     }
   }
-  function submitDraft(): void {
-    if ((!agent.draft.trim() && pendingAttachments.length === 0) || uploading.current || isBlocked)
-      return
-    if (onSave(replyMessage?.id, pendingAttachments)) {
-      setPendingAttachments([])
-      setReplyToId(undefined)
-      composer.current?.focus()
+  async function submitDraft(): Promise<void> {
+    if ((!agent.draft.trim() && !draftFiles.length) || isBlocked) return
+    try {
+      if (await sendFiles((files) => onSave(replyMessage?.id, files))) {
+        setReplyToId(undefined)
+        composer.current?.focus()
+      }
+    } catch (failure) {
+      onError((failure as Error).message)
     }
   }
   async function addFiles(files: File[]): Promise<void> {
     try {
-      await uploadFiles(files)
+      await stageFiles(files)
     } catch (failure) {
       onError((failure as Error).message)
     }
   }
   function handleSubmit(event: FormEvent): void {
     event.preventDefault()
-    submitDraft()
+    void submitDraft()
   }
 
   return (
@@ -288,26 +291,6 @@ export function ChatPanel({
       >
         {showScrollToBottom && <ScrollToBottom onClick={scrollToBottom} />}
         {workSummary !== undefined && <WorkStatus summary={workSummary} agents={[agent]} />}
-        {pendingAttachments.length > 0 && (
-          <div className="composer-files">
-            {pendingAttachments.map((item) => (
-              <span key={item.path}>
-                {item.name}
-                <button
-                  type="button"
-                  aria-label={`移除${item.name}`}
-                  onClick={() =>
-                    setPendingAttachments((current) =>
-                      current.filter((candidate) => candidate.path !== item.path),
-                    )
-                  }
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
         {composerNotice}
         {replyMessage && (
           <ReplyPreview
@@ -316,7 +299,11 @@ export function ChatPanel({
             onCancel={() => setReplyToId(undefined)}
           />
         )}
-        <form className="composer" onSubmit={handleSubmit}>
+        <form
+          className={draftFiles.length ? 'composer has-files' : 'composer'}
+          onSubmit={handleSubmit}
+        >
+          <ComposerFiles files={draftFiles} onRemove={removeFile} isSending={isSending} />
           <input
             ref={fileInput}
             type="file"
@@ -330,6 +317,7 @@ export function ChatPanel({
           <button
             className={`composer-add ${isAttachmentOpen ? 'is-open' : ''}`}
             type="button"
+            disabled={isSending || isBlocked}
             aria-label="添加附件"
             onClick={() => fileInput.current?.click()}
           >
@@ -341,6 +329,7 @@ export function ChatPanel({
             rows={1}
             maxLength={MAX_MESSAGE_LENGTH}
             disabled={isBlocked}
+            readOnly={isSending}
             aria-label={`给${agent.name}发消息`}
             placeholder={`给 ${agent.name} 发消息`}
             onChange={(event) => onDraft(event.target.value)}
@@ -352,7 +341,7 @@ export function ChatPanel({
                 event.keyCode !== 229
               ) {
                 event.preventDefault()
-                submitDraft()
+                void submitDraft()
               }
             }}
           />
@@ -368,9 +357,7 @@ export function ChatPanel({
           <button
             className="composer-send"
             type="submit"
-            disabled={
-              isUploading || isBlocked || (!agent.draft.trim() && pendingAttachments.length === 0)
-            }
+            disabled={isSending || isBlocked || (!agent.draft.trim() && !draftFiles.length)}
             aria-label="发送"
             title="发送"
           >

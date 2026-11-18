@@ -1,4 +1,5 @@
 import type { CatTask } from '../../../../shared/tasks'
+import type { ConsoleBackend } from '../../../../shared/console'
 import type { ChatFile, ChatFilePage, ChatFilePreview } from '../../../../shared/chatFiles'
 import type { Agent, AppWorkspace, NewAgent, DmNotice } from '../workspace/model'
 
@@ -46,6 +47,11 @@ export interface LoginCredentials {
 export interface WorkspaceSnapshot {
   workspace: AppWorkspace
   pristine: boolean
+}
+
+export interface WorkspaceLoadFailure {
+  errorCode: string
+  message: string
 }
 
 export type ServerBubble = {
@@ -104,7 +110,7 @@ export type ApplicationAbout = {
   serverError?: string
 }
 
-export interface DesktopBackend {
+export interface DesktopBackend extends Partial<ConsoleBackend> {
   loadConversationPreviews: (ids: string[]) => Promise<ConversationPreview[]>
   loadAbout: () => Promise<ApplicationAbout>
   readClipboardFiles?: () => Promise<Array<{ name: string; type: string; bytes: Uint8Array }>>
@@ -123,7 +129,7 @@ export interface DesktopBackend {
   /** 订阅当前用户事件；服务端在有界窗口后收尾，调用方负责续订。 */
   watchEvents?: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => () => void
   tryWorkspaceSync?: () => WorkspaceSnapshot
-  loadWorkspace: () => Promise<WorkspaceSnapshot>
+  loadWorkspace: () => Promise<WorkspaceSnapshot | WorkspaceLoadFailure>
   loadAgentConversation?: (agentId: string, before?: number) => Promise<AgentConversation>
   /** 创建机器人及其单聊会话；同一次表单重试必须复用请求标识，失败时抛出。 */
   createAgent: (profile: NewAgent, requestId: string) => Promise<Agent>
@@ -137,7 +143,6 @@ export interface DesktopBackend {
     replyToId?: string,
     attachments?: Array<{ path: string; sha256: string }>,
   ) => Promise<DeliveryResult>
-  openComputer?: (agentId: string) => Promise<string>
   listTasks?: (agentId: string) => Promise<CatTask[]>
   setTaskEnabled?: (
     agentId: string,

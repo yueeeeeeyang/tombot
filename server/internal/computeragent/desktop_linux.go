@@ -48,13 +48,14 @@ func (scope *kernelScope) StartDesktop(ctx context.Context, reference processgro
 		return desktop.snapshot(), nil
 	}
 	desktop := &managedDesktop{status: computer.DesktopStatus{Session: session, State: "starting"}, done: make(chan struct{}), probed: make(chan struct{}), stop: make(chan struct{}), onFailure: onFailure}
+	scope.desktopGroup = "/" + reference.Name() + "/browser"
 	desktop.access = newDesktopAccess(session, func(ctx context.Context) (net.Conn, error) {
-		return openDesktopConnection(ctx, session, "/"+reference.Name()+"/shell")
+		return openDesktopConnection(ctx, session, "/"+reference.Name()+"/browser")
 	})
 	scope.desktop = desktop
 	directory := scope.directory
 	scope.mu.Unlock()
-	request := taskprocess.Request{Version: 2, OperationID: session.SessionID, Group: reference, Role: "shell", ProcessCommand: computer.ProcessCommand{Program: "/usr/bin/python3", WorkingDirectory: "/workspace", Arguments: []string{"-I", "-B", "/usr/lib/tombot/desktop.py", "--runtime", session.RuntimeDirectory(), "--display", strconv.Itoa(session.DisplayNumber)}}}
+	request := taskprocess.Request{Version: 2, OperationID: session.SessionID, Group: reference, Role: "browser", ProcessCommand: computer.ProcessCommand{Program: "/usr/bin/python3", WorkingDirectory: "/workspace", Arguments: []string{"-I", "-B", "/usr/lib/tombot/desktop.py", "--runtime", session.RuntimeDirectory(), "--display", strconv.Itoa(session.DisplayNumber)}}}
 	command, err := startDesktopTask(ctx, request, membership, revocation)
 	desktop.command = command
 	if command != nil && command.Process != nil {
@@ -63,7 +64,7 @@ func (scope *kernelScope) StartDesktop(ctx context.Context, reference processgro
 			if err != nil || !ready {
 				return ready, err
 			}
-			err = probeDesktopSocket(ctx, session, "/"+reference.Name()+"/shell")
+			err = probeDesktopSocket(ctx, session, "/"+reference.Name()+"/browser")
 			return err == nil, err
 		})
 	} else {

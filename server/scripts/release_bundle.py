@@ -22,15 +22,15 @@ from build_computer_image import ENVIRONMENT_FILE, IMAGE_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = ("amd64", "arm64")
-FORMAT_VERSION = 7
+FORMAT_VERSION = 8
 HOST_PROGRAMS = ("tomd", "tomnode")
 COMPUTER_PROGRAMS = ("computer-agent", "computer-task", "computer-probe", "bot-agent")
-DEPLOY_FILES = ("tomd.service", "systemd/tombot-node.service", "node.example.json", "node-install.example.json",
+DEPLOY_FILES = ("tomd.service", "systemd/tombot-node.service", "systemd/tombot-node-update.service", "systemd/tombot-node-update.timer", "node.example.json", "node-install.example.json",
                 "docker-install.schema.json", "computer-image.schema.json", "CONFIGURE.md", "NODE.md", "SERVER.md")
-VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py")
+VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py", "node_release.py", "sign_node_release.py")
 SOURCE_DIRECTORIES = ("server/cmd", "server/internal", "server/web", "server/deploy", "server/scripts", "admin", "ui")
 SHARED_ASSETS = ("desktop/src/renderer/src/assets/cats/frames/bombay.png",)
-SOURCE_SUFFIXES = {".go", ".sql", ".html", ".json", ".py", ".xml", ".service", ".md",
+SOURCE_SUFFIXES = {".go", ".sql", ".html", ".json", ".py", ".xml", ".service", ".timer", ".md",
                    ".ts", ".tsx", ".js", ".mjs", ".css", ".png", ".svg", ".ico", ".woff2"}
 SOURCE_NAMES = {"Dockerfile", "Caddyfile", "seccomp.LICENSE", ".prettierignore"}
 EXCLUDED_DIRECTORIES = {"node_modules", "dist", "coverage", "test-results", "playwright-report", "__pycache__"}

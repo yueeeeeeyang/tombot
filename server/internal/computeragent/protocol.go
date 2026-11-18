@@ -60,9 +60,9 @@ func NewClient(dial func(context.Context) (*net.UnixConn, error), check PeerChec
 	return &Client{dial: dial, check: check, timeout: timeout}, nil
 }
 
-// Open 只传递四个当前会话入口，调用方继续拥有原始描述符并负责关闭。
+// Open 只传递六个当前会话入口，调用方继续拥有原始描述符并负责关闭。
 func (client *Client) Open(ctx context.Context, grant Grant, files []*os.File) (computer.SessionObservation, error) {
-	if grant.Command.Validate() != nil || grant.Group.Validate() != nil || grant.Group.Session != grant.Command.Session || len(files) != 4 || grant.Deadline.ExpiresNS <= 0 || grant.Deadline.TimeNamespace == 0 {
+	if grant.Command.Validate() != nil || grant.Group.Validate() != nil || grant.Group.Session != grant.Command.Session || len(files) != processgroup.ExecutionControlFiles || grant.Deadline.ExpiresNS <= 0 || grant.Deadline.TimeNamespace == 0 {
 		return computer.SessionObservation{}, errors.New("电脑代理开启请求无效")
 	}
 	return client.call(ctx, "open", grant, files, grant.Command, "active")
@@ -96,35 +96,48 @@ func (client *Client) call(ctx context.Context, method string, body any, files [
 
 // exchange 每次只发送一次请求，未知结果由业务操作身份对账，不在传输层重放。
 func (client *Client) exchange(ctx context.Context, method string, body any, files []*os.File, result any) (failure error) {
+	received, err := client.exchangeFiles(ctx, method, body, files, result, 0)
+	return errors.Join(err, agentchannel.CloseFiles(received))
+}
+
+// exchangeFiles 仅固定方法允许返回描述符；失败路径保留所有权并关闭收到的资源。
+func (client *Client) exchangeFiles(ctx context.Context, method string, body any, files []*os.File, result any, expected int) (owned []*os.File, failure error) {
 	encoded, err := agentchannel.Encode(body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, client.timeout)
 	defer cancel()
 	connection, err := client.dial(ctx)
 	if err != nil {
-		return &ConnectionError{cause: err}
+		return nil, &ConnectionError{cause: err}
 	}
 	channel, peer, err := agentchannel.New(connection, client.timeout)
 	if err != nil {
-		return errors.Join(err, connection.Close())
+		return nil, errors.Join(err, connection.Close())
 	}
 	defer func() { failure = errors.Join(failure, channel.Close()) }()
 	if err = client.check(peer); err != nil {
-		return errors.New("电脑代理对端实例验证失败")
+		return nil, errors.New("电脑代理对端实例验证失败")
 	}
 	request := agentchannel.Message{Version: 1, ID: ids.New(), Method: method, Files: len(files), Body: encoded}
 	if err = channel.Send(ctx, request, files); err != nil {
-		return err
+		return nil, err
 	}
 	response, received, err := channel.Receive(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer func() { failure = errors.Join(failure, agentchannel.CloseFiles(received)) }()
-	if response.ID != request.ID || response.Method != "result" || response.Files != 0 {
-		return errors.New("电脑代理响应身份或描述符无效")
+	defer func() {
+		if owned == nil {
+			failure = errors.Join(failure, agentchannel.CloseFiles(received))
+		}
+	}()
+	if response.ID != request.ID || response.Method != "result" || response.Files != expected || len(received) != expected {
+		return nil, errors.New("电脑代理响应身份或描述符无效")
 	}
-	return agentchannel.Decode(response.Body, result)
+	if err := agentchannel.Decode(response.Body, result); err != nil {
+		return nil, err
+	}
+	return received, nil
 }

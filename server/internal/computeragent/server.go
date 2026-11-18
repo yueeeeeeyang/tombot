@@ -10,6 +10,7 @@ import (
 
 	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/processgroup"
 )
 
 // Server 处理会话授权与受管终端协议；完整电脑就绪仍要求文件、桌面与浏览器能力探测。
@@ -67,16 +68,16 @@ func (server *Server) Serve(ctx context.Context, listener *net.UnixListener) (fa
 		go func() {
 			defer pending.Done()
 			defer func() { <-slots }()
-			call, cancel := context.WithTimeout(ctx, server.timeout)
-			defer cancel()
-			if err := server.serveConnection(call, connection); err != nil && ctx.Err() == nil {
+			if err := server.serveConnection(ctx, connection); err != nil && ctx.Err() == nil {
 				server.logger.WarnContext(ctx, "电脑代理控制请求未确认", "user_id", server.controller.identity.UserID, "computer_id", server.controller.identity.ComputerID)
 			}
 		}()
 	}
 }
 
-func (server *Server) serveConnection(ctx context.Context, connection *net.UnixConn) (failure error) {
+func (server *Server) serveConnection(parent context.Context, connection *net.UnixConn) (failure error) {
+	ctx, cancel := context.WithTimeout(parent, server.timeout)
+	defer cancel()
 	channel, peer, err := agentchannel.New(connection, server.timeout)
 	if err != nil {
 		return errors.Join(err, connection.Close())
@@ -93,7 +94,13 @@ func (server *Server) serveConnection(ctx context.Context, connection *net.UnixC
 	if request.Method == "health" {
 		return server.serveHealth(ctx, channel, request, len(files))
 	}
-	if request.Method == "browser_start" || request.Method == "browser_status" || request.Method == "browser_close" || request.Method == "browser_probe" {
+	if request.Method == "browser_start" {
+		owned := files
+		files = nil
+		// 启动由授权中的绝对期限约束，读写单个报文仍使用通道原有时限。
+		return server.serveBrowser(parent, channel, request, owned)
+	}
+	if request.Method == "browser_status" || request.Method == "browser_close" || request.Method == "browser_probe" {
 		owned := files
 		files = nil
 		return server.serveBrowser(ctx, channel, request, owned)
@@ -109,6 +116,15 @@ func (server *Server) serveConnection(ctx context.Context, connection *net.UnixC
 	if request.Method == "desktop_start" || request.Method == "desktop_status" {
 		return server.serveDesktop(ctx, channel, request, len(files))
 	}
+	if request.Method == "file_transfer" {
+		return server.serveFileTransfer(ctx, channel, request, len(files))
+	}
+	if request.Method == "desktop_connect" {
+		return server.serveDesktopStream(ctx, channel, request, len(files))
+	}
+	if request.Method == "console" {
+		return server.serveConsole(ctx, channel, request, len(files))
+	}
 	if request.Method == "desktop_capture" || request.Method == "desktop_image_read" || request.Method == "desktop_input" {
 		return server.serveDesktopIO(ctx, channel, request, len(files))
 	}
@@ -120,7 +136,7 @@ func (server *Server) serveConnection(ctx context.Context, connection *net.UnixC
 	case "open":
 		var input Grant
 		err = agentchannel.Decode(request.Body, &input)
-		if err == nil && len(files) != 4 {
+		if err == nil && len(files) != processgroup.ExecutionControlFiles {
 			err = errors.New("电脑代理开启缺少受限描述符")
 		}
 		if err == nil {

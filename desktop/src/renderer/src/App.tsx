@@ -9,6 +9,7 @@ import { preloadCatFrames } from './features/avatars/catMotion'
 import { AlertCircle, X } from 'lucide-react'
 import { Sidebar } from './features/workspace/Sidebar'
 import { CatSidePanel } from './features/chat/CatSidePanel'
+import { ChatImagePreviewProvider } from './features/chat/ChatImagePreviewProvider'
 import { ChatPanel } from './features/chat/ChatPanel'
 import { useWorkActivity } from './features/chat/useWorkActivity'
 import {
@@ -17,19 +18,16 @@ import {
   GroupCreateDialog,
 } from './features/chat/ConversationPanel'
 import { useWorkspace } from './features/workspace/useWorkspace'
-import {
-  saveMessage,
-  setAgentComputerUrl,
-  updateDraft,
-  type NewAgent,
-} from './features/workspace/model'
+import { saveMessage, updateDraft, type NewAgent } from './features/workspace/model'
 import {
   FirstCatPage,
   RecruitCatDialog,
   WorkspaceDialog,
 } from './features/workspace/WorkspaceDialogs'
 import { getBackend } from './features/desktop/backend'
-import type { DmNotice, MessageAttachment } from './features/workspace/model'
+import { previewAttachment } from './features/chat/MessageFile'
+import { attachmentKind } from '../../shared/attachmentMedia'
+import type { DmNotice } from './features/workspace/model'
 import {
   CatContextMenu,
   type CatMenuAction,
@@ -66,7 +64,11 @@ export default function App() {
   const session = useSession()
   useTheme()
   if (session.phase !== 'ready') return <SessionGate session={session} />
-  return <WorkspaceApp session={session} />
+  return (
+    <ChatImagePreviewProvider key={session.serverUrl}>
+      <WorkspaceApp session={session} />
+    </ChatImagePreviewProvider>
+  )
 }
 
 /** 组合工作空间界面并协调领域操作；错误始终向用户展示。 */
@@ -82,12 +84,13 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     error,
     isBlocked,
     ready,
+    retryLoadingWorkspace,
     historyPages,
     loadEarlier,
     hasUnsavedChanges,
     dismissError,
   } = useWorkspace(receiveActivity, clearActivity)
-  const connectionStatus = useConnectionStatus()
+  const connectionStatus = useConnectionStatus(retryLoadingWorkspace)
   const {
     profile: userProfile,
     error: profileError,
@@ -201,8 +204,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       .catch((failure: Error) => setNotice(failure.message))
   }, [])
   useEffect(() => {
-    if (ready) refreshRooms()
-  }, [ready, refreshRooms])
+    if (ready && !isBlocked) refreshRooms()
+  }, [ready, isBlocked, refreshRooms])
   // 帧没解码完不切换图片，失败时保持睁眼原图，错误已在预加载里记录。
   useEffect(() => {
     preloadCatFrames().catch(() => undefined)
@@ -429,6 +432,18 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
       </SessionFrame>
     )
   }
+  if (isBlocked && !agent) {
+    return (
+      <SessionFrame>
+        <section className="session-card">
+          <h1>暂时无法打开工作空间</h1>
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        </section>
+      </SessionFrame>
+    )
+  }
   if (!agent) {
     return (
       <>
@@ -635,14 +650,12 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
                 { botId: agent.id },
               )
               if (!uploaded) throw new Error('还不能添加附件。')
-              const kind: MessageAttachment['kind'] =
-                file.type === 'image/png' || file.type === 'image/jpeg' ? 'image' : 'file'
               return {
                 name: file.name,
                 path: uploaded.path,
                 sha256: uploaded.sha256,
                 mediaType: file.type,
-                kind,
+                kind: attachmentKind(file.name, file.type),
               }
             }}
             onDownload={async (attachment) => {
@@ -650,9 +663,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
               if (await getBackend().downloadChatFile(conversationId, fileId))
                 setNotice('文件已保存。')
             }}
-            onPreview={(attachment) =>
-              getBackend().previewAttachment?.(attachment.path, agent.id) ?? Promise.resolve('')
-            }
+            onPreview={previewAttachment}
             peers={workspace.agents}
             onOpenDm={(notice) => setDmThread({ notice, selfId: agent.id })}
           />
@@ -662,27 +673,6 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
             agent={agent}
             isLead={agent.id === workspace.leadAgentId}
             onClose={() => setCatPanelOpen(false)}
-            onComputerUrl={(computerUrl) =>
-              runAction(() => {
-                commit((previous) => setAgentComputerUrl(previous, agent.id, computerUrl))
-              })
-            }
-            onPrepareComputer={() => {
-              const start = window.desktop?.backend.startBootstrap
-              if (!start) return
-              void start().catch((failure: Error) => setNotice(failure.message))
-            }}
-            onConnectComputer={() => {
-              const open = window.desktop?.backend.openComputer
-              if (!open) return
-              void open(agent.id)
-                .then((url) => {
-                  runAction(() => {
-                    commit((previous) => setAgentComputerUrl(previous, agent.id, url))
-                  })
-                })
-                .catch((failure: Error) => setNotice(failure.message))
-            }}
           />
         )}
       </div>

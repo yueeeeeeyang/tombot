@@ -109,7 +109,11 @@ func (relay *desktopAgentRelay) Tool(ctx context.Context, key string, call botag
 		return botagent.ToolResult{}, errors.New("桌面工具顺序错误")
 	}
 	// 模拟模型操作占用的序号空隙，核实真实桌面接受持久递增序号。
-	result, err := relay.tools[call.Name].Execute(ctx, execution.Invocation{Computer: &relay.session, OperationID: ids.New(), Sequence: int64(relay.calls * 2), ApprovalMode: "standard", Call: call, Lease: execution.Lease{UserID: relay.session.UserID, BotID: relay.session.BotID, RunID: relay.session.RunID}})
+	tool, ok := relay.tools[call.Name].(execution.ServerTool)
+	if !ok {
+		return botagent.ToolResult{}, errors.New("测试桌面工具缺少执行入口")
+	}
+	result, err := tool.Execute(ctx, execution.Invocation{Computer: &relay.session, OperationID: ids.New(), Sequence: int64(relay.calls * 2), ApprovalMode: "standard", Call: call, Lease: execution.Lease{UserID: relay.session.UserID, BotID: relay.session.BotID, RunID: relay.session.RunID}})
 	if err != nil || result.IsError {
 		return botagent.ToolResult{}, errors.Join(err, errors.New("真实桌面工具失败"))
 	}

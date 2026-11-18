@@ -77,7 +77,7 @@ func New(parent context.Context, configuration Config, logger *slog.Logger) (app
 		return nil, err
 	}
 	steps = append([]cleanupStep{{"执行会话", sessions.Shutdown}}, steps...)
-	server, err := nodeapi.NewServer(nodeapi.Operations{Node: node, Computers: node, Sessions: sessions, Terminals: sessions, Desktops: sessions, Agents: sessions}, configuration.apiOptions(), logger)
+	server, err := nodeapi.NewServer(nodeapi.Operations{Node: node, Computers: node, Sessions: sessions, Terminals: sessions, Desktops: sessions, Agents: sessions, Files: sessions, Console: sessions}, configuration.apiOptions(), logger)
 	if err != nil {
 		return nil, err
 	}

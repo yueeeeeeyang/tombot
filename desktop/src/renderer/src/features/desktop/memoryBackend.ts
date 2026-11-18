@@ -227,10 +227,6 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.reject(new Error('任务不存在。'))
   }
 
-  openComputer(): Promise<string> {
-    return Promise.resolve('')
-  }
-
   async setReaction(
     messageId: string,
     emoji: string,

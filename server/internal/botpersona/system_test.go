@@ -28,6 +28,26 @@ func TestSystemIncludesIdentityAndDistinctStyles(t *testing.T) {
 	}
 }
 
+func TestTurnInstructionsScopeWorkToCurrentTurn(t *testing.T) {
+	prompt := ForCurrentTurn(System("小黄", "", "bombay", "Verify evidence."))
+	for _, constraint := range []string{
+		"Act on the current turn",
+		"History and past results are reference only",
+		"Resume, redo, redelegate, resend, or run an old plan only if explicitly asked now",
+		"Answer greetings or status queries without reruns",
+		"Apply updates to active work",
+		"Never claim to have seen a message or completed an action without evidence",
+		"Verify evidence.",
+	} {
+		if !strings.Contains(prompt, constraint) {
+			t.Fatalf("系统提示词缺少本轮执行边界：%s", constraint)
+		}
+	}
+	if strings.Contains(prompt, "latest messages as steering for the ongoing task") {
+		t.Fatal("发送给模型的人设仍将新消息默认归入旧任务")
+	}
+}
+
 func TestConversationStylePreservesWorkAndHonesty(t *testing.T) {
 	for _, constraint := range []string{"everyday chat", "Avoid routine agent-report templates", "Keep work accurate and complete", "Follow requested formats", "Do not pretend to be human"} {
 		if !strings.Contains(ConversationStyle, constraint) {

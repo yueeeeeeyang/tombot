@@ -29,3 +29,9 @@ func NodeService() string { return nodeService }
 
 // NodeInstallTemplate 返回可选安装模板；默认安装从接入码和离线发布清单取得配置。
 func NodeInstallTemplate() string { return nodeInstallTemplate }
+
+//go:embed systemd/tombot-node-update.service
+var NodeUpdateService string
+
+//go:embed systemd/tombot-node-update.timer
+var NodeUpdateTimer string

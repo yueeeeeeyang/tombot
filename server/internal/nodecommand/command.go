@@ -103,6 +103,14 @@ func execute(ctx context.Context, args []string, getenv func(string) string, out
 		return 1
 	}
 	switch args[1] {
+	case "sync-upgrade":
+		if err := deployment.SyncNodeUpgrade(ctx, logger); err != nil {
+			logger.Error("节点远程升级未完成", "reason", err)
+			return 1
+		}
+		return 0
+	case "upgrade":
+		return runUpgrade(ctx, output, logger, actions.repair)
 	case "template":
 		return writeText(output, deploy.NodeInstallTemplate(), logger)
 	case "start":
@@ -139,6 +147,7 @@ const usage = `用法：tomnode <子命令>
 
   template          输出可选的节点高级参数模板
   install [文件]    一次完成配置、证书、程序和系统服务安装并启动
+  upgrade           从当前程序配套的完整离线包升级节点，自动协调维护、停机和启动
   repair [选项]     修复已停止的节点，保留节点身份；支持 --listen、--url、--image-package
   start             检查节点配置、准备 Docker 和镜像，然后运行节点
   configure         从部署参数生成配置，不覆盖已有输出目录

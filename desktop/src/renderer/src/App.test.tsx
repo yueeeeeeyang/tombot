@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import App from './App'
 import { AGENT_ACTIVITY_EVENT } from './features/avatars/activity'
-import { memoryBackend } from './features/desktop/memoryBackend'
+import { MemoryBackend, memoryBackend } from './features/desktop/memoryBackend'
 import { createWorkspace, emptyWorkspace } from './features/workspace/model'
 import { STORAGE_KEY } from './features/workspace/storage'
 import {
@@ -161,6 +161,89 @@ describe('客户端交互', () => {
     await user.type(screen.getByRole('textbox', { name: '给游戏程序发消息' }), '程序的草稿')
     await user.click(screen.getByRole('button', { name: '小黑' }))
     expect(screen.getByRole('textbox', { name: '给小黑发消息' })).toHaveValue('小黑的草稿')
+  })
+
+  it('首次滚入视口读取历史图片，切回会话立即显示且只读取一次', async () => {
+    let enterViewport!: () => void
+    let resolvePreview!: (source: string) => void
+    const preview = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          resolvePreview = resolve
+        }),
+    )
+    const attachment = {
+      name: '历史图片.png',
+      mediaType: 'image/png',
+      kind: 'image' as const,
+      path: 'chat-files/01J00000000000000000000001/01J00000000000000000000002',
+      sha256: 'a'.repeat(64),
+    }
+    const workspace = createWorkspace()
+    workspace.agents[0]!.messages = [
+      {
+        id: 'photo-message',
+        role: 'user',
+        content: attachment.name,
+        createdAt: '2026-11-17T08:00:00.000Z',
+        status: 'sent',
+        reactions: [],
+        attachments: [attachment],
+      },
+    ]
+    const backend = Object.assign(new MemoryBackend(), { previewAttachment: preview })
+    backend.loadFixture({ workspace })
+    vi.stubGlobal('desktop', { ...window.desktop, backend })
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(observeEntries: (entries: Array<{ isIntersecting: boolean }>) => void) {
+          enterViewport = () => observeEntries([{ isIntersecting: true }])
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    try {
+      render(<App />)
+      expect(screen.getByRole('button', { name: '查看原图 历史图片.png' })).toBeDisabled()
+      expect(preview).not.toHaveBeenCalled()
+
+      await act(async () => enterViewport())
+      expect(preview).toHaveBeenCalledWith(attachment.path)
+      const source = 'data:image/png;base64,AAAA'
+      await act(async () => resolvePreview(source))
+      const first = screen.getByRole('img', { name: attachment.name })
+      expect(first).toHaveAttribute('src', source)
+
+      fireEvent.click(screen.getByRole('button', { name: /^游戏程序/ }))
+      expect(screen.queryByRole('img', { name: attachment.name })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: '小黑' }))
+      expect(screen.getByRole('img', { name: attachment.name })).toHaveAttribute('src', source)
+      expect(preview).toHaveBeenCalledOnce()
+
+      fireEvent.click(screen.getByRole('button', { name: /^游戏程序/ }))
+      await act(async () =>
+        backend.publishEvent({
+          sequence: 1,
+          kind: 'chat.library.changed',
+          resource_id: '01J00000000000000000000001',
+          payload: {
+            conversation_id: '01J00000000000000000000001',
+            file_id: '01J00000000000000000000002',
+          },
+          created_at: '2026-11-17T08:01:00.000Z',
+        }),
+      )
+      preview.mockRejectedValueOnce(new Error('文件已删除'))
+      fireEvent.click(screen.getByRole('button', { name: '小黑' }))
+      expect(screen.queryByRole('img', { name: attachment.name })).not.toBeInTheDocument()
+      await act(async () => enterViewport())
+      expect(await screen.findByText('历史图片.png 无法预览')).toBeInTheDocument()
+      expect(preview).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('中文输入法确认和 Shift+Enter 不会误提交，普通 Enter 才保存', () => {
@@ -790,7 +873,6 @@ describe('客户端交互', () => {
       messages: [],
       draft: '',
       artifacts: [],
-      computerUrl: '',
     })
     memoryBackend.loadFixture({
       workspace: {

@@ -9,9 +9,11 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 )
 
@@ -22,6 +24,9 @@ type UploadBrowser interface {
 
 // Upload 先在用户级窄门禁内读取有界正文，再在所属窗口内准备只读副本并执行一次文件选择。
 func (service *Service) Upload(ctx context.Context, address Address, body io.Reader) (Window, error) {
+	if err := ctx.Err(); err != nil {
+		return Window{}, err
+	}
 	if body == nil || service.options.Uploads == nil {
 		return Window{}, ErrUnavailable
 	}
@@ -42,6 +47,9 @@ func (service *Service) Upload(ctx context.Context, address Address, body io.Rea
 		return Window{}, err
 	}
 	defer func() { <-service.uploadGate }()
+	if err := bounded.Err(); err != nil {
+		return Window{}, err
+	}
 	encoded, err := io.ReadAll(io.LimitReader(body, maximumUploadBody+1))
 	if err != nil || len(encoded) > maximumUploadBody {
 		return Window{}, ErrInvalid
@@ -73,7 +81,34 @@ func (service *Service) Upload(ctx context.Context, address Address, body io.Rea
 		}
 		return func(ctx context.Context) error {
 			_, err := cdp.Call(ctx, tab, dom.SetFileInputFiles, dom.SetFileInputFilesParams{Files: paths, BackendNodeID: node})
-			return err
+			if err != nil {
+				return err
+			}
+			selector, err := json.Marshal(request.Selector)
+			if err != nil {
+				return err
+			}
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				// Chrome 可以先确认协议再更新文件列表；只有实际选中对应文件数量才完成。
+				result, err := cdp.Call(ctx, tab, runtime.Evaluate, runtime.EvaluateParams{Expression: "document.querySelector(" + string(selector) + ").files.length"})
+				if err != nil || result.ExceptionDetails != nil || result.Result == nil {
+					return ErrUnknown
+				}
+				var count int
+				if json.Unmarshal(result.Result.Value, &count) != nil {
+					return ErrUnknown
+				}
+				if count == len(request.Files) {
+					return nil
+				}
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-ticker.C:
+				}
+			}
 		}, nil
 	})
 }

@@ -22,6 +22,16 @@ import (
 
 const windowSocketName = "browser.sock"
 
+func (windows *windowSession) HumanControl(ctx context.Context, paused bool) error {
+	runtime, ok := windows.instance.service.(interface {
+		HumanControl(context.Context, computer.ExecutionSession, bool) error
+	})
+	if !ok {
+		return errors.New("原生浏览器未提供用户交接屏障")
+	}
+	return runtime.HumanControl(ctx, windows.session, paused)
+}
+
 type windowSession struct {
 	session     computer.ExecutionSession
 	instance    *browserInstance

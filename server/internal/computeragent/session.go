@@ -223,7 +223,7 @@ func (guard *desktopGuard) openAt(ctx context.Context, command computer.SessionC
 	if err = guard.validate(command); err != nil {
 		return observation, err
 	}
-	if reference.Validate() != nil || reference.Session != command.Session || len(files) != 4 {
+	if reference.Validate() != nil || reference.Session != command.Session || len(files) != processgroup.ExecutionControlFiles {
 		return observation, errors.New("电脑代理开启资源组身份无效")
 	}
 	if guard.state != nil && guard.state.Command.Session == command.Session {

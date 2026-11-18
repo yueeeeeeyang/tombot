@@ -2,6 +2,9 @@ package nodecommand
 
 import (
 	"context"
+	"errors"
+	"io.yueyang/tom/internal/nodeenrollment"
+
 	"encoding/json"
 	"flag"
 	"io"
@@ -43,6 +46,23 @@ func runRepair(ctx context.Context, args []string, output io.Writer, logger *slo
 	}
 	if json.NewEncoder(output).Encode(report) != nil {
 		logger.Error("节点修复回执输出失败", "node_id", report.NodeID)
+		return 1
+	}
+	return 0
+}
+
+// runUpgrade 仅接受完整发布包，不让命令行替换节点身份或目标端点。
+func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode) int {
+	report, err := repair(ctx, deployment.NodeRepairOptions{Upgrade: true})
+	if err != nil {
+		logger.Error("节点升级未完成，保留原身份；请使用同一发布包重试", "reason", err)
+		if errors.Is(err, nodeenrollment.ErrMaintenanceConflict) {
+			return 3
+		}
+		return 1
+	}
+	if json.NewEncoder(output).Encode(report) != nil {
+		logger.Error("节点升级回执输出失败", "node_id", report.NodeID)
 		return 1
 	}
 	return 0

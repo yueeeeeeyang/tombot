@@ -1,16 +1,21 @@
 import { loadApplicationAbout } from './applicationAbout'
 import { readConversationPreviews } from './conversationPreviews'
 import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
+import { attachmentKind } from '../shared/attachmentMedia'
 import { chatFilePath, parseChatFilePath, type ChatFile } from '../shared/chatFiles'
 import {
   listChatFiles,
   uploadChatFile,
   previewChatFile,
+  previewMessageFile,
   readChatFile,
   renameChatFile,
   deleteChatFile,
 } from './chatFiles'
 import { listTasks } from './tasks'
+import { openConsole, controlConsole } from './console'
+import { consoleID } from '../shared/console'
+import { ConsoleStreams } from './consoleStream'
 import { loginResultPage } from './loginResultPage'
 import { app, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron'
 import { createHash, randomBytes } from 'node:crypto'
@@ -50,6 +55,7 @@ const codeMessages: Record<string, string> = {
   AUTH_INVALID: '密码不正确。',
   SESSION_INVALID: '登录状态已失效，请重新在浏览器中登录。',
   AUTH_RATE_LIMITED: '尝试次数过多，请稍后再试。',
+  SERVICE_UNAVAILABLE: '服务暂不可用，请稍后重试。',
   BOOTSTRAP_RUNNING: '引导正在进行，请稍候。',
   MODEL_NOT_READY: '当前模型策略不可用，请联系管理员检查服务端模型配置。',
   WORKSPACE_CONFLICT: '工作空间刚被更新，请重新发送。',
@@ -126,7 +132,17 @@ async function readStoredSession(): Promise<void> {
   }
 }
 
+const consoleStreams = new ConsoleStreams(async (id) => {
+  await controlConsole(call, consoleID.parse(id), 'heartbeat')
+  if (!accessToken) throw new Error('请先登录。')
+  return transport().websocket(
+    `${requireServerAddress()}/api/v2/consoles/${id}/stream`,
+    `Bearer ${accessToken}`,
+  )
+})
+
 function clearCredentials(): void {
+  consoleStreams.closeAll()
   accessToken = ''
   refreshToken = ''
   accessExpiresAt = ''
@@ -289,22 +305,48 @@ async function renewAccess(base: string): Promise<void> {
     throw Object.assign(new Error(codeMessages.SESSION_INVALID), { code: 'SESSION_INVALID' })
   }
   const original = refreshToken
-  const response = await transport().fetch(`${base}/api/v2/auth/refresh`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ refresh_token: refreshToken }),
-    signal: AbortSignal.timeout(20_000),
-  })
-  const text = await response.text()
-  const payload = text ? (JSON.parse(text) as AuthSession & { code?: string }) : {}
-  if (base !== requireServerAddress() || original !== refreshToken) {
-    throw Object.assign(new Error('服务或登录状态已变化，请重试。'), { code: 'SERVER_CHANGED' })
+  const assertCurrentSession = () => {
+    if (base !== savedServerAddress || original !== refreshToken)
+      throw Object.assign(new Error('服务或登录状态已变化，请重试。'), { code: 'SERVER_CHANGED' })
   }
-  if (!response.ok) {
+  const requireLogin = async () => {
+    assertCurrentSession()
     clearCredentials()
     await persistSession()
     throw Object.assign(new Error(codeMessages.SESSION_INVALID), { code: 'SESSION_INVALID' })
   }
+  let response: Response
+  try {
+    response = await transport().fetch(`${base}/api/v2/auth/refresh`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ refresh_token: original }),
+      signal: AbortSignal.timeout(20_000),
+    })
+  } catch (error) {
+    // 只有确认请求未发出才能继续使用旧续期凭据。响应丢失时重放会撤销会话。
+    if ((error as { isRequestUnsent?: boolean } | null)?.isRequestUnsent) throw error
+    return requireLogin()
+  }
+  let payload: AuthSession & ApiFailure
+  try {
+    payload = (await response.json()) as AuthSession & ApiFailure
+  } catch {
+    return requireLogin()
+  }
+  assertCurrentSession()
+  if (!response.ok) {
+    // 服务明确拒绝进入续期时仍可使用旧凭据；代理错误无法确认服务是否已经轮换。
+    if (
+      response.status === 429 ||
+      (response.status === 503 && payload?.code === 'IDENTITY_UNAVAILABLE')
+    ) {
+      const { code, message } = failureOf(payload, response.status)
+      throw Object.assign(new Error(message), { code })
+    }
+    return requireLogin()
+  }
+  if (!payload?.access_token || !payload.refresh_token) return requireLogin()
   await storeSession(payload)
 }
 
@@ -389,12 +431,18 @@ async function send(
   ) {
     return { status: response.status, payload: { content: await readAvatar(response) } }
   }
-  const text = await response.text()
+  let text: string
+  try {
+    text = await response.text()
+  } catch {
+    throw Object.assign(new Error(codeMessages.OFFLINE), { code: 'OFFLINE' })
+  }
   let payload: unknown = {}
   if (text) {
     try {
       payload = JSON.parse(text)
     } catch {
+      if (response.status >= 500) return { status: response.status, payload: {} }
       throw Object.assign(new Error('服务返回了无法识别的内容。'), { code: 'RESPONSE_INVALID' })
     }
   }
@@ -429,7 +477,12 @@ async function readAvatar(response: Response): Promise<string> {
 
 function failureOf(payload: unknown, status: number): Failure {
   const failure = (payload ?? {}) as ApiFailure
-  const code = failure.code ?? (status === 401 ? 'SESSION_INVALID' : 'REQUEST_FAILED')
+  let code = failure.code || 'REQUEST_FAILED'
+  if (!failure.code) {
+    if (status === 401) code = 'SESSION_INVALID'
+    if (status === 429) code = 'AUTH_RATE_LIMITED'
+    if (status >= 500) code = 'SERVICE_UNAVAILABLE'
+  }
   const serverMessage = failure.message
   const message =
     codeMessages[code] ??
@@ -504,17 +557,54 @@ function combineSignals(parent: AbortSignal | undefined, timeout: AbortSignal): 
 
 /** 事件游标按服务端序号单调推进；重连从上次已确认的位置继续。 */
 let eventCursor = 0
+const sessionsNeedingEventRefresh = new WeakSet<IpcMainInvokeEvent['sender']>()
+const EVENT_RETRY_LIMIT = 5
+
+/** 退避期间也能取消订阅，以免页面重载后留下旧订阅和计时器。 */
+function waitForEventRetry(delay: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, delay)
+    signal.addEventListener('abort', finish, { once: true })
+  })
+}
 
 /**
- * 订阅当前用户事件。服务端在到期前主动收尾，这里按 retry 提示自动续订；
- * 只有凭据失效或订阅被取消才停止。事件只作为"重新读取"的提示，不携带正文。
+ * 订阅当前用户事件。服务端正常收尾时续订，连续失败后交给会话探测重新启动。
+ * 恢复后通知界面读取最新状态，同时仍按上次已确认的游标接收漏掉的事件。
  */
-async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promise<void> {
+async function pumpEvents(
+  event: IpcMainInvokeEvent,
+  watchId: string,
+  signal: AbortSignal,
+): Promise<void> {
+  const { sender } = event
+  const publishRefresh = () => {
+    if (signal.aborted || sender.isDestroyed() || !sessionsNeedingEventRefresh.delete(sender))
+      return
+    sender.send(
+      'desktop:user-event',
+      {
+        sequence: eventCursor,
+        kind: 'workspace.refresh',
+        resource_id: '',
+        payload: {},
+        created_at: new Date().toISOString(),
+      } satisfies UserEvent,
+      watchId,
+    )
+  }
   let failures = 0
   while (!signal.aborted) {
     try {
       await loadSession()
       if (accessIsStale()) await refreshAccess()
+      const previousAccess = accessToken
       const response = await transport().fetch(
         `${requireServerAddress()}/api/v2/events?after=${eventCursor}`,
         {
@@ -527,7 +617,7 @@ async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promi
       )
       if (response.status === 401) {
         await response.body?.cancel()
-        await refreshAccess()
+        if (accessToken === previousAccess) await refreshAccess()
         throw new Error('登录状态已更新，正在恢复消息订阅。')
       }
       if (
@@ -546,6 +636,7 @@ async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promi
         let buffer = ''
         while (!signal.aborted) {
           const chunk = await reader.read()
+          if (signal.aborted) return
           if (chunk.done) break
           received = true
           buffer += decoder.decode(chunk.value, { stream: true })
@@ -553,6 +644,7 @@ async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promi
           const blocks = buffer.split('\n\n')
           buffer = blocks.pop() ?? ''
           for (const block of blocks) {
+            if (block.startsWith(':')) failures = 0
             const data = block
               .split('\n')
               .filter((line) => line.startsWith('data: '))
@@ -574,11 +666,13 @@ async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promi
             ) {
               throw new Error('消息事件格式无效。')
             }
+            failures = 0
             if (sequence <= eventCursor) continue
-            if (!event.sender.isDestroyed()) event.sender.send('desktop:user-event', parsed)
+            if (!sender.isDestroyed()) sender.send('desktop:user-event', parsed, watchId)
             eventCursor = sequence
           }
           if (cursorExpired) break
+          publishRefresh()
         }
       } finally {
         try {
@@ -588,29 +682,27 @@ async function pumpEvents(event: IpcMainInvokeEvent, signal: AbortSignal): Promi
         }
       }
       if (cursorExpired) {
+        sessionsNeedingEventRefresh.add(sender)
         await loadWorkspace()
-        if (!event.sender.isDestroyed())
-          event.sender.send('desktop:user-event', {
-            sequence: eventCursor,
-            kind: 'workspace.refresh',
-            resource_id: '',
-            payload: {},
-            created_at: new Date().toISOString(),
-          })
+        publishRefresh()
       }
       if (received) failures = 0
       else throw new Error('消息订阅意外结束。')
     } catch (error) {
       if (signal.aborted) return
+      const code = (error as { code?: string } | null)?.code
+      if (code === 'SESSION_INVALID' || code?.startsWith('CERTIFICATE_')) throw error
+      sessionsNeedingEventRefresh.add(sender)
       failures++
-      if (failures >= 5)
-        throw new Error('实时状态连接中断，已切换为定时刷新。请检查网络后重新打开客户端。', {
-          cause: error,
-        })
+      if (failures >= EVENT_RETRY_LIMIT)
+        throw Object.assign(
+          new Error('实时状态连接中断。服务恢复后会自动重新订阅。', { cause: error }),
+          {
+            code: 'EVENT_STREAM_UNAVAILABLE',
+          },
+        )
     }
-    await new Promise((resolve) =>
-      setTimeout(resolve, failures ? Math.min(8_000, 500 * 2 ** failures) : 500),
-    )
+    await waitForEventRetry(Math.min(8_000, 500 * 2 ** failures), signal)
   }
 }
 
@@ -710,17 +802,18 @@ export function registerDesktopIpc(): void {
       return { ...page, runs: activity.runs }
     }),
   )
-  ipcMain.handle('desktop:watch-events', (event, watchId: string) =>
+  ipcMain.handle('desktop:watch-events', (event, watchId: string, needsRefresh: unknown) =>
     handle(async () => {
       const controller = new AbortController()
       const key = `${event.sender.id}:${watchId}`
       eventWatches.get(key)?.abort()
       eventWatches.set(key, controller)
+      if (needsRefresh === true) sessionsNeedingEventRefresh.add(event.sender)
       const detach = () => controller.abort()
       event.sender.once('destroyed', detach)
       event.sender.once('did-start-navigation', detach)
       try {
-        await pumpEvents(event, controller.signal)
+        await pumpEvents(event, watchId, controller.signal)
         return null
       } finally {
         event.sender.removeListener('destroyed', detach)
@@ -911,7 +1004,7 @@ export function registerDesktopIpc(): void {
     ) => handle(() => uploadFile(input)),
   )
   ipcMain.handle('desktop:preview', (_event, input: { path: string; botId?: string }) =>
-    handle(() => previewFile(input.path)),
+    handle(() => previewMessageFile(call, input.path)),
   )
   ipcMain.handle(
     'desktop:reaction',
@@ -940,12 +1033,22 @@ export function registerDesktopIpc(): void {
   ipcMain.handle('desktop:ensure-agent', (_event, agentId: string) =>
     handle(() => call('POST', `/workspace/agents/${encodeURIComponent(agentId)}/ready`)),
   )
-  ipcMain.handle('desktop:computer', (_event, agentId: string) =>
-    handle(async () => {
-      const result = (await call('POST', '/computer', { agentId })) as { url: string }
-      return result.url
+  ipcMain.handle('desktop:console-open', (_event, botId: string, requestId: string) =>
+    handle(() => openConsole(call, botId, requestId)),
+  )
+  ipcMain.handle('desktop:console-status', (_event, id: string) =>
+    handle(() => controlConsole(call, id, 'heartbeat')),
+  )
+  ipcMain.handle('desktop:console-close', (_event, id: string) =>
+    handle(() => controlConsole(call, id, 'close')),
+  )
+  ipcMain.handle('desktop:console-control', (_event, id: string, takeover: boolean) =>
+    handle(() => {
+      if (typeof takeover !== 'boolean') throw new Error('接管动作无效。')
+      return controlConsole(call, id, takeover ? 'takeover' : 'release')
     }),
   )
+  consoleStreams.register(ipcMain)
 }
 
 /** 只把公开资料交给界面；不接受远程头像地址，避免图片绕过主进程连接和认证边界。 */
@@ -1139,10 +1242,7 @@ function toBubble(message: ServerMessage): {
           path: chatFilePath(file),
           sha256: file.sha256,
           mediaType: file.media_type,
-          kind:
-            file.media_type === 'image/png' || file.media_type === 'image/jpeg'
-              ? ('image' as const)
-              : ('file' as const),
+          kind: attachmentKind(file.name, file.media_type),
         },
       ]
     }
@@ -1155,10 +1255,7 @@ function toBubble(message: ServerMessage): {
         path: block.artifact.path,
         sha256: block.artifact.sha256,
         mediaType,
-        kind:
-          mediaType === 'image/png' || mediaType === 'image/jpeg'
-            ? ('image' as const)
-            : ('file' as const),
+        kind: attachmentKind(name, mediaType),
       },
     ]
   })
@@ -1216,13 +1313,6 @@ async function uploadFile(input: {
     : await conversationFor(input.botId!)
   const file = await uploadChatFile(call, conversationId, input, input.requestId ?? '')
   return { path: chatFilePath(file), sha256: file.sha256 }
-}
-
-async function previewFile(path: string): Promise<string> {
-  const { conversationId, fileId } = parseChatFilePath(path)
-  const preview = await previewChatFile(call, conversationId, fileId)
-  if (!preview.image) throw new Error('该文件没有图片预览，请在资料库下载。')
-  return preview.image
 }
 
 interface LoginInput {

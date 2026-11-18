@@ -7,6 +7,7 @@ import {
   type ServerBubble,
   type StreamEvent,
 } from '../desktop/backend'
+import { isTransientSessionError } from '../session/sessionProbe'
 import {
   addAgent,
   emptyWorkspace,
@@ -90,6 +91,7 @@ export function useWorkspace(
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'error'>('saved')
   const current = useRef(workspace)
   const blocked = useRef(initial.isBlocked)
+  const retryInitialLoad = useRef<(() => Promise<void>) | undefined>(undefined)
   const chain = useRef(Promise.resolve())
   const pendingTasks = useRef(0)
   const reactionChain = useRef(Promise.resolve())
@@ -102,23 +104,45 @@ export function useWorkspace(
   useEffect(() => {
     if (initial.ready) return
     let cancelled = false
-    void (async () => {
+    let isLoading = false
+
+    function fail(message: string, errorCode?: string) {
+      if (cancelled) return
+      retryInitialLoad.current = isTransientSessionError(errorCode) ? load : undefined
+      blocked.current = true
+      setBlocked(true)
+      setError(message)
+      setReady(true)
+    }
+
+    async function load(): Promise<void> {
+      if (cancelled || isLoading) return
+      isLoading = true
       try {
         const snapshot = await backend.loadWorkspace()
         if (cancelled) return
+        if ('errorCode' in snapshot) {
+          fail(snapshot.message, snapshot.errorCode)
+          return
+        }
+        retryInitialLoad.current = undefined
         current.current = snapshot.workspace
+        blocked.current = false
         setWorkspace(snapshot.workspace)
+        setBlocked(false)
+        setError('')
         setReady(true)
       } catch (failure) {
-        if (cancelled) return
-        blocked.current = true
-        setBlocked(true)
-        setError((failure as Error).message)
-        setReady(true)
+        fail(failure instanceof Error ? failure.message : '无法读取工作空间。')
+      } finally {
+        isLoading = false
       }
-    })()
+    }
+
+    void load()
     return () => {
       cancelled = true
+      retryInitialLoad.current = undefined
     }
   }, [backend, initial.ready])
 
@@ -297,7 +321,7 @@ export function useWorkspace(
     const timer = setInterval(() => void refreshActivities(), 10_000)
     const unwatch = backend.watchEvents?.(
       (event) => {
-        if (event.kind === 'stream.reset' || event.kind.endsWith('run.finished'))
+        if (event.kind === 'workspace.refresh' || event.kind.endsWith('run.finished'))
           void refreshActivities()
       },
       (failure) => setError(failure.message),
@@ -542,6 +566,7 @@ export function useWorkspace(
     error,
     isBlocked,
     ready,
+    retryLoadingWorkspace: () => void retryInitialLoad.current?.(),
     commit,
     create,
     deliver,

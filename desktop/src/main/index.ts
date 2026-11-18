@@ -1,6 +1,15 @@
-import { app, BrowserWindow, dialog, Menu, session } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  Menu,
+  nativeImage,
+  type NativeImage,
+  type WebContents,
+} from 'electron'
 import { copyFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import iconPath from './assets/tombot-icon.png?asset'
 import { registerDesktopIpc } from './desktopServer'
 
 function usesCustomUserDataDir(): boolean {
@@ -30,8 +39,16 @@ function pinUserDataDirectory(): void {
 
 pinUserDataDirectory()
 
+/** 图标损坏时仍允许访问聊天与登录界面，并记录默认图标的回退原因。 */
+function loadApplicationIcon(): NativeImage | undefined {
+  const icon = nativeImage.createFromPath(iconPath)
+  if (!icon.isEmpty()) return icon
+  console.warn('无法读取客户端图标，将使用系统默认图标。应用=TomBot')
+  return undefined
+}
+
 /** 创建隔离的本地客户端窗口；加载失败时报告错误并退出，避免留下空白窗口。 */
-async function createWindow(): Promise<void> {
+async function createWindow(icon: NativeImage | undefined): Promise<void> {
   const window = new BrowserWindow({
     width: 1073,
     height: 780,
@@ -39,6 +56,7 @@ async function createWindow(): Promise<void> {
     minHeight: 640,
     show: false,
     title: 'TomBot',
+    icon,
     backgroundColor: '#fcfcfc',
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: { x: 16, y: 16 },
@@ -51,6 +69,27 @@ async function createWindow(): Promise<void> {
     },
   })
 
+  const contents = window.webContents
+  // 只允许本地客户端主框架响应用户手势进入全屏，其他网页权限仍由主进程拒绝。
+  function allowsFullscreen(
+    requester: WebContents | null,
+    permission: string,
+    details: { isMainFrame: boolean; requestingUrl?: string },
+  ): boolean {
+    return (
+      permission === 'fullscreen' &&
+      requester === contents &&
+      !contents.isDestroyed() &&
+      details.isMainFrame &&
+      details.requestingUrl === contents.getURL()
+    )
+  }
+  contents.session.setPermissionRequestHandler((requester, permission, callback, details) => {
+    callback(allowsFullscreen(requester, permission, details))
+  })
+  contents.session.setPermissionCheckHandler((requester, permission, _origin, details) =>
+    allowsFullscreen(requester, permission, details),
+  )
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', (event) => event.preventDefault())
   window.webContents.on('will-prevent-unload', (event) => {
@@ -106,10 +145,8 @@ if (!hasInstanceLock) {
   app
     .whenReady()
     .then(async () => {
-      session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => {
-        callback(false)
-      })
-      session.defaultSession.setPermissionCheckHandler(() => false)
+      const icon = loadApplicationIcon()
+      if (icon) app.dock?.setIcon(icon)
       registerDesktopIpc()
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
@@ -145,9 +182,9 @@ if (!hasInstanceLock) {
           },
         ]),
       )
-      await createWindow()
+      await createWindow(icon)
       app.on('activate', () => {
-        if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+        if (BrowserWindow.getAllWindows().length === 0) void createWindow(icon)
       })
     })
     .catch(() => {

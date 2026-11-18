@@ -1,17 +1,10 @@
 package sharedbrowser
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"image/png"
-	"strings"
+	"time"
 
-	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/input"
-	"github.com/chromedp/cdproto/page"
-	"github.com/chromedp/chromedp"
 	"io.yueyang/tom/internal/computer"
 )
 
@@ -23,7 +16,10 @@ func (service *Service) Execute(ctx context.Context, address Address, command Co
 	if err := command.Validate(service.options.Width, service.options.Height); err != nil {
 		return Window{}, err
 	}
-	return service.execute(ctx, address, command, func(_ context.Context, item *entry) (func(context.Context) error, error) {
+	return service.execute(ctx, address, command, func(ctx context.Context, item *entry) (func(context.Context) error, error) {
+		if command.Kind == "navigate" || command.Kind == "back" || command.Kind == "forward" || command.Kind == "reload" {
+			return service.prepareNativeNavigation(ctx, item, command)
+		}
 		return func(ctx context.Context) error { return service.command(ctx, item, command) }, nil
 	})
 }
@@ -147,7 +143,27 @@ func commandReceipt(item *entry, command Command) (Window, error, bool) {
 
 func (service *Service) runCommand(item *entry, action func(context.Context) error, run *commandRun) {
 	defer service.commands.Done()
-	err := action(run.ctx)
+	err := service.withNativeTarget(run.ctx, item, func(ctx context.Context) error {
+		if err := action(ctx); err != nil {
+			return err
+		}
+		// 原生按键先于网页对话框关闭返回；等待真正关闭，不能把已发送输入记为业务完成。
+		timer := time.NewTicker(20 * time.Millisecond)
+		defer timer.Stop()
+		for {
+			service.mu.Lock()
+			waiting := item.window.Dialog.ID != 0
+			service.mu.Unlock()
+			if !waiting {
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+	})
 	if err == nil || errors.Is(err, ErrNavigation) {
 		if service.authorize(run.ctx, item.session) != nil {
 			err = ErrUnknown
@@ -192,96 +208,10 @@ func (service *Service) windowBusy(item *entry) error {
 }
 
 func (service *Service) command(ctx context.Context, item *entry, command Command) error {
-	tab := chromedp.FromContext(item.ctx).Target
-	switch command.Kind {
-	case "navigate":
-		result, err := cdp.Call(ctx, tab, page.Navigate, page.NavigateParams{URL: command.URL})
-		if err != nil {
-			return err
-		}
-		if result.ErrorText != "" {
-			return ErrNavigation
-		}
-	case "reload":
-		_, err := cdp.Call(ctx, tab, page.Reload, page.ReloadParams{})
-		return err
-	case "back", "forward":
-		history, err := cdp.Call(ctx, tab, page.GetNavigationHistory, cdp.Empty{})
-		if err != nil {
-			return err
-		}
-		index := history.CurrentIndex - 1
-		if command.Kind == "forward" {
-			index = history.CurrentIndex + 1
-		}
-		if index < 0 || index >= int64(len(history.Entries)) {
-			return ErrNavigation
-		}
-		_, err = cdp.Call(ctx, tab, page.NavigateToHistoryEntry, page.NavigateToHistoryEntryParams{EntryID: history.Entries[index].ID})
-		return err
-	case "type":
-		_, err := cdp.Call(ctx, tab, input.InsertText, input.InsertTextParams{Text: command.Text})
-		return err
-	case "key":
-		key := browserKey(command)
-		if _, err := cdp.Call(ctx, tab, input.DispatchKeyEvent, key); err != nil {
-			return err
-		}
-		if command.Key == "Enter" && command.Modifiers&7 == 0 {
-			// Enter 的字符事件负责按钮激活与表单提交，只有按下/抬起会漏掉页面默认行为。
-			character := key
-			character.Type, character.Text, character.UnmodifiedText = input.DispatchKeyEventTypeChar, "\r", "\r"
-			if _, err := cdp.Call(ctx, tab, input.DispatchKeyEvent, character); err != nil {
-				return err
-			}
-		}
-		key.Type = input.DispatchKeyEventTypeKeyUp
-		_, err := cdp.Call(ctx, tab, input.DispatchKeyEvent, key)
-		return err
-	case "move", "click", "double_click", "scroll":
-		pointer := input.DispatchMouseEventParams{Type: input.DispatchMouseEventTypeMouseMoved, X: float64(command.X), Y: float64(command.Y)}
-		if command.Kind == "move" {
-			_, err := cdp.Call(ctx, tab, input.DispatchMouseEvent, pointer)
-			return err
-		}
-		if command.Kind == "scroll" {
-			pointer.Type, pointer.DeltaX, pointer.DeltaY = input.DispatchMouseEventTypeMouseWheel, float64(command.DeltaX), float64(command.DeltaY)
-			_, err := cdp.Call(ctx, tab, input.DispatchMouseEvent, pointer)
-			return err
-		}
-		count := int64(1)
-		if command.Kind == "double_click" {
-			count = 2
-		}
-		for click := int64(1); click <= count; click++ {
-			pointer.Type, pointer.Button, pointer.Buttons, pointer.ClickCount = input.DispatchMouseEventTypeMousePressed, input.MouseButtonLeft, 1, click
-			if _, err := cdp.Call(ctx, tab, input.DispatchMouseEvent, pointer); err != nil {
-				return err
-			}
-			pointer.Type, pointer.Buttons = input.DispatchMouseEventTypeMouseReleased, 0
-			if _, err := cdp.Call(ctx, tab, input.DispatchMouseEvent, pointer); err != nil {
-				return err
-			}
-		}
-	default:
-		return ErrInvalid
-	}
-	return nil
+	return service.options.Native.Execute(ctx, item.session, item.nativeID, command)
 }
 
-// browserKey 保留物理键与修饰键的语义，普通文本仍统一通过 InsertText 输入。
-func browserKey(command Command) input.DispatchKeyEventParams {
-	key := input.DispatchKeyEventParams{Type: input.DispatchKeyEventTypeKeyDown, Key: command.Key, Code: command.Key, WindowsVirtualKeyCode: keyCodes[command.Key], Modifiers: command.Modifiers}
-	if len(command.Key) == 1 {
-		key.Code = "Key" + command.Key
-		if command.Modifiers&8 == 0 {
-			key.Key = strings.ToLower(command.Key)
-		}
-	}
-	return key
-}
-
-// Screenshot 仅捕获所属页面的当前视口，验证真实 PNG 与固定尺寸，不接受外部 target 或浏览器全局截图。
+// Screenshot 捕获所属 Bot 实际桌面，验证 PNG 与尺寸；画面中不能出现其他 Bot 的窗口。
 func (service *Service) Screenshot(ctx context.Context, address Address) ([]byte, error) {
 	bounded, cancel := service.bounded(service.root, ctx)
 	defer cancel()
@@ -310,32 +240,19 @@ func (service *Service) Screenshot(ctx context.Context, address Address) ([]byte
 	if !ready {
 		return nil, ErrUnknown
 	}
-	positive, negative := true, false
-	pixels, err := captureActivePage(bounded, func() error {
-		if err := service.authorize(bounded, address.Session); err != nil {
-			return err
-		}
-		return service.windowBusy(item)
-	}, func() ([]byte, error) {
-		result, err := cdp.Call(bounded, chromedp.FromContext(item.ctx).Target, page.CaptureScreenshot, page.CaptureScreenshotParams{Format: page.CaptureScreenshotFormatPng, FromSurface: &positive, CaptureBeyondViewport: &negative})
-		if err != nil {
-			return nil, err
-		}
-		return result.Data, nil
+	var pixels []byte
+	err = service.withNativeTarget(bounded, item, func(ctx context.Context) error {
+		var captureErr error
+		pixels, captureErr = service.options.Native.Screenshot(ctx, item.session, item.nativeID)
+		return captureErr
 	})
 	if err != nil {
 		return nil, errors.Join(ErrUnavailable, err)
 	}
-	if len(pixels) == 0 || len(pixels) > 4<<20 {
-		return nil, fmt.Errorf("截图字节数不符: %w", ErrUnavailable)
+	if err := validateDesktopImage(pixels, service.options.Width, service.options.Height); err != nil {
+		return nil, err
 	}
-	configuration, err := png.DecodeConfig(bytes.NewReader(pixels))
-	if err != nil || configuration.Width != service.options.Width || configuration.Height != service.options.Height {
-		return nil, fmt.Errorf("截图尺寸不符（%d×%d）: %w", configuration.Width, configuration.Height, ErrUnavailable)
-	}
-	if _, err := png.Decode(bytes.NewReader(pixels)); err != nil {
-		return nil, ErrUnavailable
-	}
+
 	if err := service.authorize(bounded, address.Session); err != nil {
 		return nil, err
 	}
@@ -416,6 +333,11 @@ func (service *Service) ReleaseSession(ctx context.Context, session computer.Exe
 	for _, item := range owned {
 		delete(service.windows, item.window.ID)
 	}
+	for id, window := range service.nativeWindows {
+		if window.session == session {
+			delete(service.nativeWindows, id)
+		}
+	}
 	service.mu.Unlock()
-	return nil
+	return service.options.Native.Release(bounded, session)
 }

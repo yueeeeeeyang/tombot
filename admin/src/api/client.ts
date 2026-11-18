@@ -256,12 +256,15 @@ export class AdminClient {
           Accept: 'application/json',
           ...(method !== 'GET'
             ? {
-                'Content-Type': 'application/json',
+                'Content-Type':
+                  options.body instanceof Blob ? 'application/octet-stream' : 'application/json',
                 ...(adminSession && this.csrf ? { 'X-CSRF-Token': this.csrf } : {}),
               }
             : {}),
         },
-        ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
+        ...(options.body !== undefined
+          ? { body: options.body instanceof Blob ? options.body : JSON.stringify(options.body) }
+          : {}),
       })
       const reader = response.body?.getReader()
       const chunks: Uint8Array[] = []

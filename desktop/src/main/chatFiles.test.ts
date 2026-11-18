@@ -4,6 +4,7 @@ import {
   deleteChatFile,
   listChatFiles,
   previewChatFile,
+  previewMessageFile,
   readChatFile,
   renameChatFile,
   uploadChatFile,
@@ -117,4 +118,38 @@ describe('群文件协议', () => {
     expect(() => parseChatFilePath('../../private')).toThrow('无效')
     await expect(readChatFile(call, '../other', id)).rejects.toThrow('无效')
   })
+})
+
+it('按会话校验消息预览，只返回受支持的媒体类型', async () => {
+  for (const [name, declared, expected] of [
+    ['图片.webp', 'image/webp', 'image/webp'],
+    ['语音.wav', 'audio/x-wav', 'audio/wav'],
+    ['录音.m4a', 'video/mp4', 'audio/mp4'],
+    ['影片.webm', 'video/webm', 'video/webm'],
+    ['旧录音.mp3', 'application/octet-stream', 'audio/mpeg'],
+  ]) {
+    const call = vi.fn().mockResolvedValue({
+      file: { ...file, name, media_type: declared },
+      content_base64: bytes.toString('base64'),
+    })
+    await expect(previewMessageFile(call, chatFilePath(file))).resolves.toBe(
+      `data:${expected};base64,${bytes.toString('base64')}`,
+    )
+  }
+  for (const [name, type] of [
+    ['网页.mp4', 'text/html'],
+    ['绘图.svg', 'image/svg+xml'],
+    ['文档.docx', 'application/octet-stream'],
+  ]) {
+    const call = vi.fn().mockResolvedValue({
+      file: { ...file, name, media_type: type },
+      content_base64: bytes.toString('base64'),
+    })
+    await expect(previewMessageFile(call, chatFilePath(file))).rejects.toThrow('此格式')
+  }
+  const corrupt = vi.fn().mockResolvedValue({
+    file: { ...file, name: '录音.mp3', media_type: 'audio/mpeg' },
+    content_base64: '',
+  })
+  await expect(previewMessageFile(corrupt, chatFilePath(file))).rejects.toThrow('校验失败')
 })

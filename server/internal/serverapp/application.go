@@ -17,12 +17,15 @@ import (
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computercontrol"
 	"io.yueyang/tom/internal/computertools"
+	"io.yueyang/tom/internal/computerupgrade"
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/identity"
 	"io.yueyang/tom/internal/modelgateway"
 	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/nodeenrollment"
+	"io.yueyang/tom/internal/nodefleet"
+	"io.yueyang/tom/internal/noderelease"
 	"io.yueyang/tom/internal/store/postgres"
 	"io.yueyang/tom/internal/userapi"
 	"io.yueyang/tom/internal/userevents"
@@ -36,6 +39,8 @@ type nodeRuntime interface {
 	computer.TerminalRuntime
 	computer.DesktopRuntime
 	computer.AgentRuntime
+	computer.ConsoleRuntime
+	computer.DesktopStreamRuntime
 }
 
 type Application struct {
@@ -224,17 +229,32 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	user, err := userapi.New(catalog, executor, userEvents, gate, logger)
+	console, err := execution.NewConsoleService(executor, node, logger)
 	if err != nil {
 		return nil, err
 	}
-	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{fleet.Run, users.Run, worker.Serve, eventRetention.Run}}
+	user, err := userapi.New(catalog, executor, console, userEvents, gate, logger)
+	if err != nil {
+		return nil, err
+	}
+	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{fleet.Run, users.Run, worker.Serve, eventRetention.Run, console.Run}}
+	if upgrader, ok := node.(computer.ImageUpgrader); ok {
+		migrations := computerupgrade.New(databases[postgres.ControlRole], upgrader, control, configuration.Node.CallTimeout.Value(), logger)
+		application.background = append(application.background, migrations.Run)
+	}
 	if closer, ok := node.(interface{ CloseIdle() error }); ok {
 		application.closeNodes = closer.CloseIdle
 	}
 	router := http.NewServeMux()
 	build, _ := debug.ReadBuildInfo()
 	router.HandleFunc("/api/v2/version", versionHandler(versionFromBuild(releaseVersion, build), logger))
+	updates := nodefleet.Service{DB: databases[postgres.ControlRole], Directory: nodefleet.Directory, Key: noderelease.ReadKey}
+	upgradeAdmin, err := updates.Admin(gate, authentication, logger)
+	if err != nil {
+		return nil, err
+	}
+	router.Handle(nodefleet.AdminPath, upgradeAdmin)
+	router.Handle(noderelease.AgentPath, updates.Agent(logger))
 	router.Handle(nodeenrollment.Path, enrollmentHTTP)
 	router.Handle(nodeenrollment.BootstrapPath, bootstrap)
 	router.Handle("/api/v2/auth/", gate)

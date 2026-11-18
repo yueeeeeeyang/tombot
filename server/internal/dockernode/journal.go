@@ -22,11 +22,17 @@ import (
 const lifecycleVersion = 4
 
 type record struct {
-	Version       int                    `json:"version"`
-	Specification computer.Specification `json:"specification"`
-	Phase         string                 `json:"phase"`
-	ContainerID   string                 `json:"container_id,omitempty"`
-	Retirement    *controlRetirement     `json:"control_retirement,omitempty"`
+	Version           int                    `json:"version"`
+	Specification     computer.Specification `json:"specification"`
+	Phase             string                 `json:"phase"`
+	ContainerID       string                 `json:"container_id,omitempty"`
+	Retirement        *controlRetirement     `json:"control_retirement,omitempty"`
+	StorageGeneration int64                  `json:"storage_generation,omitempty"`
+	ImageUpgrade      *computer.ImageUpgrade `json:"image_upgrade,omitempty"`
+}
+
+func (state *record) upgradeInProgress() bool {
+	return state.ImageUpgrade != nil && state.Phase != "ready"
 }
 
 type journal struct {
@@ -183,7 +189,7 @@ func (journal *journal) read(userID string) (*record, error) {
 		return nil, errors.New("节点资源记录身份无效")
 	}
 	switch state.Phase {
-	case "reserved", "creating", "ready", "removing", "absent":
+	case "reserved", "creating", "ready", "removing", "absent", "upgrading":
 	default:
 		return nil, errors.New("节点资源记录状态无效")
 	}
@@ -193,7 +199,29 @@ func (journal *journal) read(userID string) (*record, error) {
 			return nil, errors.New("节点控制目录回收记录无效")
 		}
 	}
+	if !validImageUpgradeRecord(&state) {
+		return nil, errors.New("节点电脑镜像更新记录无效")
+	}
 	return &state, nil
+}
+
+func validImageUpgradeRecord(state *record) bool {
+	upgrade := state.ImageUpgrade
+	if upgrade == nil {
+		return state.StorageGeneration == 0 && state.Phase != "upgrading"
+	}
+	if upgrade.Validate() != nil || state.Retirement != nil || state.StorageGeneration < 1 || state.StorageGeneration > upgrade.Current.Generation {
+		return false
+	}
+	switch state.Phase {
+	case "upgrading":
+		return immutableEqual(state.Specification, upgrade.Current) && state.ContainerID == upgrade.CurrentContainerID && state.Specification.FencingToken < upgrade.Target.FencingToken
+	case "creating", "ready":
+		return immutableEqual(state.Specification, upgrade.Target) && state.Specification.FencingToken >= upgrade.Target.FencingToken &&
+			state.ContainerID != upgrade.CurrentContainerID && (state.Phase != "ready" || state.ContainerID != "")
+	default:
+		return false
+	}
 }
 
 // save 先写入并刷盘，再原子替换和同步目录；完成之前绝不能调用外部资源变更。

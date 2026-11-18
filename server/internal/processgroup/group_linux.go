@@ -180,7 +180,11 @@ func openContainerParent(reference ContainerReference) (*os.Root, error) {
 		return nil, err
 	}
 	parent, openErr := root.OpenRoot(reference.Path)
-	if err = errors.Join(openErr, root.Close()); err != nil {
+	closeErr := root.Close()
+	if errors.Is(openErr, os.ErrNotExist) && closeErr == nil {
+		return nil, ErrContainerGroupAbsent
+	}
+	if err = errors.Join(openErr, closeErr); err != nil {
 		if parent != nil {
 			err = errors.Join(err, parent.Close())
 		}

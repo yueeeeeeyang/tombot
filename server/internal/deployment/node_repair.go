@@ -18,15 +18,18 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/nodeapi"
+	"io.yueyang/tom/internal/nodeenrollment"
 )
 
 const nodeRepairDirectory = "/etc/tombot/node-repair"
 
 // NodeRepairOptions 允许修正端点和导入完整离线镜像包，不接受新节点身份或凭据。
 type NodeRepairOptions struct {
-	ImagePackage string `json:"image_package,omitempty"`
-	Listen       string `json:"listen"`
-	URL          string `json:"url"`
+	PackageSHA256 string `json:"package_sha256,omitempty"`
+	Upgrade       bool   `json:"upgrade,omitempty"`
+	ImagePackage  string `json:"image_package,omitempty"`
+	Listen        string `json:"listen"`
+	URL           string `json:"url"`
 }
 
 type nodeRepairFile struct {
@@ -36,10 +39,11 @@ type nodeRepairFile struct {
 }
 
 type nodeRepair struct {
-	Version int               `json:"version"`
-	Options NodeRepairOptions `json:"options"`
-	Program string            `json:"program"`
-	Files   []nodeRepairFile  `json:"files"`
+	OperationID string            `json:"operation_id,omitempty"`
+	Version     int               `json:"version"`
+	Options     NodeRepairOptions `json:"options"`
+	Program     string            `json:"program"`
+	Files       []nodeRepairFile  `json:"files"`
 }
 
 func nodeRepairTargets() []struct {
@@ -59,7 +63,7 @@ func nodeRepairTargets() []struct {
 }
 
 // RepairNode 备份并迁移安装器管理的配置，再启动当前程序；保留节点身份、证书与授权；显式指定离线包时更换镜像。
-// 只处理已停止的服务，未完成的修复必须使用同一程序和选项恢复，任何内容漂移都拒绝覆盖。
+// 普通修复要求服务已停止；升级模式先取得维护窗口。未完成的事务须使用同一程序和选项恢复。
 func RepairNode(ctx context.Context, executable string, caller uint32, options NodeRepairOptions, logger *slog.Logger) (NodeInstallationReport, error) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 || logger == nil {
 		return NodeInstallationReport{}, errors.New("节点修复需要在 Linux 以 root 执行")
@@ -70,15 +74,25 @@ func RepairNode(ctx context.Context, executable string, caller uint32, options N
 	}
 	installer := nodeInstaller{fs: fs, caller: caller, platform: "linux/" + runtime.GOARCH, logger: logger, systemctl: runNodeSystemctl, checkListen: checkNodeListen}
 	checkStopped := func(ctx context.Context) error {
-		output, err := runServerCommand(ctx, serverCommand{program: "/usr/bin/systemctl", arguments: []string{"show", nodeServiceName, "--property=LoadState,ActiveState"}, timeout: 15 * time.Second})
+		output, err := runServerCommand(ctx, serverCommand{program: "/usr/bin/systemctl", arguments: []string{"show", nodeServiceName, "--property=LoadState,ActiveState,MainPID,Result"}, timeout: 15 * time.Second})
 		if err != nil {
 			return err
 		}
 		state := parseServiceProperties(output)
-		if state["LoadState"] != "loaded" || state["ActiveState"] != "inactive" && state["ActiveState"] != "failed" {
+		if state["LoadState"] != "loaded" || state["MainPID"] != "0" || state["ActiveState"] != "inactive" && state["ActiveState"] != "failed" {
 			return errors.New("修复前请先停止节点：systemctl stop tombot-node；有运行任务时须先排空")
 		}
 		return nil
+	}
+	if options.Upgrade {
+		options.ImagePackage = filepath.Dir(executable)
+		installer.maintain = installer.maintainNode
+		installer.systemctl = func(ctx context.Context, args ...string) error {
+			if len(args) > 0 && args[0] == "stop" {
+				return stopNodeForUpgrade(ctx)
+			}
+			return runNodeSystemctl(ctx, args...)
+		}
 	}
 	return installer.repair(ctx, executable, options, checkStopped)
 }
@@ -99,8 +113,15 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	if err := validateNodeExecutable(program, installer.platform); err != nil {
 		return report, err
 	}
-	if err := checkStopped(ctx); err != nil {
-		return report, err
+	if !options.Upgrade {
+		if err := checkStopped(ctx); err != nil {
+			return report, err
+		}
+	} else {
+		options.PackageSHA256, err = installer.checkUpgradePackage(options.ImagePackage, program)
+		if err != nil {
+			return report, err
+		}
 	}
 	journalPath := nodeRepairDirectory + "/plan.json"
 	var journal nodeRepair
@@ -119,6 +140,8 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 		return report, errors.New("待恢复的节点修复与此次程序或参数不一致，未覆盖")
 	}
 	// 先核对所有备份、目标和安装状态，再开始替换；崩溃恢复仅接受计划中的前后两个值。
+	allApplied, allOriginal := true, true
+	var previous nodeInstallation
 	after := map[string][]byte{}
 	for index, target := range nodeRepairTargets() {
 		item := journal.Files[index]
@@ -130,11 +153,16 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 			if err != nil || contentDigest(content) != revision.digest {
 				return report, errors.New("节点修复备份摘要或权限不一致，未覆盖")
 			}
+			if revision.directory == "before" && target.name == "installation.json" && decodePreparation(content, &previous) != nil {
+				return report, errors.New("原安装记录无效")
+			}
 			if revision.directory == "after" {
 				after[target.name] = content
 			}
 		}
 		current, err := installer.fs.readConfig(fileRule{path: target.path, maximum: maximumNodeBinaryBytes, private: target.mode == 0600}, account{})
+		allApplied = allApplied && contentDigest(current) == item.After
+		allOriginal = allOriginal && contentDigest(current) == item.Before
 		if err != nil || contentDigest(current) != item.Before && contentDigest(current) != item.After {
 			return report, errors.New("节点修复目标已被其他操作改变，未覆盖")
 		}
@@ -181,17 +209,66 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	if _, err := installer.verifyInstallation(ctx, currentRecord); err != nil {
 		return report, err
 	}
-	if installer.checkListen != nil {
-		if err := installer.checkListen(ctx, request.Control.Listen); err != nil {
+	// 升级首次准备时仍在线。只有维护授权落定才允许停服务，完成回执丢失后只重发交还。
+	resumeFinish := false
+	if options.Upgrade {
+		started, err := installer.fs.readConfig(fileRule{path: nodeRepairDirectory + "/started", maximum: 64, private: true}, account{})
+		if _, statErr := os.Lstat(installer.fs.resolve(nodeRepairDirectory + "/started")); !errors.Is(statErr, os.ErrNotExist) {
+			if err != nil || string(started) != journal.OperationID || !allApplied {
+				return report, errors.New("升级启动记录与当前程序不一致")
+			}
+			resumeFinish = true
+		}
+	}
+	noChange := options.Upgrade && allApplied
+	for _, file := range journal.Files {
+		noChange = noChange && file.Before == file.After
+	}
+	if err := installer.installReleaseKey(ctx, executable); err != nil {
+		return NodeInstallationReport{}, err
+	}
+	if request.Server != nil {
+		if err := installer.verifyUpdateUnits(previous.UpdateUnits); err != nil {
 			return report, err
 		}
 	}
-	for _, target := range nodeRepairTargets() {
-		if err := ctx.Err(); err != nil {
-			return report, err
+	if !noChange && !resumeFinish {
+		if options.Upgrade {
+			if err := installer.maintain(ctx, request, journal.OperationID, false); err != nil {
+				// 只有明确拒绝且目标完全未动才可撤下准备计划；网络回执未知时保留同一操作身份。
+				if errors.Is(err, nodeenrollment.ErrMaintenanceConflict) && allOriginal {
+					discard := installer.fs.resolve(nodeRepairDirectory + "-declined-" + journal.OperationID)
+					if e := publishPath(installer.fs.resolve(nodeRepairDirectory), discard); e != nil {
+						return report, errors.Join(err, e)
+					}
+					if e := syncDirectory(filepath.Dir(discard)); e != nil {
+						return report, errors.Join(err, e)
+					}
+					if e := os.RemoveAll(discard); e != nil {
+						return report, errors.Join(err, e)
+					}
+				}
+				return report, err
+			}
+			if err := installer.systemctl(ctx, "stop", nodeServiceName); err != nil {
+				return report, err
+			}
+			if err := checkStopped(ctx); err != nil {
+				return report, err
+			}
 		}
-		if err := (serverInstaller{fs: installer.fs}).replaceServerFile(target.path, after[target.name], target.mode); err != nil {
-			return report, err
+		if installer.checkListen != nil {
+			if err := installer.checkListen(ctx, request.Control.Listen); err != nil {
+				return report, err
+			}
+		}
+		for _, target := range nodeRepairTargets() {
+			if err := ctx.Err(); err != nil {
+				return report, err
+			}
+			if err := (serverInstaller{fs: installer.fs}).replaceServerFile(target.path, after[target.name], target.mode); err != nil {
+				return report, err
+			}
 		}
 	}
 	report, err = installer.verifyInstallation(ctx, record)
@@ -201,6 +278,22 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	if _, err := checkNode(ctx, nodeInstallationPaths(), installer.platform, installer.fs); err != nil {
 		return NodeInstallationReport{}, err
 	}
+	if err := installer.startNodeServices(ctx, request.Server != nil, previous.UpdateUnits); err != nil {
+		return NodeInstallationReport{}, err
+	}
+	if options.Upgrade && !noChange {
+		if !resumeFinish {
+			if err := writeConfigurationFile(installer.fs.resolve(nodeRepairDirectory+"/started"), []byte(journal.OperationID), 0600); err != nil {
+				return report, err
+			}
+			if err := syncDirectory(installer.fs.resolve(nodeRepairDirectory)); err != nil {
+				return report, err
+			}
+		}
+		if err := installer.maintain(ctx, request, journal.OperationID, true); err != nil {
+			return report, err
+		}
+	}
 	backup := nodeRepairDirectory + "-" + ids.New()
 	if err := publishPath(installer.fs.resolve(nodeRepairDirectory), installer.fs.resolve(backup)); err != nil {
 		return report, errors.New("无法归档节点修复备份")
@@ -209,14 +302,6 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 		return report, err
 	}
 	installer.logger.Info("节点修复已保存备份，节点身份保持不变", "node_id", report.NodeID, "image_id", report.ImageID, "backup", backup)
-	for _, arguments := range [][]string{{"daemon-reload"}, {"enable", "--now", nodeServiceName}, {"is-active", "--quiet", nodeServiceName}} {
-		if err := ctx.Err(); err != nil {
-			return NodeInstallationReport{}, err
-		}
-		if err := installer.systemctl(ctx, arguments...); err != nil {
-			return NodeInstallationReport{}, err
-		}
-	}
 	report.State = "control_started"
 	return report, nil
 }
@@ -242,7 +327,7 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 		return errors.New("已安装节点程序与记录不一致，未覆盖")
 	}
 	service, err := installer.fs.readConfig(fileRule{path: nodeServicePath, maximum: 64 << 10}, account{})
-	if err != nil || !bytes.Equal(service, []byte(deploy.NodeService())) {
+	if err != nil || (record.ServiceSHA256 == "" && !bytes.Equal(service, []byte(deploy.NodeService()))) || (record.ServiceSHA256 != "" && record.ServiceSHA256 != contentDigest(service)) {
 		return errors.New("节点服务单元不属于安装器默认配置，未覆盖")
 	}
 	if options.Listen != "" {
@@ -261,7 +346,7 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 	if request.Server != nil && sameNodeOrigin(request.Server.URL, request.Server.NodeURL) {
 		return errors.New("节点和服务端地址相同，请同时用 --listen 与 --url 指定独立节点端口")
 	}
-	if installer.checkListen != nil {
+	if !options.Upgrade && installer.checkListen != nil {
 		if err := installer.checkListen(ctx, request.Control.Listen); err != nil {
 			return err
 		}
@@ -270,10 +355,11 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 		if err := installer.prepareImageUpgrade(ctx, &request, &record, options.ImagePackage); err != nil {
 			return err
 		}
-	}
-	request.Docker, err = json.Marshal(dockerbootstrap.DefaultManifest())
-	if err != nil {
-		return err
+	} else {
+		request.Docker, err = json.Marshal(dockerbootstrap.DefaultManifest())
+		if err != nil {
+			return err
+		}
 	}
 	_, files, err := renderNodeInstallation(request, installer.platform)
 	if err != nil {
@@ -292,6 +378,10 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 	if err != nil {
 		return err
 	}
+	if request.Server != nil {
+		record.UpdateUnits = updateUnitDigests()
+	}
+	record.ServiceSHA256 = contentDigest([]byte(deploy.NodeService()))
 	record.BinarySHA256 = contentDigest(program)
 	after["installation.json"], err = json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -313,6 +403,9 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 		}
 	}
 	journal := nodeRepair{Version: 1, Options: options, Program: contentDigest(program)}
+	if options.Upgrade {
+		journal.OperationID = ids.New()
+	}
 	for _, target := range nodeRepairTargets() {
 		before, err := installer.fs.readConfig(fileRule{path: target.path, maximum: maximumNodeBinaryBytes, private: target.mode == 0600}, account{})
 		if err != nil {
@@ -369,6 +462,7 @@ func (installer nodeInstaller) prepareImageUpgrade(ctx context.Context, request 
 	if _, err := dockerbootstrap.ParseManifest(release.Docker); err != nil {
 		return err
 	}
+	request.Docker = release.Docker
 	archive := filepath.Join(deploy.NodeDirectory, "computer-image-"+release.ArchiveSHA256+".tar")
 	if _, err = os.Lstat(installer.fs.resolve(archive)); errors.Is(err, os.ErrNotExist) {
 		stage, err := os.MkdirTemp(installer.fs.resolve(deploy.NodeDirectory), ".image-upgrade-")

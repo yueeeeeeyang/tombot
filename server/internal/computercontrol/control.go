@@ -193,6 +193,18 @@ func quarantine(ctx context.Context, tx *sql.Tx, value record, code string) erro
 // Release 允许原持有者或恢复器收尾已失效任务，但只作用于该尝试的会话。
 // 未取得电脑的排队项直接结束；已发往节点的会话必须收到相同身份、相同控制版本的 drained 证据。
 func (service *Service) Release(ctx context.Context, reference RunReference) error {
+	return service.release(ctx, reference, false)
+}
+
+const upgradeCleanupAttempts = 3
+
+// RecoverUpgradeSession 在登记的旧实例排空期间，对已过期任务补充有界清理尝试。
+// 与正常收尾共用节点关闭、回包核验和持久状态变更，后续任务恢复由运行恢复器处理。
+func (service *Service) RecoverUpgradeSession(ctx context.Context, reference RunReference) error {
+	return service.release(ctx, reference, true)
+}
+
+func (service *Service) release(ctx context.Context, reference RunReference, duringUpgrade bool) error {
 	if !reference.valid() {
 		return ErrInvalidInput
 	}
@@ -205,6 +217,9 @@ func (service *Service) Release(ctx context.Context, reference RunReference) err
 		}
 		value, err = read(ctx, tx, reference)
 		if errors.Is(err, sql.ErrNoRows) {
+			if duringUpgrade {
+				return ErrLeaseLost
+			}
 			return nil
 		}
 		if err != nil {
@@ -215,6 +230,16 @@ func (service *Service) Release(ctx context.Context, reference RunReference) err
 		}
 		if value.State == "released" {
 			return nil
+		}
+		maximumAttempts := service.options.MaxCleanupAttempts
+		if duringUpgrade {
+			if live {
+				return ErrUnavailable
+			}
+			if err = allowUpgradeRecovery(ctx, tx, value); err != nil {
+				return err
+			}
+			maximumAttempts += upgradeCleanupAttempts
 		}
 		at, err := now(ctx, tx)
 		if err != nil {
@@ -242,7 +267,7 @@ func (service *Service) Release(ctx context.Context, reference RunReference) err
 				}
 			}
 		}
-		if value.CleanupAttempt >= service.options.MaxCleanupAttempts {
+		if value.CleanupAttempt >= maximumAttempts {
 			return ErrCleanupBlocked
 		}
 		// 正在进行的 Close 由数据库期限保护，其他恢复者不得同时消费重试额度或覆盖版本。
@@ -304,4 +329,24 @@ func (service *Service) Release(ctx context.Context, reference RunReference) err
 		return safe(err)
 	}
 	return result
+}
+
+// allowUpgradeRecovery 校验任务已经失去原租约，且用户电脑仍处于登记的原实例排空阶段。
+func allowUpgradeRecovery(ctx context.Context, tx *sql.Tx, value record) error {
+	var eligible bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.computer_image_upgrades u
+		JOIN tombot.computers c ON c.user_id=u.user_id AND c.id=u.computer_id AND c.node_id=u.node_id
+		JOIN tombot.jobs j ON j.user_id=u.user_id AND j.id=$6
+		WHERE u.user_id=$1 AND u.computer_id=$2 AND u.node_id=$3 AND u.source_generation=$4 AND u.source_container_id=$5
+		AND u.state='draining' AND c.status='stopping' AND c.generation=u.source_generation AND c.container_id=u.source_container_id
+		AND j.status='leased' AND j.lease_owner=$7 AND j.fencing_token=$8 AND j.attempt=$9 AND j.lease_expires_at<=clock_timestamp())`,
+		value.UserID, value.ComputerID, value.NodeID, value.Generation, value.ContainerID, value.Reference.JobID,
+		value.Reference.OwnerID, value.Reference.FencingToken, value.Reference.Attempt).Scan(&eligible)
+	if err != nil {
+		return err
+	}
+	if !eligible {
+		return ErrUnavailable
+	}
+	return nil
 }

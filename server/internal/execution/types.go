@@ -114,6 +114,7 @@ type Lease struct {
 
 // Work 保存运行开始时固定的机器人设定与模型选择，以及有界上下文和已有操作结果。
 type Work struct {
+	IsConsole         bool
 	Run               Run
 	Bot               bots.Spec
 	Selection         *modelregistry.Selection
@@ -121,6 +122,7 @@ type Work struct {
 	Operations        []Operation
 	HistoryTruncated  bool
 	ContinuationAfter int64
+	TriggerSequence   int64
 	MemoryContext     string
 	HasMemory         bool
 	IsTask            bool

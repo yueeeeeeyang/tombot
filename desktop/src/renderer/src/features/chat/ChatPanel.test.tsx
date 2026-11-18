@@ -9,6 +9,7 @@ import {
   updateDraft,
   type Agent,
   type ChatMessage,
+  type MessageAttachment,
 } from '../workspace/model'
 import { ChatPanel } from './ChatPanel'
 
@@ -33,7 +34,7 @@ function createAgent(messages: ChatMessage[] = [createMessage()], draft = ''): A
     avatar: 'bombay',
     modelId: DEFAULT_CAT_MODEL_ID,
     artifacts: [],
-    computerUrl: '',
+
     messages,
     draft,
   }
@@ -391,4 +392,68 @@ it('空闲输入框不保留工作状态空白，上翻消息后可用图标回�
   fireEvent.click(back)
   expect(viewport.scrollTop).toBe(1000)
   expect(screen.queryByRole('button', { name: '回到最新消息' })).toBeNull()
+})
+
+it('纯图片消息独立展示，点开和退出原图不触发下载，历史刷新不重读图片', async () => {
+  const attachment = {
+    name: '合照.png',
+    mediaType: 'image/png',
+    kind: 'image' as const,
+    path: 'chat-files/photo',
+    sha256: 'a'.repeat(64),
+  }
+  const agent = createAgent([
+    createMessage({ content: attachment.name, attachments: [attachment] }),
+  ])
+  const preview = vi.fn(async () => 'data:image/png;base64,AAAA')
+  const download = vi.fn(async () => undefined)
+  const { rerender, ...props } = renderPanel(agent, { onPreview: preview, onDownload: download })
+  const image = await screen.findByRole('img', { name: attachment.name })
+  expect(image.closest('.attachment-only')).not.toBeNull()
+  expect(image.closest('.message-bubble')?.querySelector('.message-text')).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '查看原图 合照.png' }))
+  const dialog = screen.getByRole('dialog', { name: attachment.name })
+  expect(within(dialog).getByRole('img', { name: attachment.name })).toBeInTheDocument()
+  await userEvent.click(within(dialog).getByRole('button', { name: '关闭图片预览' }))
+  expect(download).not.toHaveBeenCalled()
+  rerender(
+    <ChatPanel
+      {...props}
+      agent={createAgent([
+        createMessage({ content: '旅行照片', attachments: [{ ...attachment }] }),
+      ])}
+    />,
+  )
+  expect(screen.getByText('旅行照片')).toBeInTheDocument()
+  expect(preview).toHaveBeenCalledTimes(1)
+})
+
+it('媒体按需读取，失败能重试或下载，语音和视频各自使用原生播放器', async () => {
+  const files = ['audio/mpeg', 'video/webm'].map((type, i) => ({
+    name: i ? '片段.webm' : '语音.mp3',
+    kind: 'file' as const,
+    mediaType: type,
+    path: `file-${i}`,
+    sha256: 'b'.repeat(64),
+  }))
+  const preview = vi
+    .fn(async (file: MessageAttachment) => `data:${file.mediaType};base64,AAAA`)
+    .mockRejectedValueOnce(new Error('断线'))
+  const download = vi.fn(async () => undefined)
+  renderPanel(createAgent([createMessage({ content: '请听一听', attachments: files })]), {
+    onPreview: preview,
+    onDownload: download,
+  })
+  expect(preview).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: '播放 语音.mp3' }))
+  await screen.findByText('语音.mp3 无法预览')
+  await userEvent.click(screen.getByRole('button', { name: '重试预览' }))
+  const audio = await screen.findByLabelText('语音.mp3', { selector: 'audio' })
+  expect(audio).toHaveAttribute('controls')
+  await userEvent.click(screen.getByRole('button', { name: '播放 片段.webm' }))
+  const video = await screen.findByLabelText('片段.webm', { selector: 'video' })
+  expect(video).toHaveAttribute('controls')
+  fireEvent.error(video)
+  await userEvent.click(screen.getByRole('button', { name: '下载 片段.webm' }))
+  expect(download).toHaveBeenCalledWith(files[1])
 })

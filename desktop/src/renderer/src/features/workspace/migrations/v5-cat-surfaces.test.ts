@@ -33,7 +33,7 @@ describe('资料库与远端电脑前向迁移', () => {
     expect(migrated.version).toBe(5)
     expect(migrated.agents[0]?.modelId).toBe('claude-sonnet')
     expect(
-      migrated.agents.every((agent) => agent.artifacts.length === 0 && agent.computerUrl === ''),
+      migrated.agents.every((agent) => agent.artifacts.length === 0 && !('computerUrl' in agent)),
     ).toBe(true)
     expect(localStorage.getItem(V4_STORAGE_KEY)).toBe(serialized)
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!)).toEqual(migrated)
@@ -44,7 +44,7 @@ describe('资料库与远端电脑前向迁移', () => {
 
   it('已有 v5 时不读取 v4', () => {
     const workspace = createWorkspace()
-    workspace.agents[0]!.computerUrl = 'https://desktop.example.test/'
+    workspace.agents[0]!.draft = '保留草稿'
     persistWorkspace(localStorage, workspace)
     localStorage.setItem(V4_STORAGE_KEY, '损坏的旧版本')
     expect(loadWorkspace(localStorage)).toEqual(workspace)

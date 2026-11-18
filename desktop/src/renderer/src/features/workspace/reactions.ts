@@ -1,4 +1,4 @@
-import reactionEmojis from '../../../../../../server/internal/execution/reaction_emojis.json'
+import reactionEmojis from '../../../../../../server/internal/execution/reaction_emojis.json' with { type: 'json' }
 
 /** 气泡上允许的表情。快捷行在前，其余只出现在“更多”里，存储不接受名单以外的符号。 */
 export const REACTION_EMOJIS = reactionEmojis

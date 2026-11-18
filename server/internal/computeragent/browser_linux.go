@@ -115,8 +115,7 @@ func (scope *kernelBrowserScope) Revoke() error {
 	return errors.Join(failure, scope.control.Revoke())
 }
 
-// Drain 给 Chrome 有界正常退出时间以保存 profile，随后仍核验并回收整组后代。
-// 强制终止、退出异常或超时明确失败，不能被解释为账号状态已干净保存。
+// Drain 给已交付的 Chrome 有界正常退出时间以保存 profile；任何实例都必须确认整组后代已回收。
 func (scope *kernelBrowserScope) Drain(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("共享浏览器回收上下文缺失")
@@ -126,7 +125,7 @@ func (scope *kernelBrowserScope) Drain(ctx context.Context) error {
 	process := scope.process
 	scope.control.mu.Unlock()
 	var graceful error
-	if process != nil {
+	if process != nil && process.hasService() {
 		bounded, cancel := context.WithTimeout(ctx, scope.grace)
 		graceful = process.close(bounded)
 		cancel()

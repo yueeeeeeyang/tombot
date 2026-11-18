@@ -105,56 +105,64 @@ describe('消息翻页', () => {
 })
 
 describe('群聊持久消息同步', () => {
-  it('重开时恢复输入状态，有成员正在输入时优先显示，完成后整条显示', async () => {
-    let publish!: Parameters<NonNullable<DesktopBackend['watchEvents']>>[0]
-    vi.spyOn(MemoryBackend.prototype, 'watchEvents').mockImplementation((listener) => {
-      publish = listener
-      return () => undefined
-    })
-    const activity = vi
-      .fn<NonNullable<DesktopBackend['conversationActivity']>>()
-      .mockResolvedValue({
-        runs: [
-          { id: 'queued', bot_id: agents[0]!.id, status: 'queued', progress_summary: '' },
-          { id: 'typing', bot_id: agents[1]!.id, status: 'running', progress_summary: '正在输入…' },
-        ],
+  it.each(['group.run.finished', 'workspace.refresh'])(
+    '打开时恢复输入状态，完成事件或重连后同步整条回复：%s',
+    async (kind) => {
+      let publish!: Parameters<NonNullable<DesktopBackend['watchEvents']>>[0]
+      vi.spyOn(MemoryBackend.prototype, 'watchEvents').mockImplementation((listener) => {
+        publish = listener
+        return () => undefined
       })
-    const list = vi.fn<ListMessages>().mockResolvedValue({ messages: [], hasMore: false })
-    openPanel(
-      vi.fn(async () => ({})),
-      list,
-      activity,
-    )
-    expect(await screen.findByText('正在输入…')).toBeInTheDocument()
-    expect(screen.getByRole('log')).not.toHaveTextContent('核对完成')
-    activity.mockResolvedValue({ runs: [] })
-    list.mockResolvedValue({
-      messages: [
-        {
-          id: 'reply',
+      const activity = vi
+        .fn<NonNullable<DesktopBackend['conversationActivity']>>()
+        .mockResolvedValue({
+          runs: [
+            { id: 'queued', bot_id: agents[0]!.id, status: 'queued', progress_summary: '' },
+            {
+              id: 'typing',
+              bot_id: agents[1]!.id,
+              status: 'running',
+              progress_summary: '正在输入…',
+            },
+          ],
+        })
+      const list = vi.fn<ListMessages>().mockResolvedValue({ messages: [], hasMore: false })
+      openPanel(
+        vi.fn(async () => ({})),
+        list,
+        activity,
+      )
+      expect(await screen.findByText('正在输入…')).toBeInTheDocument()
+      expect(screen.getByRole('log')).not.toHaveTextContent('核对完成')
+      activity.mockResolvedValue({ runs: [] })
+      list.mockResolvedValue({
+        messages: [
+          {
+            id: 'reply',
+            sequence: 1,
+            role: 'assistant',
+            speaker: agents[1]!.id,
+            content: '核对完成，可以使用。',
+            createdAt: new Date().toISOString(),
+            reactions: [],
+            attachments: [],
+          },
+        ],
+        hasMore: false,
+      })
+      await act(async () =>
+        publish({
           sequence: 1,
-          role: 'assistant',
-          speaker: agents[1]!.id,
-          content: '核对完成，可以使用。',
-          createdAt: new Date().toISOString(),
-          reactions: [],
-          attachments: [],
-        },
-      ],
-      hasMore: false,
-    })
-    await act(async () =>
-      publish({
-        sequence: 1,
-        kind: 'group.run.finished',
-        resource_id: 'typing',
-        payload: { conversation_id: 'conversation' },
-        created_at: new Date().toISOString(),
-      }),
-    )
-    expect(await screen.findByText('核对完成，可以使用。')).toBeInTheDocument()
-    expect(screen.queryByText('正在输入…')).toBeNull()
-  })
+          kind,
+          resource_id: kind === 'workspace.refresh' ? '' : 'typing',
+          payload: kind === 'workspace.refresh' ? {} : { conversation_id: 'conversation' },
+          created_at: new Date().toISOString(),
+        }),
+      )
+      expect(await screen.findByText('核对完成，可以使用。')).toBeInTheDocument()
+      expect(screen.queryByText('正在输入…')).toBeNull()
+    },
+  )
   it('交错到达的成员消息分别显示，受理后可继续发言并保留引用与用户提及', async () => {
     const send = vi.fn<Send>().mockResolvedValue({ acceptedMessageId: 'accepted' })
     const list = vi.fn<ListMessages>().mockResolvedValue({ messages: [], hasMore: false })

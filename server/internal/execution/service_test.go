@@ -121,7 +121,7 @@ func newFixtureWithProtocol(t *testing.T, cluster *pgtest.Cluster, protocol stri
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := bots.New(tenant, bots.Options{MaxBots: 10, MaxGroups: 10, ToolNames: []string{"file_read", "computer_shell", "computer_screenshot", "computer_input"}})
+	catalog, err := bots.New(tenant, bots.Options{MaxBots: 10, MaxGroups: 10, ToolNames: []string{"file_read", "computer_shell", "computer_browser", "computer_screenshot", "computer_input"}})
 	if err != nil {
 		t.Fatal(err)
 	}

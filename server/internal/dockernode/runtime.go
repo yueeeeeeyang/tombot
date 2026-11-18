@@ -45,6 +45,7 @@ type Workspace struct {
 type Storage interface {
 	Inspect(context.Context, Resource) (Workspace, error)
 	Ensure(context.Context, Resource) (Workspace, error)
+	Restore(context.Context, Resource) (Workspace, error)
 	Remove(context.Context, Resource) error
 	VerifyFilesystem(context.Context, Resource, int64, uint64) error
 }
@@ -255,6 +256,21 @@ func (node *Runtime) resource(specification computer.Specification) Resource {
 		"io.tombot.computer": specification.ComputerID, "io.tombot.operation": specification.OperationID, "io.tombot.generation": fmt.Sprint(specification.Generation), "io.tombot.identity": hex.EncodeToString(digest[:])}}
 }
 
+// withStorage 独立派生物理磁盘路径，容器、Docker 卷名和控制目录仍按运行代次派生。
+func (node *Runtime) withStorage(resource Resource, state *record) Resource {
+	resource.WorkspacePath = node.diskResource(resource, state).WorkspacePath
+	return resource
+}
+
+func (node *Runtime) diskResource(resource Resource, state *record) Resource {
+	if state.StorageGeneration != 0 {
+		resource.Specification.Generation = state.StorageGeneration
+		resource.Name = resourceName(resource.Specification)
+		resource.WorkspacePath = filepath.Join(node.options.StorageDirectory, resource.Name, "workspace")
+	}
+	return resource
+}
+
 func resourceName(specification computer.Specification) string {
 	return fmt.Sprintf("tombot-%s-g%d", strings.ToLower(specification.ComputerID), specification.Generation)
 }
@@ -298,6 +314,9 @@ func (node *Runtime) guarded(ctx context.Context, specification computer.Specifi
 		state = &record{Version: lifecycleVersion, Specification: specification, Phase: "reserved"}
 	} else {
 		previous := state.Specification
+		if state.upgradeInProgress() {
+			return observation, failure("computer_image_upgrade_in_progress")
+		}
 		if !sameComputerIdentity(previous, specification) {
 			return observation, failure("resource_identity_mismatch")
 		}
@@ -334,7 +353,7 @@ func (node *Runtime) guarded(ctx context.Context, specification computer.Specifi
 	if err = node.journal.save(state); err != nil {
 		return observation, err
 	}
-	return action(ctx, node.resource(specification), state)
+	return action(ctx, node.withStorage(node.resource(specification), state), state)
 }
 
 func observed(resource Resource, state, containerID string, capabilities computer.Capabilities) computer.Observation {
@@ -349,10 +368,20 @@ func (node *Runtime) Inspect(ctx context.Context, specification computer.Specifi
 
 // Ensure 按同一代次的固定名称创建资源；调用失败后由 Inspect 对账，不换名称重试。
 func (node *Runtime) Ensure(ctx context.Context, specification computer.Specification) (computer.Observation, error) {
-	return node.guarded(ctx, specification, node.ensure)
+	return node.guarded(ctx, specification, func(ctx context.Context, resource Resource, state *record) (computer.Observation, error) {
+		if state.StorageGeneration != 0 {
+			return computer.Observation{}, failure("retained_storage_requires_upgrade")
+		}
+		return node.ensure(ctx, resource, state)
+	})
 }
 
 // Remove 持久封闭本代次创建及出网，再停止并核实容器已删除，最后删除本代次卷与存储。
 func (node *Runtime) Remove(ctx context.Context, specification computer.Specification) (computer.Observation, error) {
-	return node.guarded(ctx, specification, node.remove)
+	return node.guarded(ctx, specification, func(ctx context.Context, resource Resource, state *record) (computer.Observation, error) {
+		if state.StorageGeneration != 0 {
+			return computer.Observation{}, failure("retained_storage_removal_forbidden")
+		}
+		return node.remove(ctx, resource, state)
+	})
 }

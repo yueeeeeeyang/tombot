@@ -143,7 +143,12 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (handler *Handler) transport(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), handler.options.RequestTimeout)
+		timeout := handler.options.RequestTimeout
+		// 桌面升级为长连接后由短租约逐秒复核；其他认证请求仍使用原预算。
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v2/consoles/") && strings.HasSuffix(r.URL.Path, "/stream") {
+			timeout = 10 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		requestID := ids.New()
 		w.Header().Set("X-Request-ID", requestID)

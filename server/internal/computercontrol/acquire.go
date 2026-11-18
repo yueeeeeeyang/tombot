@@ -45,7 +45,43 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 			return err
 		}
 		value, err = read(ctx, tx, reference)
-		if errors.Is(err, sql.ErrNoRows) {
+		noSession := errors.Is(err, sql.ErrNoRows)
+		if err != nil && !noSession {
+			return err
+		}
+		var awaitNodeUpgrade bool
+		if noSession || value.State == "waiting" {
+			// 升级与申请共用用户电脑头。升级门禁生效后，不在旧实例上建立新的等待或开启记录。
+			var upgradeState string
+			if err = tx.QueryRowContext(ctx, `SELECT
+				COALESCE(CASE WHEN c.status='stopping' OR u.state='quarantined' THEN u.state END,''),
+				COALESCE(c.status='ready' AND n.supports_computer_upgrades AND (n.image_id<>c.image_id OR m.is_finished IS FALSE),false)
+				FROM tombot.computers c
+				LEFT JOIN tombot.computer_image_upgrades u ON u.user_id=c.user_id AND u.computer_id=c.id AND u.node_id=c.node_id
+				LEFT JOIN tombot.node_connections n ON n.node_id=c.node_id
+				LEFT JOIN tombot.node_upgrades m ON m.node_id=n.node_id
+				WHERE c.user_id=$1`, reference.UserID).Scan(&upgradeState, &awaitNodeUpgrade); err != nil {
+				return err
+			}
+			switch upgradeState {
+			case "quarantined":
+				result = ErrUnavailable
+			case "draining", "switching":
+				result = WaitError{Reason: WaitStartingDesktop}
+			}
+			if result != nil {
+				if !noSession {
+					// 旧等待会话还未发送节点授权，同一尝试的实例绑定不可重写。
+					return releaseWaiting(ctx, tx, value, "COMPUTER_INSTANCE_CHANGED")
+				}
+				return nil
+			}
+			if noSession && awaitNodeUpgrade {
+				result = WaitError{Reason: WaitStartingDesktop}
+				return nil
+			}
+		}
+		if noSession {
 			var ticket int64
 			if err = tx.QueryRowContext(ctx, `UPDATE tombot.computer_execution_heads SET last_ticket=last_ticket+1 WHERE user_id=$1 RETURNING last_ticket`, reference.UserID).Scan(&ticket); err != nil {
 				return err
@@ -61,8 +97,6 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 				return err
 			}
 			created = true
-		} else if err != nil {
-			return err
 		}
 		at, err := now(ctx, tx)
 		if err != nil {
@@ -84,6 +118,11 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 			if !value.WaitDeadline.After(at) {
 				result = ErrUnavailable
 				return releaseWaiting(ctx, tx, value, "COMPUTER_WAIT_TIMEOUT")
+			}
+			if awaitNodeUpgrade {
+				// 仅节点维护时保留排队项，原实例身份仍未被迁移计划替代。
+				result = WaitError{Reason: WaitStartingDesktop}
+				return nil
 			}
 		}
 		var matching bool

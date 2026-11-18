@@ -76,7 +76,7 @@ func TestSharedChromeUploadOwnershipAndAtMostOnce(t *testing.T) {
 			t.Fatal("上传或重复回执失败", window.CommandState, err)
 		}
 	}
-	if value := evaluate(t, service, address, `document.querySelector('#files').files[0].text().then(text=>text+'|'+window.changes)`); value != "原文|1" {
+	if value := evaluate(t, service, address, `document.querySelector('#files').files[0].text().then(text=>text+'|'+window.changes).catch(error=>error.name+'|'+document.querySelector('#files').files[0].name+'|'+document.querySelector('#files').files[0].size)`); value != "原文|1" {
 		t.Fatal("重复上传触发了网页动作", value)
 	}
 	request.Files[0].Content = []byte("替换")

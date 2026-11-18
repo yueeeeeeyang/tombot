@@ -64,8 +64,9 @@ func browserCommand(request BrowserRequest) ([]string, []string, error) {
 		return nil, nil, err
 	}
 	// Chrome 默认绕过环回代理，必须显式取消；无网络容器仍是直连的最终边界。
-	arguments := []string{BrowserProgram, "--headless", "--no-first-run", "--no-default-browser-check",
-		"--disable-background-networking", "--disable-component-update", "--disable-gpu", "--disable-quic",
+	arguments := []string{BrowserProgram, "--no-first-run", "--no-default-browser-check",
+		"--force-device-scale-factor=1",
+		"--disable-background-networking", "--disable-component-update", "--disable-quic",
 		"--remote-debugging-pipe", "--proxy-server=http://127.0.0.1:3128", "--proxy-bypass-list=<-loopback>",
 		"--user-data-dir=" + computer.BrowserDirectory, "about:blank"}
 	environment := []string{"PATH=/usr/bin:/bin", "LANG=zh_CN.UTF-8", "HOME=" + computer.BrowserDirectory,

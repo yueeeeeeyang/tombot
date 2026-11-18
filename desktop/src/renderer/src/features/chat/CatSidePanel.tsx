@@ -20,16 +20,10 @@ export function CatSidePanel({
   agent,
   isLead = false,
   onClose,
-  onComputerUrl,
-  onConnectComputer,
-  onPrepareComputer,
 }: {
   agent: Agent
   isLead?: boolean
   onClose: () => void
-  onComputerUrl: (computerUrl: string) => void
-  onConnectComputer?: () => void
-  onPrepareComputer?: () => void
 }) {
   const [tab, setTab] = useState<PanelTab>('activity')
 
@@ -102,14 +96,7 @@ export function CatSidePanel({
         >
           <section className="cat-panel-section" aria-labelledby="cat-computer-heading">
             <h3 id="cat-computer-heading">电脑</h3>
-            <ComputerPane
-              key={`${agent.id}:${agent.computerUrl}`}
-              agentName={agent.name}
-              computerUrl={agent.computerUrl}
-              onSave={onComputerUrl}
-              onConnect={onConnectComputer}
-              onPrepare={onPrepareComputer}
-            />
+            <ComputerPane key={agent.id} agentId={agent.id} agentName={agent.name} />
           </section>
           <section className="cat-panel-section" aria-labelledby="cat-task-heading">
             <h3 id="cat-task-heading">任务</h3>

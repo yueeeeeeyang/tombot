@@ -206,7 +206,22 @@ describe('按服务地址验证证书', () => {
     const error = new Error('底层信息不可直接展示', {
       cause: Object.assign(new Error('不可展示'), { code }),
     })
-    expect(connectionFailure(error)).toMatchObject({ code: expected })
+    expect(connectionFailure(error)).toMatchObject({ code: expected, isRequestUnsent: true })
     expect(connectionFailure(error).message).not.toContain('不可展示')
+  })
+
+  it('区分连接前不可达与发送后可能发生的超时和断流', () => {
+    expect(connectionFailure({ code: 'ENETUNREACH', syscall: 'connect' })).toMatchObject({
+      code: 'OFFLINE',
+      isRequestUnsent: true,
+    })
+    expect(connectionFailure({ name: 'TimeoutError' })).toMatchObject({
+      code: 'CONNECTION_TIMEOUT',
+      isRequestUnsent: false,
+    })
+    expect(connectionFailure({ code: 'UND_ERR_SOCKET' })).toMatchObject({
+      code: 'OFFLINE',
+      isRequestUnsent: false,
+    })
   })
 })

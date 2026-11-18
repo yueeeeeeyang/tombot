@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
-import { fileIconKind, LibraryFileCard } from './LibraryFileCard'
+import { fileIconKind } from './AttachmentIcon'
+import { LibraryFileCard } from './LibraryFileCard'
 const file = {
   id: 'file',
   conversation_id: 'chat',

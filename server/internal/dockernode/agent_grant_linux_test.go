@@ -10,6 +10,7 @@ import (
 
 	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/processgroup"
 )
 
 func TestNodeDelegatedAuthority(t *testing.T) {
@@ -31,7 +32,7 @@ func TestNodeDelegatedAuthority(t *testing.T) {
 	}
 	original, _ := controller.lease(sessionKeyOf(session))
 	grant, files, err := controller.Delegate(context.Background(), session)
-	if err != nil || len(files) != 4 || grant.Command != command || grant.Group.Session != session {
+	if err != nil || len(files) != processgroup.ExecutionControlFiles || grant.Command != command || grant.Group.Session != session {
 		t.Fatal("代理授权没有绑定当前节点会话", err)
 	}
 	if err := agentchannel.CloseFiles(files); err != nil {

@@ -9,7 +9,9 @@
 @import url('./styles/cat-menu.css');
 @import url('./styles/avatar.css');
 @import url('./styles/message-menu.css');
+@import url('./styles/attachments.css');
 @import url('./styles/cat-panel.css');
+@import url('./styles/computer-viewer.css');
 @import url('./styles/session.css');
 
 :root {

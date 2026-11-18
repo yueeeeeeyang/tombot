@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 import { checkServerIdentity, connect } from 'node:tls'
-import { Agent } from 'undici'
+import { Agent, WebSocket } from 'undici'
 import { normalizeServerAddress } from '../shared/serverAddress'
 
 const messages: Record<string, string> = {
@@ -23,7 +23,10 @@ const messages: Record<string, string> = {
 }
 
 class ServerConnectionError extends Error {
-  constructor(readonly code: string) {
+  constructor(
+    readonly code: string,
+    readonly isRequestUnsent = true,
+  ) {
     super(messages[code])
     this.name = 'ServerConnectionError'
   }
@@ -34,7 +37,7 @@ export function connectionFailure(error: unknown): Error {
   let cause = error
   for (let depth = 0; cause && typeof cause === 'object' && depth < 8; depth++) {
     if (cause instanceof ServerConnectionError) return cause
-    const current = cause as { code?: string; name?: string; cause?: unknown }
+    const current = cause as { code?: string; name?: string; syscall?: string; cause?: unknown }
     const code = current.code ?? ''
     if (
       [
@@ -52,13 +55,18 @@ export function connectionFailure(error: unknown): Error {
     if (code === 'ERR_TLS_CERT_ALTNAME_INVALID')
       return new ServerConnectionError('CERTIFICATE_HOSTNAME')
     if (['ETIMEDOUT', 'UND_ERR_CONNECT_TIMEOUT'].includes(code) || current.name === 'TimeoutError')
-      return new ServerConnectionError('CONNECTION_TIMEOUT')
+      return new ServerConnectionError(
+        'CONNECTION_TIMEOUT',
+        code === 'UND_ERR_CONNECT_TIMEOUT' || current.syscall === 'connect',
+      )
     if (code === 'ECONNREFUSED') return new ServerConnectionError('CONNECTION_REFUSED')
     if (['ENOTFOUND', 'EAI_AGAIN'].includes(code))
       return new ServerConnectionError('CONNECTION_DNS')
+    if (['ENETDOWN', 'ENETUNREACH', 'EHOSTDOWN', 'EHOSTUNREACH'].includes(code))
+      return new ServerConnectionError('OFFLINE', current.syscall === 'connect')
     cause = current.cause
   }
-  return new ServerConnectionError('OFFLINE')
+  return new ServerConnectionError('OFFLINE', false)
 }
 
 function normalizeFingerprint(input: unknown): string {
@@ -186,6 +194,22 @@ export class ServerTransport {
       if (options.signal?.aborted && options.signal.reason?.name !== 'TimeoutError') throw error
       throw connectionFailure(error)
     }
+  }
+
+  /** 桌面 WSS 沿用同一证书信任，凭据只作为握手头发送，不进入 URL 或渲染进程。 */
+  async websocket(url: string, authorization: string): Promise<WebSocket> {
+    const endpoint = new URL(url)
+    if (endpoint.protocol !== 'https:' && endpoint.protocol !== 'http:')
+      throw new Error('桌面连接地址无效。')
+    const origin = endpoint.origin
+    let loading = this.agents.get(origin)
+    if (!loading) {
+      loading = this.loadAgent(origin)
+      this.agents.set(origin, loading)
+    }
+    const dispatcher = await loading
+    endpoint.protocol = endpoint.protocol === 'https:' ? 'wss:' : 'ws:'
+    return new WebSocket(endpoint, { dispatcher, headers: { authorization } })
   }
 
   /** 核对指纹、主机和有效期后原子保存公共证书；失败保留原来的信任。 */

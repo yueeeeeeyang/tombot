@@ -74,13 +74,50 @@ func TestBrowserProcessStartupFailures(t *testing.T) {
 			}
 			cleanup, stop := context.WithTimeout(context.Background(), time.Second)
 			defer stop()
-			if err := process.wait(cleanup); err == nil || !process.finished() {
-				t.Fatal("启动失败未完整回收或丢失错误", err)
+			files := probeFiles(t)
+			defer func() {
+				if err := agentchannel.CloseFiles(files); err != nil {
+					t.Error(err)
+				}
+			}()
+			if _, err := files[2].WriteString("populated 0\n"); err != nil {
+				t.Fatal(err)
+			}
+			scope := &kernelBrowserScope{control: &kernelServiceScope{files: files, interval: time.Millisecond}, process: process, done: make(chan struct{})}
+			if err := scope.Drain(cleanup); err != nil || !process.finished() || !scope.control.drained {
+				t.Fatal("启动失败后未能确认原进程和空资源组已回收", err)
 			}
 			if _, err := process.writer.Write([]byte("x")); err == nil {
 				t.Fatal("失败后启动授权仍然有效")
 			}
 		})
+	}
+}
+
+func TestFailedBrowserStartupStillRequiresEmptyGroup(t *testing.T) {
+	files := probeFiles(t)
+	t.Cleanup(func() {
+		if err := agentchannel.CloseFiles(files); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := files[2].WriteString("populated 1\n"); err != nil {
+		t.Fatal(err)
+	}
+	process, err := newBrowserProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(process.started)
+	close(process.done)
+	if err := errors.Join(process.reader.Close(), process.revoke()); err != nil {
+		t.Fatal(err)
+	}
+	scope := &kernelBrowserScope{control: &kernelServiceScope{files: files, interval: time.Millisecond}, process: process, done: make(chan struct{})}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err := scope.Drain(ctx); !errors.Is(err, context.DeadlineExceeded) || scope.control.drained {
+		t.Fatal("原进程已结束但资源组仍有后代，不能确认回收", err)
 	}
 }
 
@@ -100,7 +137,7 @@ func TestBrowserProcessReportsKnownChildFailure(t *testing.T) {
 	if !errors.As(err, &failure) || failure.Code != "browser_start_sandbox_failed" || service != nil {
 		t.Fatal("子进程失败分类丢失", err)
 	}
-	if err := process.wait(ctx); err == nil || !process.finished() {
+	if err := process.wait(ctx); err != nil || !process.finished() {
 		t.Fatal("子进程失败未确认回收", err)
 	}
 }

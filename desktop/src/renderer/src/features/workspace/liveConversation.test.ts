@@ -624,7 +624,7 @@ it('重新打开时恢复未选中猫咪的私信和后台活动，断流后清�
   act(() =>
     memoryBackend.publishEvent({
       sequence: 1,
-      kind: 'stream.reset',
+      kind: 'workspace.refresh',
       resource_id: '',
       payload: {},
       created_at: '',

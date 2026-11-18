@@ -21,6 +21,7 @@ type workerAgents struct {
 	starts    int
 	failStart bool
 	local     botagent.LocalExecutor
+	files     computer.FileRuntime
 }
 type workerAgent struct {
 	connection              net.Conn
@@ -31,6 +32,13 @@ type workerAgent struct {
 
 func newWorkerAgents(t *testing.T) *workerAgents {
 	return &workerAgents{processes: map[computer.ExecutionSession]*workerAgent{}, t: t}
+}
+
+func (runtime *workerAgents) TransferFile(ctx context.Context, request computer.FileRequest) (computer.FileReceipt, error) {
+	if runtime.files == nil {
+		return computer.FileReceipt{}, errors.New("该测试未提供文件传输节点")
+	}
+	return runtime.files.TransferFile(ctx, request)
 }
 
 func (runtime *workerAgents) StartAgent(ctx context.Context, session computer.ExecutionSession) error {

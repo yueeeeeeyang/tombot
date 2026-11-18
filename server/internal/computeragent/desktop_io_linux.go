@@ -12,6 +12,9 @@ import (
 func (scope *kernelScope) desktopAccess(session computer.ExecutionSession) (*desktopAccess, error) {
 	scope.mu.Lock()
 	defer scope.mu.Unlock()
+	if scope.isPaused || scope.consoleFailure != nil {
+		return nil, errors.New("桌面正在由用户接管")
+	}
 	if session.Validate() != nil || scope.closed || scope.revoked || scope.drained || scope.directory == nil || scope.directory.session != session || scope.desktop == nil || scope.desktop.access == nil || scope.desktop.snapshot().State != "ready" {
 		return nil, errors.New("桌面输入输出没有就绪的授权会话")
 	}

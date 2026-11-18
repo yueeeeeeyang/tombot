@@ -2,15 +2,17 @@ package nodeenrollment
 
 import (
 	"context"
+	"database/sql"
 	"errors"
-	"io.yueyang/tom/internal/computer"
-	"io.yueyang/tom/internal/infra/ids"
-	"io.yueyang/tom/internal/nodecatalog"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/nodecatalog"
 )
 
 type fleetUpgradeLog struct {
@@ -84,7 +86,7 @@ func TestFleetChangesVerifierAfterSignedImageUpgrade(t *testing.T) {
 	}
 }
 
-func TestSignedIdleNodeImageUpgrade(t *testing.T) {
+func TestSignedNodeImageUpgrade(t *testing.T) {
 	service, pool, actor, _ := serviceFixture(t, 1)
 	grant, err := service.Issue(t.Context(), actor, ids.New())
 	if err != nil {
@@ -99,7 +101,10 @@ func TestSignedIdleNodeImageUpgrade(t *testing.T) {
 	upgrade.Registration.PreviousImageID = initial.Registration.ImageID
 	upgrade.Registration.ImageID = ids.New()
 	upgrade.Registration.ImageReference = "registry.example.test/computer@sha256:" + strings.Repeat("b", 64)
-	for _, scenario := range []string{"unsigned_transition", "wrong_previous", "reserved", "success", "retry", "replay_old"} {
+	if _, err := pool.Exec(`UPDATE tombot.computer_nodes SET reserved=1 WHERE id=$1`, initial.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"unsigned_transition", "wrong_previous", "reserved", "retry", "replay_old"} {
 		t.Run(scenario, func(t *testing.T) {
 			claim := upgrade
 			switch scenario {
@@ -107,19 +112,11 @@ func TestSignedIdleNodeImageUpgrade(t *testing.T) {
 				claim.Registration.PreviousImageID = ""
 			case "wrong_previous":
 				claim.Registration.PreviousImageID = ids.New()
-			case "reserved":
-				if _, err := pool.Exec(`UPDATE tombot.computer_nodes SET reserved=1 WHERE id=$1`, initial.NodeID); err != nil {
-					t.Fatal(err)
-				}
-			case "success":
-				if _, err := pool.Exec(`UPDATE tombot.computer_nodes SET reserved=0 WHERE id=$1`, initial.NodeID); err != nil {
-					t.Fatal(err)
-				}
 			case "replay_old":
 				claim = initial
 			}
 			_, err := service.Register(t.Context(), signed(t, pair, claim), "", ids.New())
-			if (err == nil) != (scenario == "success" || scenario == "retry") {
+			if (err == nil) != (scenario == "reserved" || scenario == "retry") {
 				t.Fatal(scenario, err)
 			}
 		})
@@ -134,5 +131,98 @@ func TestSignedIdleNodeImageUpgrade(t *testing.T) {
 	}
 	if err = pool.QueryRow(`SELECT status FROM tombot.computer_nodes WHERE id=$1`, initial.NodeID).Scan(&status); err != nil || status != "bootstrapping" {
 		t.Fatal("升级跳过能力验收", status, err)
+	}
+}
+
+func TestMaintenanceFenceAndReplay(t *testing.T) {
+	s, pool, actor, _ := serviceFixture(t, 1)
+	ctx := t.Context()
+	g, err := s.Issue(ctx, actor, ids.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := certificate(t)
+	c := claimFor(p)
+	if _, err = s.Register(ctx, signed(t, p, c), g.Token, ids.New()); err != nil {
+		t.Fatal(err)
+	}
+	oldImage := c.Registration.ImageID
+	userID, computerID := ids.New(), ids.New()
+	execute := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pool.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	execute(`UPDATE tombot.computer_nodes SET runtime_id=$2,generation=1,control_sequence=1,last_seen_at=clock_timestamp(),control_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1`, c.NodeID, ids.New())
+	execute(`UPDATE tombot.computer_nodes SET status='ready',verified_image_id=$2,capability_expires_at=clock_timestamp()+interval '1 hour' WHERE id=$1`, c.NodeID, oldImage)
+	reserve := func() error {
+		var nodeID string
+		return pool.QueryRowContext(ctx, `SELECT tombot.reserve_computer_node($1,$2)`, c.NodeID, oldImage).Scan(&nodeID)
+	}
+	if err := reserve(); err != nil {
+		t.Fatal("未能预留初始电脑", err)
+	}
+	execute(`INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,'upgrade-user','升级测试用户','provisioning')`, userID)
+	execute(`INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit)
+		VALUES($1,$2,$3,$4,'ready',$5,$6,1000,1073741824,1073741824,128)`, userID, computerID, c.NodeID, oldImage, strings.Repeat("a", 64), "tombot-user-"+userID)
+	execute(`UPDATE tombot.users SET status='pending_activation' WHERE id=$1`, userID)
+	readComputer := func() string {
+		t.Helper()
+		var record string
+		if err := pool.QueryRowContext(ctx, `SELECT to_jsonb(c)::text FROM tombot.computers c WHERE id=$1`, computerID).Scan(&record); err != nil {
+			t.Fatal(err)
+		}
+		return record
+	}
+	originalComputer := readComputer()
+	execute(`INSERT INTO tombot.node_verifications(node_id,image_id,specification,runtime_id,runtime_generation,state,lease_expires_at)
+		SELECT id,$2,'{}',runtime_id,generation,'checking',clock_timestamp()+interval '1 hour' FROM tombot.computer_nodes WHERE id=$1`, c.NodeID, oldImage)
+	c.Registration.PreviousImageID = oldImage
+	c.Registration.ImageID = ids.New()
+	c.Registration.ImageReference = "registry.example.test/upgrade@sha256:" + strings.Repeat("b", 64)
+	c.Maintenance = &MaintenanceRequest{OperationID: ids.New()}
+	run := func(want string) {
+		t.Helper()
+		v, err := s.Register(ctx, signed(t, p, c), "", ids.New())
+		if err != nil || v.State != want {
+			t.Fatal(v, err)
+		}
+	}
+	if _, err = s.Register(ctx, signed(t, p, c), "", ids.New()); !errors.Is(err, nodecatalog.ErrConflict) {
+		t.Fatal("在途验收期间取得维护权", err)
+	}
+	execute(`UPDATE tombot.node_verifications SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE node_id=$1`, c.NodeID)
+	run("upgrade_held")
+	run("upgrade_held")
+	if err := reserve(); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("维护期间仍分配旧镜像电脑", err)
+	}
+	id := c.Maintenance.OperationID
+	c.Maintenance.OperationID = ids.New()
+	if _, err = s.Register(ctx, signed(t, p, c), "", ids.New()); !errors.Is(err, ErrConflict) {
+		t.Fatal("其他操作获取维护权", err)
+	}
+	c.Maintenance.OperationID = id
+	c.Maintenance.Finish = true
+	if _, err = s.Register(ctx, signed(t, p, c), "", ids.New()); !errors.Is(err, ErrConflict) {
+		t.Fatal("镜像尚未切换便结束维护", err)
+	}
+	maintenance := c.Maintenance
+	c.Maintenance = nil
+	run("registered")
+	c.Maintenance = maintenance
+	run("upgrade_finished")
+	run("upgrade_finished")
+	c.Maintenance.Finish = false
+	if _, err = s.Register(ctx, signed(t, p, c), "", ids.New()); !errors.Is(err, ErrConflict) {
+		t.Fatal("已完成的签名重新开启维护", err)
+	}
+	var reserved int
+	if err = pool.QueryRowContext(ctx, `SELECT reserved FROM tombot.computer_nodes WHERE id=$1`, c.NodeID).Scan(&reserved); err != nil || reserved != 1 {
+		t.Fatal("升级改动已预留容量", reserved, err)
+	}
+	if readComputer() != originalComputer {
+		t.Fatal("升级改动已有用户电脑记录")
 	}
 }

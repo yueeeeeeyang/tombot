@@ -616,12 +616,17 @@ try {
   if (await window.evaluate(() => 'loadIntroduction' in window.desktop.backend)) throw new Error('客户端仍暴露介绍请求');
   const computerCard = catPanel.getByRole('button', { name: '侧栏猫咪的电脑', exact: true });
   await computerCard.waitFor();
-  if (await computerCard.getAttribute('aria-expanded') !== 'false') throw new Error('电脑配置没有默认收起');
-  stage = '展开详情电脑卡片';
+  const computerViewer = window.getByRole('dialog', { name: '侧栏猫咪的电脑', exact: true });
+  if (await computerCard.getAttribute('aria-haspopup') !== 'dialog' || await computerViewer.count()) throw new Error('观看入口未正确标记或默认打开');
+  stage = '通过键盘打开电脑观看';
   await computerCard.press('Enter');
-  await catPanel.getByRole('textbox', { name: '远端电脑地址', exact: true }).waitFor();
-  await computerCard.press('Enter');
-  if (await catPanel.getByRole('textbox', { name: '远端电脑地址', exact: true }).isVisible()) throw new Error('电脑卡片不能收起');
+  await computerViewer.waitFor();
+  if (await computerViewer.getByRole('textbox').count()) throw new Error('电脑观看仍可填写外部地址');
+  await computerViewer.getByText(/^(正在启动电脑画面|观看已结束)$/).waitFor();
+  stage = '关闭电脑观看';
+  await computerViewer.getByRole('button', { name: '关闭观看', exact: true }).click();
+  await computerViewer.waitFor({ state: 'hidden' });
+  if (!(await computerCard.evaluate(element => document.activeElement === element))) throw new Error('关闭观看后没有恢复电脑入口焦点');
   stage = '详情页签键盘切换';
   await catPanel.getByRole('tab', { name: '动态', exact: true }).focus();
   await window.keyboard.press('ArrowRight');
@@ -804,7 +809,9 @@ try {
   } finally {rmSync(downloadDirectory,{recursive:true,force:true});}
   await filePreview.getByRole('button',{name:'关闭弹窗',exact:true}).click();
   stage = '群文件重命名搜索与重新加载';
-  await groupPanel.getByRole('button',{name:'重命名 群资料.txt',exact:true}).click();
+  await groupPanel.getByRole('button',{name:'预览 群资料.txt',exact:true}).hover();
+  await groupPanel.getByRole('button',{name:'更多操作 群资料.txt',exact:true}).click();
+  await window.getByRole('menu',{name:'群资料.txt的操作',exact:true}).getByRole('menuitem',{name:'重命名 群资料.txt',exact:true}).click();
   const renameFile=window.getByRole('dialog',{name:'重命名文件',exact:true});
   await renameFile.getByRole('textbox',{name:'文件名称',exact:true}).fill('更新后的群资料.txt');
   await renameFile.getByRole('button',{name:'保存名称',exact:true}).click();
@@ -827,9 +834,15 @@ try {
   await window.getByRole('button',{name:'查看协作群群资料',exact:true}).click();
   await groupPanel.getByRole('tab',{name:'资料库',exact:true}).click();
   await groupPanel.getByRole('button',{name:'预览 聊天附件.txt',exact:true}).waitFor();
+  stage = '打开群资料库文件删除菜单';
+  await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).hover();
+  await groupPanel.getByRole('button',{name:'更多操作 更新后的群资料.txt',exact:true}).click();
+  await window.getByRole('menu',{name:'更新后的群资料.txt的操作',exact:true}).getByRole('menuitem',{name:'删除 更新后的群资料.txt',exact:true}).click();
   stage = '群资料库确认删除';
-  await groupPanel.getByRole('button',{name:'删除 更新后的群资料.txt',exact:true}).click();
-  await window.getByRole('dialog',{name:'删除文件',exact:true}).getByRole('button',{name:'确认删除',exact:true}).click();
+  const deleteFile=window.getByRole('dialog',{name:'删除文件',exact:true});
+  await deleteFile.getByRole('button',{name:'确认删除',exact:true}).click();
+  await deleteFile.waitFor({state:'hidden'});
+  stage = '验证群资料库刷新后已移除对应文件';
   await groupPanel.getByRole('button',{name:'预览 更新后的群资料.txt',exact:true}).waitFor({state:'detached'});
   await groupPanel.getByRole('button', { name: '关闭群资料', exact: true }).click();
   stage = '设置退出登录撤销真实会话';
@@ -867,17 +880,18 @@ try {
 	if err != nil {
 		t.Fatalf("真实浏览器登录未通过：%v\n%s", err, output)
 	}
-	var bots, messages, runs, reactions, interactions int
+	var bots, messages, runs, reactions, interactions, closedViews int
 	err = fixture.pool.QueryRow(`SELECT
         (SELECT count(*) FROM tombot.bots WHERE user_id=u.id AND name='联调猫咪'),
         (SELECT count(*) FROM tombot.messages m JOIN tombot.conversations c ON c.user_id=m.user_id AND c.id=m.conversation_id JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id WHERE m.user_id=u.id AND b.name='联调猫咪' AND m.sender_kind='user' AND m.blocks @> '[{"kind":"text","text":"你好，验证消息入库"}]'),
-        (SELECT count(*) FROM tombot.runs WHERE user_id=u.id),
+        (SELECT count(*) FROM tombot.runs r JOIN tombot.turns t ON t.user_id=r.user_id AND t.id=r.turn_id WHERE r.user_id=u.id AND t.source<>'console'),
         (SELECT count(*) FROM tombot.message_reactions WHERE user_id=u.id),
-        (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]')
-        FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions)
-	// 三个资料库文件现在通过一条真实群消息分享，额外产生一次群成员运行。
-	if err != nil || bots != 1 || messages != 1 || runs != 8 || reactions != 0 || interactions != 2 {
-		t.Fatalf("客户端创建或消息入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 错误=%v", bots, messages, runs, reactions, interactions, err)
+        (SELECT count(*) FROM tombot.messages WHERE user_id=u.id AND blocks @> '[{"kind":"reaction"}]'),
+        (SELECT count(*) FROM tombot.desktop_consoles c JOIN tombot.bots b ON b.user_id=c.user_id AND b.id=c.bot_id WHERE c.user_id=u.id AND b.name='侧栏猫咪' AND c.state='closed')
+        FROM tombot.users u WHERE u.username=$1`, fixture.username).Scan(&bots, &messages, &runs, &reactions, &interactions, &closedViews)
+	// 观看可能创建单独的桌面会话运行，聊天运行与已关闭的观看分别核对。
+	if err != nil || bots != 1 || messages != 1 || runs != 8 || reactions != 0 || interactions != 2 || closedViews != 1 {
+		t.Fatalf("客户端操作入库未通过：猫咪=%d 消息=%d 运行=%d 表情=%d 交互=%d 关闭观看=%d 错误=%v", bots, messages, runs, reactions, interactions, closedViews, err)
 	}
 	t.Log(string(output))
 }

@@ -134,7 +134,7 @@ def build(image, architecture, runtime, output):
         release = {'version': 1, 'platform': 'linux/' + architecture, 'image_reference': reference, 'archive_sha256': digest(payload / 'computer-image.tar'), 'docker': manifest}
         (payload / 'node-release.json').write_text(json.dumps(release, ensure_ascii=False, indent=2) + '\n')
         shutil.copyfile(ROOT / 'deploy/node-install.example.json', payload / 'node-install.example.json')
-        (payload / '安装说明.txt').write_text('完整解压到受保护目录（例如 /root/tombot），执行 sudo ./tomnode install。\n按提示粘贴管理平台新生成的接入码，再确认节点访问地址。默认无需填写 JSON。\n电脑镜像随包离线导入；Docker 和宿主依赖仍从官方软件源安装，需要联网。\n节点将保存身份、凭据与镜像，失败后使用同一程序重试；不要删除已生成身份。\n如需覆盖节点名称、容量、地址或监听网卡，填写可选示例并显式传入文件路径。\n支持 Debian/Ubuntu 与 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora；需要 systemd、cgroup v2 和 Docker API 1.47。节点默认端口 9444，服务端默认 9443。旧安装先停止服务，再用新程序 tomnode repair --image-package . 迁移；节点能力以实际验收结果为准。\n')
+        (payload / '安装说明.txt').write_text('完整解压到受保护目录（例如 /root/tombot），执行 sudo ./tomnode install。\n按提示粘贴管理平台新生成的接入码，再确认节点访问地址。默认无需填写 JSON。\n电脑镜像随包离线导入；Docker 和宿主依赖仍从官方软件源安装，需要联网。\n节点将保存身份、凭据与镜像，失败后使用同一程序重试；不要删除已生成身份。\n如需覆盖节点名称、容量、地址或监听网卡，填写可选示例并显式传入文件路径。\n支持 Debian/Ubuntu 与 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora；需要 systemd、cgroup v2 和 Docker API 1.47。节点默认端口 9444，服务端默认 9443。已有节点直接执行 sudo ./tomnode upgrade。需要远程更新时，首次将受信发布公钥 node-release.pub 放在本程序旁；后续在管理平台“电脑节点 → 远程升级”下发。节点能力以实际验收结果为准。\n')
         (payload / 'SHA256SUMS').write_text(''.join(digest(payload / name) + '  ' + name + '\n' for name in sorted(FILES - {'SHA256SUMS'})))
         candidate = stage / 'package.tar.gz'
         print('正在压缩并核验安装包', flush=True)

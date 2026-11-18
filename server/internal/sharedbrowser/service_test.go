@@ -24,6 +24,8 @@ type authorizations struct {
 func TestStartupTimeoutClosesPrivatePipes(t *testing.T) {
 	options, _, _ := testOptions()
 	options.CallTimeout = 100 * time.Millisecond
+	startup, cancel := context.WithTimeout(t.Context(), 250*time.Millisecond)
+	defer cancel()
 	readResponse, writeResponse := io.Pipe()
 	readCommand, writeCommand := io.Pipe()
 	drained := make(chan error, 1)
@@ -36,8 +38,8 @@ func TestStartupTimeoutClosesPrivatePipes(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	if _, err := New(context.Background(), readResponse, writeCommand, options); !errors.Is(err, ErrUnavailable) {
-		t.Fatal("无响应浏览器没有明确启动失败", err)
+	if _, err := New(t.Context(), startup, readResponse, writeCommand, options); !errors.Is(err, ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) || startup.Err() != context.DeadlineExceeded {
+		t.Fatal("无响应浏览器没有用完独立的冷启动预算并明确失败", err)
 	}
 	select {
 	case err := <-drained:
@@ -102,6 +104,7 @@ func testOptions() (Options, *authorizations, []computer.ExecutionSession) {
 		sessions = append(sessions, session)
 	}
 	options := Options{UserID: user, ComputerID: computerID, Generation: 1, Width: 960, Height: 640, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 32, MaximumEvents: 128, CallTimeout: 5 * time.Second, DialogTimeout: 10 * time.Second, ShutdownTimeout: 10 * time.Second, Authorize: access.check, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	options.Native = &testNativeDesktop{sessions: sessions}
 	return options, access, sessions
 }
 

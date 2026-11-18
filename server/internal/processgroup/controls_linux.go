@@ -43,9 +43,9 @@ func openControls(ctx context.Context, parent ContainerReference, names, paths [
 			return files, err
 		}
 	}
-	for index, name := range paths {
+	for _, name := range paths {
 		flags := os.O_WRONLY
-		if index == len(paths)-1 {
+		if path.Base(name) == "cgroup.events" {
 			flags = os.O_RDONLY
 		}
 		file, err := root.OpenFile(name, flags|unix.O_NOFOLLOW, 0)
@@ -61,13 +61,13 @@ func openControls(ctx context.Context, parent ContainerReference, names, paths [
 }
 
 func controlPaths(reference Reference) []string {
-	return []string{path.Join(reference.Name(), "shell", "cgroup.procs"), path.Join(reference.Name(), "browser", "cgroup.procs"), path.Join(reference.Name(), "cgroup.kill"), path.Join(reference.Name(), "cgroup.events")}
+	return []string{path.Join(reference.Name(), "shell", "cgroup.procs"), path.Join(reference.Name(), "browser", "cgroup.procs"), path.Join(reference.Name(), "cgroup.kill"), path.Join(reference.Name(), "cgroup.events"), path.Join(reference.Name(), "shell", "cgroup.freeze"), path.Join(reference.Name(), "shell", "cgroup.events")}
 }
 
-// ValidateControls 在容器中复验收到的四个入口；描述符顺序、权限、内核类型和完整实例路径必须一致。
+// ValidateControls 在容器中复验所有入口；描述符顺序、权限、内核类型和完整实例路径必须一致。
 // 不检查当前租约，调用者必须先执行协议身份和控制代次校验。
 func ValidateControls(reference Reference, files []*os.File) error {
-	if reference.Validate() != nil || len(files) != 4 {
+	if reference.Validate() != nil || len(files) != ExecutionControlFiles {
 		return errors.New("代理资源组控制身份或数量无效")
 	}
 	return validateControlFiles(reference.ParentPath, controlPaths(reference), files)
@@ -86,7 +86,7 @@ func validateControlFiles(parent string, paths []string, files []*os.File) error
 		var stat unix.Stat_t
 		var filesystem unix.Statfs_t
 		mode := unix.O_WRONLY
-		if index == len(paths)-1 {
+		if path.Base(name) == "cgroup.events" {
 			mode = unix.O_RDONLY
 		}
 		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)

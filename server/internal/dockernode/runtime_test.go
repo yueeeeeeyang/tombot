@@ -137,6 +137,7 @@ func (engine *fakeEngine) stopContainer(_ context.Context, id string) error {
 		return errMissing
 	}
 	value.State.Running = false
+	value.State.Pid = 0
 	engine.containers[strings.TrimPrefix(value.Name, "/")] = value
 	engine.events = append(engine.events, "stop-container")
 	return nil
@@ -159,6 +160,8 @@ func (engine *fakeEngine) removeContainer(_ context.Context, id string) error {
 type fakeStorage struct {
 	mu          sync.Mutex
 	workspaces  map[string]Workspace
+	ensures     int
+	restores    int
 	removals    int
 	verifyError error
 }
@@ -175,10 +178,24 @@ func (storage *fakeStorage) Inspect(_ context.Context, resource Resource) (Works
 func (storage *fakeStorage) Ensure(_ context.Context, resource Resource) (Workspace, error) {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()
+	storage.ensures++
 	value := Workspace{Exists: true, Ready: true, Path: resource.WorkspacePath, CapacityBytes: resource.Specification.Resources.DiskBytes}
 	storage.workspaces[resource.Name] = value
 	return value, nil
 }
+func (storage *fakeStorage) Restore(_ context.Context, resource Resource) (Workspace, error) {
+	storage.mu.Lock()
+	defer storage.mu.Unlock()
+	storage.restores++
+	value := storage.workspaces[resource.Name]
+	if !value.Exists {
+		return Workspace{}, failure("retained_storage_unconfirmed")
+	}
+	value.Ready = true
+	storage.workspaces[resource.Name] = value
+	return value, nil
+}
+
 func (storage *fakeStorage) Remove(_ context.Context, resource Resource) error {
 	storage.mu.Lock()
 	defer storage.mu.Unlock()

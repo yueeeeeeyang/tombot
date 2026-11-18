@@ -36,7 +36,7 @@ class PrepareComputerTest(unittest.TestCase):
         self.prepare()
         self.assertEqual((self.workspace / "business.txt").read_text(), "共享产出")
         self.assertEqual((self.workspace / "tools/bin/program").read_text(), "共享工具")
-        for path in (self.workspace, self.workspace / "tools", self.workspace / "tools/bin", self.workspace / ".tmp"):
+        for path in (self.workspace, self.workspace / "tools", self.workspace / "tools/bin", self.workspace / ".tmp", self.workspace / "Downloads"):
             self.assertEqual(path.stat().st_mode & 0o7777, 0o2770)
         self.assertEqual((self.runtime / "bot-desktops").stat().st_mode & 0o7777, 0o711)
         self.assertEqual((self.runtime / "tombot-browser").stat().st_mode & 0o7777, 0o711)
@@ -75,6 +75,8 @@ class PrepareComputerTest(unittest.TestCase):
     def test_filesystem_recovery_directory_is_preserved(self):
         recovery = self.workspace / "lost+found"
         recovery.mkdir(mode=0o700)
+        # 模拟文件系统预建目录，避免从测试父目录继承 setgid 位。
+        recovery.chmod(0o700)
         self.prepare()
         self.assertEqual(recovery.stat().st_mode & 0o7777, 0o700)
 

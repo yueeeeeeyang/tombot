@@ -39,7 +39,7 @@ describe('猫咪模型前向迁移', () => {
     const migrated = loadWorkspace(localStorage)
     expect(migrated.version).toBe(5)
     expect(
-      migrated.agents.every((agent) => agent.computerUrl === '' && agent.artifacts.length === 0),
+      migrated.agents.every((agent) => !('computerUrl' in agent) && agent.artifacts.length === 0),
     ).toBe(true)
     expect(migrated.agents.every((agent) => agent.modelId === 'gpt-4o')).toBe(true)
     expect(migrated.agents[0]?.messages[0]?.content).toBe('保留这条消息')

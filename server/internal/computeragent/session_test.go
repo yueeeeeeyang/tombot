@@ -181,7 +181,7 @@ func newFixture(t *testing.T) fixture {
 func (fixture fixture) files(t *testing.T) []*os.File {
 	t.Helper()
 	var files []*os.File
-	for range 4 {
+	for range processgroup.ExecutionControlFiles {
 		file, err := os.Open(fixture.factory.path)
 		if err != nil {
 			t.Fatal(err)

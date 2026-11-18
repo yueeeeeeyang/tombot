@@ -1,51 +1,8 @@
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  Download,
-  Ellipsis,
-  Eye,
-  File,
-  FileArchive,
-  FileCode,
-  FileImage,
-  FileMusic,
-  FileSpreadsheet,
-  FileText,
-  FileVideo,
-  Pencil,
-  Trash2,
-} from 'lucide-react'
+import { Download, Ellipsis, Eye, Pencil, Trash2 } from 'lucide-react'
+import { AttachmentIcon } from './AttachmentIcon'
 import type { ChatFile } from '../../../../shared/chatFiles'
-
-const fileIcons = {
-  image: FileImage,
-  audio: FileMusic,
-  video: FileVideo,
-  archive: FileArchive,
-  spreadsheet: FileSpreadsheet,
-  code: FileCode,
-  text: FileText,
-  file: File,
-}
-
-/** 文件按类型共用 Lucide 线性图标，颜色随主题变化，不依赖远程资源。 */
-export function fileIconKind(file: Pick<ChatFile, 'name' | 'media_type'>) {
-  const extension = file.name.split('.').at(-1)?.toLowerCase() ?? ''
-  if (file.media_type.startsWith('image/')) return 'image' as const
-  if (file.media_type.startsWith('audio/')) return 'audio' as const
-  if (file.media_type.startsWith('video/')) return 'video' as const
-  if (['zip', 'jar', 'tar', 'gz', '7z', 'rar'].includes(extension)) return 'archive' as const
-  if (['csv', 'tsv', 'xls', 'xlsx', 'ods'].includes(extension)) return 'spreadsheet' as const
-  if (
-    ['js', 'ts', 'tsx', 'jsx', 'py', 'go', 'java', 'json', 'html', 'css', 'sql', 'sh'].includes(
-      extension,
-    )
-  )
-    return 'code' as const
-  if (file.media_type.startsWith('text/') || ['pdf', 'doc', 'docx', 'md'].includes(extension))
-    return 'text' as const
-  return 'file' as const
-}
 
 /** 悬浮资料与操作菜单使用独立浮层，避免被资料栏的滚动区域裁切。 */
 export function LibraryFileCard({
@@ -63,7 +20,6 @@ export function LibraryFileCard({
   const [hovered, setHovered] = useState(false)
   const [isMenuOpen, setMenuOpen] = useState(false)
   const tooltipId = useId()
-  const Icon = fileIcons[fileIconKind(file)]
   const [now, setNow] = useState(() => Date.now())
   const days = Math.max(0, Math.floor((now - Date.parse(file.created_at)) / 86400000))
   const age = days === 0 ? '今天' : `${days} 天`
@@ -119,7 +75,7 @@ export function LibraryFileCard({
         onClick={() => onAction('preview')}
       >
         <span className="library-file-icon">
-          <Icon size={24} strokeWidth={1.5} aria-hidden="true" />
+          <AttachmentIcon name={file.name} mediaType={file.media_type} size={24} />
         </span>
         <strong>{file.name}</strong>
       </button>

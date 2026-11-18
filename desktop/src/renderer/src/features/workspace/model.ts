@@ -163,7 +163,6 @@ export type LiveWorkspace = z.infer<typeof liveWorkspaceSchema>
 export const MAX_ARTIFACTS = 100
 export const MAX_ARTIFACT_TITLE = 80
 export const MAX_ARTIFACT_PREVIEW = 16_000
-export const MAX_COMPUTER_URL = 2_048
 
 const artifactPreviewPattern = /^data:image\/(?:png|jpeg|webp);base64,[a-zA-Z0-9+/=]+$/
 
@@ -174,17 +173,6 @@ export const artifactSchema = z.object({
   createdAt: z.string().datetime(),
   preview: z.string().max(MAX_ARTIFACT_PREVIEW).regex(artifactPreviewPattern).optional(),
 })
-
-/** 空字符串表示未连接；非空必须是不含账号的 HTTP(S) 地址。 */
-export function isComputerUrl(value: string): boolean {
-  if (!value) return true
-  try {
-    const url = new URL(value)
-    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
-  } catch {
-    return false
-  }
-}
 
 export const agentSchema = z
   .object({
@@ -203,15 +191,11 @@ export const agentSchema = z
     messages: z.array(messageSchema).max(MAX_MESSAGES),
     draft: z.string().max(MAX_MESSAGE_LENGTH),
     artifacts: z.array(artifactSchema).max(MAX_ARTIFACTS),
-    computerUrl: z.string().max(MAX_COMPUTER_URL),
   })
   .superRefine((agent, context) => {
     const ids = agent.artifacts.map((artifact) => artifact.id)
     if (new Set(ids).size !== ids.length) {
       context.addIssue({ code: 'custom', message: '产物标识不能重复' })
-    }
-    if (!isComputerUrl(agent.computerUrl)) {
-      context.addIssue({ code: 'custom', message: '请输入不含登录凭据的 HTTP 或 HTTPS 地址。' })
     }
   })
 
@@ -290,7 +274,6 @@ export function createWorkspace(): AppWorkspace {
       messages: [],
       draft: '',
       artifacts: [],
-      computerUrl: '',
     })),
   }
 }
@@ -311,7 +294,6 @@ export function addAgent(
     messages: [],
     draft: '',
     artifacts: [],
-    computerUrl: '',
   })
   if (!result.success) throw new Error(result.error.issues[0]?.message ?? '请检查助手资料')
   const agent = result.data
@@ -344,25 +326,6 @@ export function setAgentModel(
     ...workspace,
     agents: workspace.agents.map((agent) =>
       agent.id === agentId ? { ...agent, modelId: trimmed } : agent,
-    ),
-  }
-}
-
-/** 保存或清空某只猫咪的远端电脑地址；非法地址或猫咪不存在时抛错，不改原工作空间。 */
-export function setAgentComputerUrl(
-  workspace: AppWorkspace,
-  agentId: string,
-  computerUrl: string,
-): AppWorkspace {
-  const trimmed = computerUrl.trim()
-  if (trimmed.length > MAX_COMPUTER_URL) throw new Error('远端电脑地址过长。')
-  if (!isComputerUrl(trimmed)) throw new Error('请输入不含登录凭据的 HTTP 或 HTTPS 地址。')
-  if (!workspace.agents.some((agent) => agent.id === agentId)) throw new Error('助手不存在')
-  const canonical = trimmed ? new URL(trimmed).toString() : ''
-  return {
-    ...workspace,
-    agents: workspace.agents.map((agent) =>
-      agent.id === agentId ? { ...agent, computerUrl: canonical } : agent,
     ),
   }
 }

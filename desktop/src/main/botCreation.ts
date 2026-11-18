@@ -16,8 +16,13 @@ export async function createBot(call: Call, profile: NewAgent, requestId: string
     category: agent.group,
     system_prompt:
       'You are a helpful assistant. Collaborate with the user and use the available tools when needed.',
-    // 新猫咪默认使用终端工具，纯文本工具模型也能处理首次对话。
-    tool_permissions: ['computer_shell'],
+    // 用户已配备电脑，默认开放完整操作能力；执行器按工具要求选择视觉模型。
+    tool_permissions: [
+      'computer_shell',
+      'computer_browser',
+      'computer_screenshot',
+      'computer_input',
+    ],
     approval_mode: 'standard',
     messaging_policy: { accept_dm: true, can_initiate: true, accept_group_invite: true },
     accent_hue: 0,

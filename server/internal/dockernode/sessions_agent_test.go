@@ -3,6 +3,7 @@ package dockernode
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -194,4 +195,105 @@ func TestNodeAgentAcknowledgementAndRecovery(t *testing.T) {
 			t.Fatal(observation, err)
 		}
 	})
+}
+
+func TestNodeCloseProvesExitedContainerWithoutGroup(t *testing.T) {
+	ctx := context.Background()
+	fixture := newFixture(t)
+	session := fixture.prepareComputer(t, fixture.specification)
+	groups := &fakeGroups{path: t.TempDir()}
+	controller := fixture.sessionController(t, groups, sessionOptions())
+	agent := controller.agent.(*fakeAuthority)
+	agent.failClose = true
+	command := commandFor(session)
+	if _, err := controller.Close(ctx, command); err == nil {
+		t.Fatal("仍在运行的容器没有返回代理确认")
+	}
+	state, err := fixture.node.journal.readSession(sessionKeyOf(session))
+	if err != nil || state == nil || state.Phase != "quarantined" || state.Group != nil {
+		t.Fatal("未发出授权的会话没有进入隔离", state, err)
+	}
+	name := fixture.node.resource(fixture.specification).Name
+	fixture.engine.mu.Lock()
+	current := fixture.engine.containers[name]
+	current.State.Status = "exited"
+	current.State.Running = false
+	current.State.Pid = 0
+	fixture.engine.containers[name] = current
+	fixture.engine.mu.Unlock()
+	command.Revision++
+	observed, err := controller.Close(ctx, command)
+	if err != nil || !observed.Matches(command, "drained") || agent.closes != 2 || groups.drains != 0 {
+		t.Fatal("核实原容器退出后未能恢复没有宿主组的隔离会话", observed, err)
+	}
+	state, err = fixture.node.journal.readSession(sessionKeyOf(session))
+	if err != nil || state == nil || state.Phase != "closed" || state.Command != command {
+		t.Fatal("关闭屏障未持久化", state, err)
+	}
+	_, err = controller.Open(ctx, command)
+	requireFailure(t, err, "session_cannot_reopen")
+}
+
+func TestNodeCloseProvesExitedContainer(t *testing.T) {
+	cases := []struct {
+		name        string
+		alter       func(*container)
+		drainErr    error
+		wantDrained bool
+	}{
+		{name: "确认原容器退出并清理宿主组", wantDrained: true},
+		{name: "确认原容器退出且宿主父组已移除", drainErr: processgroup.ErrContainerGroupAbsent, wantDrained: true},
+		{name: "原容器仍有进程", alter: func(current *container) { current.State.Pid = 4242 }},
+		{name: "原容器正在重启", alter: func(current *container) { current.State.Status = "restarting" }},
+		{name: "容器身份无法确认", alter: func(current *container) { current.Name = "/other-container" }},
+		{name: "宿主组清理没有确切证据", drainErr: os.ErrNotExist},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := newFixture(t)
+			session := fixture.prepareComputer(t, fixture.specification)
+			groups := &fakeGroups{path: t.TempDir()}
+			controller := fixture.sessionController(t, groups, sessionOptions())
+			agent := controller.agent.(*fakeAuthority)
+			command := commandFor(session)
+			if _, err := controller.Open(ctx, command); err != nil {
+				t.Fatal(err)
+			}
+			name := fixture.node.resource(fixture.specification).Name
+			fixture.engine.mu.Lock()
+			original := fixture.engine.containers[name]
+			current := original
+			current.State.Status = "exited"
+			current.State.Running = false
+			current.State.Pid = 0
+			if test.alter != nil {
+				test.alter(&current)
+			}
+			fixture.engine.containers[name] = current
+			fixture.engine.mu.Unlock()
+			agent.failClose = true
+			groups.drainErr = test.drainErr
+			defer func() {
+				agent.failClose = false
+				groups.drainErr = nil
+				fixture.engine.mu.Lock()
+				fixture.engine.containers[name] = original
+				fixture.engine.mu.Unlock()
+			}()
+			command.Revision++
+			observed, err := controller.Close(ctx, command)
+			if test.wantDrained && (err != nil || !observed.Matches(command, "drained")) || !test.wantDrained && (err == nil || observed.State != "") {
+				t.Fatal("关闭回执与实际清理证据不一致", observed, err)
+			}
+			wantPhase := "quarantined"
+			if test.wantDrained {
+				wantPhase = "closed"
+			}
+			state, err := fixture.node.journal.readSession(sessionKeyOf(session))
+			if err != nil || state == nil || state.Phase != wantPhase || state.Command != command || groups.drains != 1 {
+				t.Fatal("持久关闭状态与主机清理证据不一致", state, err)
+			}
+		})
+	}
 }

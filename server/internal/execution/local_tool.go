@@ -13,6 +13,9 @@ type localOperation struct {
 
 // PrepareLocal 只登记原模型提出的工具调用；返回授权或已有回执，绝不调用节点执行浏览器动作。
 func (relay *workerRelay) PrepareLocal(ctx context.Context, key string, call botagent.ToolCall) (botagent.ToolPreparation, error) {
+	if err := relay.worker.waitConsole(ctx, relay.lease, relay.session); err != nil {
+		return botagent.ToolPreparation{}, err
+	}
 	tool := relay.allowed[call.Name]
 	if relay.pendingLocal != nil || !runsInAgent(tool) {
 		return botagent.ToolPreparation{}, botagent.ErrProtocol

@@ -20,7 +20,7 @@ RUN printf 'path-include /usr/share/locale/zh*\n' > /etc/dpkg/dpkg.cfg.d/zz-tomb
     && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends \
        locales dbus dbus-x11 libnss-wrapper at-spi2-core \
        xfce4 xfce4-terminal xfwm4 thunar mousepad \
-       tigervnc-standalone-server xauth x11-utils x11-xserver-utils xdotool scrot \
+       tigervnc-standalone-server xvfb xauth x11-utils x11-xserver-utils xdotool scrot python3-xlib python3-pil \
        fonts-noto-cjk fonts-noto-color-emoji fonts-dejavu-core \
        bash bash-completion coreutils procps util-linux \
        python3 python3-pip python3-venv python-is-python3 rustc cargo perl build-essential pkg-config \
@@ -35,8 +35,16 @@ RUN printf 'path-include /usr/share/locale/zh*\n' > /etc/dpkg/dpkg.cfg.d/zz-tomb
     && rm -rf /var/lib/apt/lists/*
 
 ENV LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
-COPY install_tools.py /usr/lib/tombot/install_tools.py
+# 原生窗口隔离扩展使用已验证的 Xpra 协议版本；更新必须同时运行窗口越权和双桌面回归。
 COPY tools.lock.json /usr/share/tombot/tools.lock.json
+RUN curl --fail --location --retry 3 --connect-timeout 15 --max-time 60 https://xpra.org/xpra.asc -o /usr/share/keyrings/xpra.asc \
+    && printf '4df3209ea4b759f0b5838b60baedb6893ec62df7abad9046462176a6e6a7ed7d  /usr/share/keyrings/xpra.asc\n' | sha256sum -c - \
+    && printf 'Types: deb\nURIs: https://xpra.org\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/xpra.asc\n' > /etc/apt/sources.list.d/xpra.sources \
+    && apt-get update \
+    && xpra_version="$(jq -er --arg arch "$(dpkg --print-architecture)" '.xpra[$arch]' /usr/share/tombot/tools.lock.json)" \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "xpra=$xpra_version" "xpra-x11=$xpra_version" \
+    && rm -rf /var/lib/apt/lists/*
+COPY install_tools.py /usr/lib/tombot/install_tools.py
 RUN apt-get update \
     && python3 /usr/lib/tombot/install_tools.py \
     && dpkg-query -W -f='${Package}\t${Version}\n' > /usr/share/tombot/packages.tsv \
@@ -44,6 +52,8 @@ RUN apt-get update \
 
 COPY bin/computer-agent bin/computer-task bin/computer-probe bin/bot-agent /usr/lib/tombot/
 COPY desktop.py /usr/lib/tombot/desktop.py
+COPY files.py /usr/lib/tombot/files.py
+COPY native_browser.py native_browser_io.py native_browser_policy.py /usr/lib/tombot/
 COPY prepare.py /usr/lib/tombot/prepare.py
 COPY desktop-environment.json /usr/share/tombot/desktop-environment.json
 COPY verify_tools.py /usr/lib/tombot/verify_tools.py

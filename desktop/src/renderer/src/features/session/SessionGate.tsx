@@ -65,7 +65,10 @@ function ServerForm({ session }: { session: Session }) {
             autoComplete="url"
             spellCheck={false}
             placeholder="https://tom.example.com"
-            onChange={(event) => setServerUrl(event.target.value)}
+            onChange={(event) => {
+              session.pauseRecovery()
+              setServerUrl(event.target.value)
+            }}
           />
         </label>
         {session.message && (

@@ -10,7 +10,7 @@ ext4 根目录为 root:root、0755，不直接映射进容器。固定 `workspac
 
 节点在启动容器前创建子目录，使用固定 `VolumeOptions.Subpath` 和 `NoCopy` 挂载并在对账时核对；缺失、交换子目录或扩大为整卷均失败。Docker 子目录挂载要求目录预先存在；固定 Engine API v1.47 包含该能力。[Docker 卷子目录说明](https://docs.docker.com/engine/storage/volumes/)、[Engine API 版本记录](https://docs.docker.com/reference/api/engine/version-history/)。镜像必须携带 `io.tombot.computer.storage-layout=2`，旧镜像在分配磁盘之前拒绝。
 
-`FileStorageOptions` 指定 root 保护的数据目录、独立控制目录、单命令时限和宿主最低空闲余量。每个代次使用 `tombot-<computer_id>-g<generation>/filesystem.img` 和同级 `workspace/` 挂载点。控制记录按用户保存为 `<user_id>.storage.json`，采用版本 3；锁为 `<user_id>.storage.lock`，跨代次复用同一 inode，不删除或替换。控制目录位于用户存储之外，不向任务暴露底层镜像、loop 设备或宿主工具。
+`FileStorageOptions` 指定 root 保护的数据目录、独立控制目录、单命令时限和宿主最低空闲余量。首次分配磁盘时使用 `tombot-<computer_id>-g<generation>/filesystem.img` 和同级 `workspace/` 挂载点。已投用电脑换镜像时保留原目录及磁盘身份，新运行代次通过自己的 Docker 卷引用同一挂载点。控制记录按用户保存为 `<user_id>.storage.json`，采用版本 3；锁为 `<user_id>.storage.lock`，跨代次复用同一 inode，不删除或替换。控制目录位于用户存储之外，不向任务暴露底层镜像、loop 设备或宿主工具。
 
 镜像先通过 `fallocate` 分配空间，再核对文件长度与已分配块。容量不足会明确失败，不依赖稀疏文件放大可用容量。格式化禁用 discard，避免回收刚预分配的空间。配置容量包含 ext4 元数据与日志开销，用户可用空间略小；界面应同时显示总容量和实际可用值。
 
@@ -26,7 +26,7 @@ ext4 根目录为 root:root、0755，不直接映射进容器。固定 `workspac
 
 - `allocating` 可以恢复未完成的预分配，必须保持同一镜像 inode 与容量。
 - 写入 `formatting` 意图后，恢复只核验 UUID 并执行只读完整性检查，不再次格式化镜像。无法证明初始化完整时，由开户补偿清理该代次后显式重试。
-- 持久镜像丢失挂载时，`Inspect` 返回存在但未就绪，`Ensure` 核验原镜像并重新挂载，不重建文件系统。
+- 持久镜像丢失挂载时，`Inspect` 返回存在但未就绪。电脑换镜像调用 `Restore`，只接受已有 `ready` 记录，核验原镜像的设备号、inode、UUID、容量和固定子目录后恢复挂载。记录或镜像缺失会终止换代。
 - `formatted` 挂载后还必须完成子目录授权、复验及刷盘，才能保存 `ready`。挂载回包丢失时复用已核验挂载，只允许恢复初始权限的空目录，禁止修复非空异常目录。
 - `Workspace.Exists` 表示持久资源存在，`Workspace.Ready` 表示挂载与布局均正确。已就绪磁盘的目录缺失、链接、身份或权限漂移均拒绝，不补建空 profile 掩盖数据丢失。节点在存储就绪前不启动容器；运行实例对应的挂载丢失时报告异常。
 - 外来目录、错误 UUID、inode 被替换、符号链接、嵌套或叠加挂载、同一镜像的多个设备关联均拒绝自动修改。

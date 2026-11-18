@@ -1,3 +1,4 @@
+import { attachmentKind } from '../../../../shared/attachmentMedia'
 import { parseChatFilePath } from '../../../../shared/chatFiles'
 import { useMessageScroll } from './useMessageScroll'
 import { ScrollToBottom } from './ScrollToBottom'
@@ -18,8 +19,10 @@ import { replyExcerpt } from '../workspace/model'
 import { GroupSidePanel } from './GroupSidePanel'
 import type { GroupDetail } from '../desktop/backend'
 import { WorkStatus } from './WorkStatus'
+import { ComposerFiles } from './ComposerFiles'
 import { useAttachments } from './useAttachments'
 import { pasteFiles } from './pasteFiles'
+import { MessageFile, attachmentCaption, previewAttachment } from './MessageFile'
 import { MarkdownMessage } from './MarkdownMessage'
 import { ChatMessage } from './ChatMessage'
 import { MessageMenu, type MessageMenuAnchor } from './MessageMenu'
@@ -52,28 +55,30 @@ export function ConversationPanel({
   const [draft, setDraft] = useState('')
   const [mentions, setMentions] = useState<string[]>([])
   const uploadIds = useRef(new WeakMap<File, string>())
-  const { pending, setPending, addFiles, isUploading, uploading } = useAttachments(async (file) => {
-    const upload = getBackend().uploadAttachment
-    if (!upload) throw new Error('还不能添加附件。')
-    const requestId = uploadIds.current.get(file) ?? ulid()
-    uploadIds.current.set(file, requestId)
-    const uploaded = await upload(
-      {
+  const { draftFiles, removeFile, addFiles, sendFiles, isSending } = useAttachments(
+    async (file) => {
+      const upload = getBackend().uploadAttachment
+      if (!upload) throw new Error('还不能添加附件。')
+      const requestId = uploadIds.current.get(file) ?? ulid()
+      uploadIds.current.set(file, requestId)
+      const uploaded = await upload(
+        {
+          name: file.name,
+          type: file.type,
+          bytes: new Uint8Array(await file.arrayBuffer()),
+          requestId,
+        },
+        { groupId: id },
+      )
+      return {
         name: file.name,
-        type: file.type,
-        bytes: new Uint8Array(await file.arrayBuffer()),
-        requestId,
-      },
-      { groupId: id },
-    )
-    return {
-      name: file.name,
-      path: uploaded.path,
-      sha256: uploaded.sha256,
-      mediaType: file.type,
-      kind: file.type === 'image/png' || file.type === 'image/jpeg' ? 'image' : 'file',
-    }
-  })
+        path: uploaded.path,
+        sha256: uploaded.sha256,
+        mediaType: file.type,
+        kind: attachmentKind(file.name, file.type),
+      }
+    },
+  )
   const [replyToId, setReplyToId] = useState<string>()
   const [runs, setRuns] = useState<AgentConversation['runs']>([])
   const request = useRef<{ key: string; id: string } | undefined>(undefined)
@@ -91,7 +96,6 @@ export function ConversationPanel({
     scrollToBottom,
     pauseFollowing,
   } = useMessageScroll(messages)
-  const [busy, setBusy] = useState(false)
   const workingAgents = agents.filter((agent) => runs.some((run) => run.bot_id === agent.id))
   const names = new Map<string, string>()
   for (const agent of agents) names.set(agent.id, agent.name)
@@ -158,7 +162,7 @@ export function ConversationPanel({
     const unwatch = getBackend().watchEvents?.(
       (event) => {
         if (
-          event.kind === 'stream.reset' ||
+          event.kind === 'workspace.refresh' ||
           event.payload.conversation_id === conversationRef.current ||
           event.resource_id === id
         )
@@ -213,33 +217,27 @@ export function ConversationPanel({
   }
 
   async function send(): Promise<void> {
-    const content = draft.trim() || pending.map((item) => item.name).join('、')
-    if (!content || !conversationId || busy || uploading.current) return
-    setBusy(true)
-    const key = JSON.stringify({ content, replyToId, mentions, pending })
-    if (request.current?.key !== key) request.current = { key, id: ulid() }
+    if (!conversationId || (!draft.trim() && !draftFiles.length)) return
     try {
-      const sendMessage = getBackend().sendConversation
-      if (!sendMessage) throw new Error('群聊发送服务不可用。')
-      await sendMessage(
-        conversationId,
-        content,
-        pending.map((item) => ({ path: item.path, sha256: item.sha256 })),
-        replyToId,
-        mentions,
-        request.current.id,
-      )
+      const sent = await sendFiles(async (attachments) => {
+        const content = draft.trim() || attachments.map((item) => item.name).join('、')
+        const files = attachments.map(({ path, sha256 }) => ({ path, sha256 }))
+        const key = JSON.stringify({ content, replyToId, mentions, files })
+        if (request.current?.key !== key) request.current = { key, id: ulid() }
+        const sendMessage = getBackend().sendConversation
+        if (!sendMessage) throw new Error('群聊发送服务不可用。')
+        await sendMessage(conversationId, content, files, replyToId, mentions, request.current.id)
+        return true
+      })
+      if (!sent) return
       request.current = undefined
       setDraft('')
       setMentions([])
-      setPending([])
       setReplyToId(undefined)
       scrollToBottom()
       await reload()
     } catch (failure) {
       onError((failure as Error).message)
-    } finally {
-      setBusy(false)
     }
   }
 
@@ -379,9 +377,7 @@ export function ConversationPanel({
                             }
                           })()
                         }}
-                        onPreview={(attachment) =>
-                          getBackend().previewAttachment?.(attachment.path) ?? Promise.resolve('')
-                        }
+                        onPreview={previewAttachment}
                       />
                     )}
                   </div>
@@ -437,20 +433,14 @@ export function ConversationPanel({
               onCancel={() => setReplyToId(undefined)}
             />
           )}
-          {pending.length > 0 && (
-            <div className="composer-files">
-              {pending.map((item) => (
-                <span key={item.path}>{item.name}</span>
-              ))}
-            </div>
-          )}
           <form
-            className="composer"
+            className={draftFiles.length ? 'composer has-files' : 'composer'}
             onSubmit={(event) => {
               event.preventDefault()
               void send()
             }}
           >
+            <ComposerFiles files={draftFiles} onRemove={removeFile} isSending={isSending} />
             <input
               type="file"
               multiple
@@ -466,12 +456,14 @@ export function ConversationPanel({
             <button
               className="composer-add"
               type="button"
+              disabled={isSending}
               aria-label="添加附件"
               onClick={() => document.getElementById('chat-file')?.click()}
             >
               <Plus size={20} />
             </button>
             <GroupComposer
+              readOnly={isSending}
               title={title}
               draft={draft}
               members={agents.filter((agent) =>
@@ -486,7 +478,7 @@ export function ConversationPanel({
             <button
               className="composer-send"
               type="submit"
-              disabled={isUploading || busy || (!draft.trim() && pending.length === 0)}
+              disabled={isSending || !conversationId || (!draft.trim() && !draftFiles.length)}
               aria-label="发送"
             >
               <ArrowUp size={20} aria-hidden="true" />
@@ -578,7 +570,24 @@ export function DmThreadDialog({
                     {name}
                   </span>
                   <div className="dm-bubble">
-                    <MarkdownMessage content={line.content} />
+                    {attachmentCaption(line.content, line.attachments) && (
+                      <MarkdownMessage
+                        content={attachmentCaption(line.content, line.attachments)}
+                      />
+                    )}
+                    {line.attachments?.map((attachment) => (
+                      <MessageFile
+                        key={`${attachment.path}:${attachment.sha256}`}
+                        attachment={attachment}
+                        onPreview={previewAttachment}
+                        onDownload={(file) => {
+                          void (async () => {
+                            const { conversationId, fileId } = parseChatFilePath(file.path)
+                            await getBackend().downloadChatFile(conversationId, fileId)
+                          })().catch((error: Error) => onError(error.message))
+                        }}
+                      />
+                    ))}
                   </div>
                 </div>
               )

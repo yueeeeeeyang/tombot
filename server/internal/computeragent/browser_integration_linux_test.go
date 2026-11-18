@@ -128,7 +128,7 @@ func TestContainerBrowserRunnerRejectsFakeMembership(t *testing.T) {
 	if err == nil || service != nil {
 		t.Fatal("实际浏览器引导接受伪造服务组")
 	}
-	if err := process.wait(ctx); err == nil || !process.finished() {
+	if err := process.wait(ctx); err != nil || !process.finished() {
 		t.Fatal("实际拒绝未完整回收", err)
 	}
 	if stat, err := membership.Stat(); err != nil || stat.Size() != 0 {

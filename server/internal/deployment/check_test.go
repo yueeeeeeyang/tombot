@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"io.yueyang/tom/deploy"
 	"io.yueyang/tom/internal/dockerbootstrap"
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/infra/ids"
@@ -55,8 +56,8 @@ func TestDeploymentGraph(t *testing.T) {
 		want   string
 	}{
 		{"部署示例与服务默认值", func(*configuration, *Paths, *account) {}, ""},
-		{"旧示例拒绝三分钟验收", func(c *configuration, _ *Paths, _ *account) { c.node.Runtime.MaximumLease = 120000 }, "租约"},
-		{"租约恰好足够", func(c *configuration, _ *Paths, _ *account) { c.node.Runtime.MaximumLease = 180000 }, ""},
+		{"旧示例拒绝五分钟验收", func(c *configuration, _ *Paths, _ *account) { c.node.Runtime.MaximumLease = 180000 }, "租约"},
+		{"租约恰好足够", func(c *configuration, _ *Paths, _ *account) { c.node.Runtime.MaximumLease = 300000 }, ""},
 		{"开户租约越界", func(c *configuration, _ *Paths, _ *account) {
 			c.server.Provision.LeaseDuration = serverapp.Duration(10 * time.Minute)
 		}, "租约"},
@@ -249,7 +250,10 @@ func TestNodeSystemdService(t *testing.T) {
 		}
 	}
 	units, err := os.ReadDir("../../deploy/systemd")
-	if err != nil || len(units) != 1 {
-		t.Fatal("节点必须只发布一个服务单元", err)
+	if err != nil || len(units) != 3 || units[0].Name() != "tombot-node-update.service" || units[1].Name() != "tombot-node-update.timer" || units[2].Name() != "tombot-node.service" {
+		t.Fatal("节点单元集合不完整或存在额外服务", err)
+	}
+	if !strings.Contains(deploy.NodeUpdateService, "ExecStart=/usr/lib/tombot/tomnode sync-upgrade\n") || !strings.Contains(deploy.NodeUpdateService, "ConditionPathExists=/etc/tombot/node-release.pub\n") || !strings.Contains(deploy.NodeUpdateTimer, "OnUnitInactiveSec=1min\n") {
+		t.Fatal("独立更新器启动契约不完整")
 	}
 }

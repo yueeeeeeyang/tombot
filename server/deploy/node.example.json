@@ -13,7 +13,7 @@
   "startup_timeout_ms": 120000,
   "shutdown_timeout_ms": 180000,
   "api": {
-    "call_timeout_ms": 30000,
+    "call_timeout_ms": 60000,
     "shutdown_timeout_ms": 90000,
     "maximum_connections": 32
   },

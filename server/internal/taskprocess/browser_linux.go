@@ -95,8 +95,8 @@ func RunBrowser() (failure error) {
 	if err = prepareProcess(computer.BrowserUID, computer.DesktopSharedGID); err != nil {
 		return err
 	}
-	// 浏览器配置和临时文件不属于共享业务产出，不继承业务任务的组可读默认权限。
-	unix.Umask(0077)
+	// 下载是共享业务产出；登录配置仍由上面已复验的 0700 私有根目录保护。
+	unix.Umask(0007)
 	if err = os.Chdir(computer.BrowserDirectory); err != nil {
 		return errors.New("进入共享浏览器持久目录失败")
 	}
@@ -124,7 +124,7 @@ func RunBrowser() (failure error) {
 		return err
 	}
 	stage = "browser_start_launch_failed"
-	if err = syscall.Exec(BrowserProgram, arguments, environment); err != nil {
+	if err = syscall.Exec("/usr/bin/python3", append([]string{"/usr/bin/python3", "-I", "-B", "/usr/lib/tombot/native_browser.py", "start"}, arguments...), environment); err != nil {
 		return errors.New("启动共享 Chrome 失败")
 	}
 	return errors.New("共享 Chrome 没有原位执行")

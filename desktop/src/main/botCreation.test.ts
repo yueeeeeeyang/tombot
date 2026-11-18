@@ -1,7 +1,9 @@
 import { createHash, randomBytes } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { ulid } from '../shared/ulid'
 import { createBot } from './botCreation'
+import type { UserEvent } from '../renderer/src/features/desktop/backend'
 import type { Agent } from '../renderer/src/features/workspace/model'
 
 const mocks = vi.hoisted(() => ({
@@ -38,45 +40,145 @@ vi.mock('node:fs/promises', () => ({
 
 const profile = { name: '小黑', avatar: 'bombay', group: '未分组' } as const
 
-it.each(['取消订阅', '页面重载'])('%s 会关闭旧事件流，不能留下重复订阅', async (reason) => {
-  const { EventEmitter } = await import('node:events')
-  const sender = Object.assign(new EventEmitter(), {
+function eventSender() {
+  return Object.assign(new EventEmitter(), {
     id: 1,
     isDestroyed: () => false,
-    send: vi.fn(),
+    send: vi.fn<(channel: string, event: UserEvent, watchId: string) => void>(),
   })
-  let aborted = false
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (_url: string, options: RequestInit) => {
-      const body = new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            new TextEncoder().encode(
-              'id: 1\ndata: {"sequence":1,"kind":"message.created","resource_id":"test","payload":{}}\n\n',
-            ),
-          )
-          options.signal?.addEventListener(
-            'abort',
-            () => {
-              aborted = true
-              controller.error(new DOMException('已取消', 'AbortError'))
-            },
-            { once: true },
-          )
-        },
-      })
-      return new Response(body, { headers: { 'content-type': 'text/event-stream' } })
-    }),
+}
+
+function openEventStream({ signal }: RequestInit, sequences: number[]) {
+  let disconnect!: () => void
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder()
+      controller.enqueue(encoder.encode('retry: 1000\n\n'))
+      for (const sequence of sequences) {
+        const event: UserEvent = {
+          sequence,
+          kind: 'message.created',
+          resource_id: 'test',
+          payload: {},
+          created_at: new Date().toISOString(),
+        }
+        controller.enqueue(encoder.encode(`id: ${sequence}\ndata: ${JSON.stringify(event)}\n\n`))
+      }
+      disconnect = () => {
+        signal?.removeEventListener('abort', disconnect)
+        controller.error(new TypeError('事件连接已中断'))
+      }
+      signal?.addEventListener('abort', disconnect, { once: true })
+    },
+  })
+  return {
+    response: new Response(body, { headers: { 'content-type': 'text/event-stream' } }),
+    disconnect,
+  }
+}
+
+it.each(['取消订阅', '页面重载'])('%s 会关闭旧事件流，不能留下重复订阅', async (reason) => {
+  const sender = eventSender()
+  const fetchEvents = vi.fn(
+    async (_url: string, options: RequestInit) => openEventStream(options, [1]).response,
   )
+  vi.stubGlobal('fetch', fetchEvents)
   const watching = invoke('desktop:watch-events', { sender }, 'watch')
   await vi.waitFor(() => expect(sender.send).toHaveBeenCalledOnce())
   if (reason === '页面重载') sender.emit('did-start-navigation')
   else await invoke('desktop:unwatch-events', { sender }, 'watch')
   expect(await watching).toMatchObject({ ok: true })
-  expect(aborted).toBe(true)
+  expect(fetchEvents.mock.calls[0]?.[1].signal?.aborted).toBe(true)
   expect(sender.listenerCount('destroyed')).toBe(0)
   expect(sender.listenerCount('did-start-navigation')).toBe(0)
+})
+
+describe('消息事件重连', () => {
+  it('网络中断后按已确认序号继续订阅，刷新工作空间并跳过重复事件', async () => {
+    vi.useFakeTimers()
+    const sender = eventSender()
+    let disconnect!: () => void
+    const fetchEvents = vi
+      .fn<(url: string, options: RequestInit) => Promise<Response>>()
+      .mockImplementationOnce(async (_url, options) => {
+        const stream = openEventStream(options, [7])
+        disconnect = stream.disconnect
+        return stream.response
+      })
+      .mockRejectedValueOnce(new TypeError('网络不可用'))
+      .mockImplementationOnce(async (_url, options) => openEventStream(options, [7, 8]).response)
+    vi.stubGlobal('fetch', fetchEvents)
+    const watching = invoke('desktop:watch-events', { sender }, 'watch')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(sender.send).toHaveBeenCalledOnce()
+    disconnect()
+    await vi.advanceTimersByTimeAsync(30_000)
+    await invoke('desktop:unwatch-events', { sender }, 'watch')
+    expect(await watching).toMatchObject({ ok: true })
+    expect(fetchEvents.mock.calls.map(([url]) => new URL(url).searchParams.get('after'))).toEqual([
+      '0',
+      '7',
+      '7',
+    ])
+    const events = sender.send.mock.calls.map(([channel, event, watchId]) => {
+      expect(channel).toBe('desktop:user-event')
+      expect(watchId).toBe('watch')
+      return event
+    })
+    expect(
+      events.filter(({ kind }) => kind === 'message.created').map(({ sequence }) => sequence),
+    ).toEqual([7, 8])
+    expect(events.filter(({ kind }) => kind === 'workspace.refresh')).toHaveLength(1)
+  })
+
+  it('连续失败达到上限后退出，恢复后的新订阅仍能刷新工作空间', async () => {
+    vi.useFakeTimers()
+    const sender = eventSender()
+    const fetchEvents = vi
+      .fn<(url: string, options: RequestInit) => Promise<Response>>()
+      .mockRejectedValue(new TypeError('网络不可用'))
+    vi.stubGlobal('fetch', fetchEvents)
+    const onStopped = vi.fn()
+    void invoke('desktop:watch-events', { sender }, 'first-watch').then(onStopped)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(fetchEvents).toHaveBeenCalledTimes(5)
+    expect(onStopped).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ ok: false, code: 'EVENT_STREAM_UNAVAILABLE' }),
+    )
+    expect(sender.listenerCount('destroyed')).toBe(0)
+
+    fetchEvents.mockImplementationOnce(
+      async (_url, options) => openEventStream(options, []).response,
+    )
+    const watching = invoke('desktop:watch-events', { sender }, 'second-watch')
+    await vi.advanceTimersByTimeAsync(0)
+    await invoke('desktop:unwatch-events', { sender }, 'second-watch')
+    expect(await watching).toMatchObject({ ok: true })
+    expect(fetchEvents).toHaveBeenCalledTimes(6)
+    expect(sender.send).toHaveBeenCalledExactlyOnceWith(
+      'desktop:user-event',
+      expect.objectContaining({ kind: 'workspace.refresh' }),
+      'second-watch',
+    )
+  })
+
+  it('退避中取消订阅会立即结束，并阻止后续请求', async () => {
+    vi.useFakeTimers()
+    const sender = eventSender()
+    const fetchEvents = vi.fn().mockRejectedValue(new TypeError('网络不可用'))
+    vi.stubGlobal('fetch', fetchEvents)
+    const onStopped = vi.fn()
+    void invoke('desktop:watch-events', { sender }, 'watch').then(onStopped)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchEvents).toHaveBeenCalledOnce()
+    await invoke('desktop:unwatch-events', { sender }, 'watch')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(onStopped).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ ok: true }))
+    expect(sender.listenerCount('destroyed')).toBe(0)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(fetchEvents).toHaveBeenCalledOnce()
+    expect(sender.send).not.toHaveBeenCalled()
+  })
 })
 const png =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1sAAAAASUVORK5CYII='
@@ -96,7 +198,10 @@ beforeEach(async () => {
   const { registerDesktopIpc } = await import('./desktopServer')
   registerDesktopIpc()
 })
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+  vi.useRealTimers()
+  vi.unstubAllGlobals()
+})
 
 async function invoke(name: string, ...args: unknown[]) {
   const handler = mocks.handlers.get(name)
@@ -314,7 +419,12 @@ describe('服务端创建猫咪与投递', () => {
         expect(body.client_request_id).toBe(requestId)
         expect(body.system_prompt).toMatch(/assistant/)
         expect(body.approval_mode).toBe('standard')
-        expect(body.tool_permissions).toEqual(['computer_shell'])
+        expect(body.tool_permissions).toEqual([
+          'computer_shell',
+          'computer_browser',
+          'computer_screenshot',
+          'computer_input',
+        ])
         return Response.json({ bot, is_created: true }, { status: 201 })
       }
       if (path === '/workspace' && options.method === 'GET') {

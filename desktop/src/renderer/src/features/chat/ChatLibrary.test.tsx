@@ -127,6 +127,19 @@ describe('群资料库', () => {
       within(screen.getByRole('search')).getByRole('button', { name: '搜索文件' }),
     ).toBeInTheDocument()
   })
+  it.each([{ files: [] }, { files: [file] }])(
+    '文件列表或空状态不再展示收录说明与容量信息：%j',
+    async ({ files }) => {
+      vi.spyOn(memoryBackend, 'listChatFiles').mockResolvedValue(page(files))
+      render(<ChatLibrary conversationId="group" />)
+      if (files.length) await screen.findByText('方案.txt')
+      else await screen.findByText('资料库还是空的。在聊天中发送文件后会显示在这里。')
+      expect(screen.queryByText('聊天中你和猫咪发出的文件会自动收录。')).toBeNull()
+      expect(screen.queryByText(/^已用 /)).toBeNull()
+      expect(screen.queryByText(/256\.0 MB/)).toBeNull()
+      expect(screen.getByRole('textbox', { name: '搜索聊天文件' })).toBeInTheDocument()
+    },
+  )
   it('预览失败可重试', async () => {
     dialogs()
     vi.spyOn(memoryBackend, 'listChatFiles').mockResolvedValue(page([file]))

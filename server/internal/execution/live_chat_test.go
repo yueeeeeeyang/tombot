@@ -107,6 +107,10 @@ func TestLiveChatInputs(t *testing.T) {
 			if last.Role != "user" || last.Blocks[0].Text != "再告诉我核对方法" || !strings.Contains(input.System, "have not been answered yet") {
 				t.Error("续跑未识别未回答消息")
 			}
+			archive := input.Messages[0].Blocks[0].Text
+			if len(input.Messages) != 2 || !strings.HasPrefix(archive, historyContextLabel) || !strings.Contains(archive, "请检查这项任务。") || !strings.Contains(archive, "第一项已核对。") {
+				t.Error("同一次会话回合中已答复的输入没有归入历史")
+			}
 			return emitText(emit, "核对方法如下。")
 		}))
 		if run, err := worker.Process(ctx, lease); err != nil || run.Status != "succeeded" {

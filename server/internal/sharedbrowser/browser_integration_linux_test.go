@@ -64,9 +64,25 @@ func launchTestBrowserWithArguments(t *testing.T, profile string, options Option
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command("/usr/bin/google-chrome", "--headless", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-gpu", "--remote-debugging-pipe", "--user-data-dir="+profile, "about:blank")
+	native, ok := options.Native.(*testNativeDesktop)
+	if !ok {
+		t.Fatal("缺少测试桌面身份")
+	}
+	if len(native.sessions) > 0 {
+		startNativeTestDesktops(t, native.sessions)
+	}
+	runtime, err := os.MkdirTemp(filepath.Dir(profile), "native-runtime-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chown(runtime, computer.BrowserUID, computer.DesktopSharedGID); err != nil {
+		t.Fatal(err)
+	}
+	options.Native = NewNativeDesktop(runtime)
+	options.Width, options.Height = computer.DesktopWidth, computer.DesktopHeight
+	command := exec.Command("/usr/bin/python3", "-I", "-B", "/usr/lib/tombot/native_browser.py", "start", "/usr/bin/google-chrome", "--no-first-run", "--no-default-browser-check", "--force-device-scale-factor=1", "--disable-background-networking", "--disable-component-update", "--remote-debugging-pipe", "--user-data-dir="+profile, "about:blank")
 	command.Args = append(command.Args, arguments...)
-	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=zh_CN.UTF-8", "HOME=" + filepath.Dir(profile), "XDG_RUNTIME_DIR=" + filepath.Dir(profile)}
+	command.Env = []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "LC_ALL=C.UTF-8", "HOME=" + filepath.Dir(profile), "XDG_RUNTIME_DIR=" + runtime}
 	command.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: computer.BrowserUID, Gid: computer.DesktopSharedGID}, Setpgid: true}
 	command.ExtraFiles = []*os.File{readCommand, writeResponse}
 	command.Stdout, command.Stderr = io.Discard, io.Discard
@@ -101,12 +117,38 @@ func launchTestBrowserWithArguments(t *testing.T, profile string, options Option
 			}
 		}
 	})
-	service, err := New(context.Background(), readResponse, writeCommand, options)
+	startup, stopStartup := context.WithTimeout(t.Context(), 35*time.Second)
+	service, err := New(context.Background(), startup, readResponse, writeCommand, options)
+	stopStartup()
 	if err != nil {
 		t.Fatal("真实 Chrome 管道初始化失败", err)
 	}
 	instance.service = service
 	return instance
+}
+
+// TestSharedChromeColdStartup 只验证真实浏览器启动及启动请求取消后的首个协议调用。
+func TestSharedChromeColdStartup(t *testing.T) {
+	options, _, _ := testOptions()
+	options.Native = &testNativeDesktop{}
+	directory, err := os.MkdirTemp("/workspace", "browser-cold-start-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(directory); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := os.Chown(directory, computer.BrowserUID, computer.DesktopSharedGID); err != nil {
+		t.Fatal(err)
+	}
+	live := launchTestBrowser(t, filepath.Join(directory, "profile"), options)
+	ctx, cancel := context.WithTimeout(t.Context(), options.CallTimeout)
+	defer cancel()
+	if _, err := live.service.listTargets(ctx); err != nil {
+		t.Fatal("冷启动请求结束后，共享浏览器未能继续接单", err)
+	}
 }
 
 func evaluate(t *testing.T, service *Service, address Address, expression string) string {
@@ -127,7 +169,11 @@ func evaluateTarget(t *testing.T, target cdp.Session, expression string) string 
 	positive := true
 	result, err := cdp.Call(ctx, target, runtime.Evaluate, runtime.EvaluateParams{Expression: expression, ReturnByValue: &positive, AwaitPromise: &positive})
 	if err != nil || result.ExceptionDetails != nil {
-		t.Fatal("测试网页表达式失败", err)
+		detail, encodeErr := json.Marshal(result.ExceptionDetails)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		t.Fatal("测试网页表达式失败", err, string(detail))
 	}
 	var value string
 	if err := json.Unmarshal(result.Result.Value, &value); err != nil {
@@ -143,7 +189,13 @@ func waitValue(t *testing.T, service *Service, address Address, expression, expe
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("真实页面未出现预期状态")
+			frame, captureErr := service.Screenshot(t.Context(), address)
+			if captureErr == nil {
+				if writeErr := os.WriteFile(fmt.Sprintf("/tmp/native-failed-%d.png", address.Session.DisplayNumber), frame, 0600); writeErr != nil {
+					t.Error(writeErr)
+				}
+			}
+			t.Fatalf("真实测试页面未出现预期状态：%s，预期 %q，实际 %q，焦点 %s", expression, expected, evaluate(t, service, address, expression), evaluate(t, service, address, `JSON.stringify({active:document.activeElement.outerHTML,x:screenX,y:screenY,outer:outerHeight,inner:innerHeight})`))
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -264,7 +316,7 @@ func TestSharedChromeWindows(t *testing.T) {
 			{Sequence: 4, Kind: "key", Key: "A", Modifiers: 2}, {Sequence: 5, Kind: "type", Text: "替换后的中文"},
 			{Sequence: 6, Kind: "key", Key: "Tab"}, {Sequence: 7, Kind: "key", Key: "Enter"}}
 		for _, command := range commands {
-			if _, err := service.Execute(t.Context(), address, command); err != nil {
+			if _, err := service.Execute(t.Context(), address, desktopPoint(t, service, address, command)); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -281,7 +333,7 @@ func TestSharedChromeWindows(t *testing.T) {
 	var pending sync.WaitGroup
 	for index, address := range addresses {
 		pending.Go(func() {
-			if _, err := service.Execute(context.Background(), address, Command{Sequence: 3, Kind: "click", X: 50, Y: 120}); err != nil {
+			if _, err := service.Execute(context.Background(), address, desktopPoint(t, service, address, Command{Sequence: 3, Kind: "click", X: 50, Y: 120})); err != nil {
 				t.Error(err)
 				return
 			}
@@ -324,7 +376,7 @@ func TestSharedChromeWindows(t *testing.T) {
 		t.Fatal("更换重复操作内容仍成功", err)
 	}
 	for index, x := range []int{320, 580} {
-		command := Command{Sequence: int64(6 + index), Kind: "click", X: x, Y: 210}
+		command := desktopPoint(t, service, addresses[0], Command{Sequence: int64(6 + index), Kind: "click", X: x, Y: 210})
 		finished := make(chan error, 1)
 		receipts := make(chan Window, 1)
 		go func() {
@@ -405,7 +457,7 @@ func TestSharedChromeWindows(t *testing.T) {
 	waitValue(t, service, addresses[0], state, "second")
 	evaluate(t, service, addresses[0], `fetch('/logout').then(r=>String(r.status))`)
 	waitValue(t, service, addresses[1], state, "guest")
-	if _, err := service.Execute(context.Background(), addresses[0], Command{Sequence: 8, Kind: "click", X: 100, Y: 210}); err != nil {
+	if _, err := service.Execute(context.Background(), addresses[0], desktopPoint(t, service, addresses[0], Command{Sequence: 8, Kind: "click", X: 100, Y: 210})); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(3 * time.Second)

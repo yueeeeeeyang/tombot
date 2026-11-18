@@ -52,3 +52,16 @@ it('原生文件引用进入相同上传流程，读取或上传失败显示错�
   pasteFiles(paste([]), upload, error)
   await waitFor(() => expect(error).toHaveBeenCalledWith('文件不可读取'))
 })
+
+it('剪贴板只有文件项时仍能粘贴多个附件，并保留顺序', () => {
+  const files = [new File(['1'], 'a.docx'), new File(['2'], 'b.jar')]
+  const event = paste([])
+  Object.assign(event.clipboardData, {
+    items: files.map((file) => ({ kind: 'file', getAsFile: () => file })),
+  })
+  const upload = vi.fn(async () => undefined)
+  pasteFiles(event, upload, vi.fn())
+  expect(event.preventDefault).toHaveBeenCalledOnce()
+  expect(upload).toHaveBeenCalledOnce()
+  expect(upload).toHaveBeenCalledWith(files)
+})

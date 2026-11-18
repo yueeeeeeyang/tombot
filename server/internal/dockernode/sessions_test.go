@@ -20,7 +20,7 @@ import (
 type fakeGroups struct {
 	mu                           sync.Mutex
 	creates, drains, memberships int
-	failDrain                    bool
+	drainErr                     error
 	path                         string
 }
 
@@ -40,8 +40,8 @@ func (groups *fakeGroups) Drain(_ context.Context, reference processgroup.Refere
 	groups.mu.Lock()
 	defer groups.mu.Unlock()
 	groups.drains++
-	if groups.failDrain {
-		return errors.New("内核清理未确认")
+	if groups.drainErr != nil {
+		return groups.drainErr
 	}
 	return reference.Validate()
 }
@@ -57,7 +57,7 @@ func (groups *fakeGroups) Membership(_ context.Context, reference processgroup.R
 
 func (groups *fakeGroups) Controls(ctx context.Context, reference processgroup.Reference) ([]*os.File, error) {
 	var files []*os.File
-	for range 4 {
+	for range processgroup.ExecutionControlFiles {
 		file, err := groups.Membership(ctx, reference, "shell")
 		if err != nil {
 			for _, opened := range files {
@@ -210,7 +210,7 @@ func TestNodeExecutionSessions(t *testing.T) {
 		requireFailure(t, err, "session_lease_expired")
 		_, err = controller.Membership(ctx, session, "browser")
 		requireFailure(t, err, "session_lease_expired")
-		groups.failDrain = true
+		groups.drainErr = errors.New("内核清理未确认")
 		for attempt := 1; attempt <= 2; attempt++ {
 			if count, err := controller.Reap(ctx, 100); err == nil || count != 0 {
 				t.Fatal("清理失败被报告成功", count, err)
@@ -226,7 +226,7 @@ func TestNodeExecutionSessions(t *testing.T) {
 		if err != nil || state.Phase != "quarantined" {
 			t.Fatal("失败会话未隔离", err)
 		}
-		groups.failDrain = false
+		groups.drainErr = nil
 		if observation, err := controller.Close(ctx, command); err != nil || !observation.Matches(command, "drained") {
 			t.Fatal(err)
 		}
@@ -245,7 +245,7 @@ func TestNodeExecutionSessions(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("并行节点未被拒绝", err)
 		}
-		groups.failDrain = true
+		groups.drainErr = errors.New("内核清理未确认")
 		if err = controller.Shutdown(ctx); err == nil {
 			t.Fatal("未清理却关闭成功")
 		}
@@ -255,7 +255,7 @@ func TestNodeExecutionSessions(t *testing.T) {
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatal("失败关闭释放了独占锁", err)
 		}
-		groups.failDrain = false
+		groups.drainErr = nil
 		if err = controller.Shutdown(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -354,14 +354,14 @@ func TestNodeExecutionSessions(t *testing.T) {
 			opened++
 			return nil
 		}}
-		groups.failDrain = true
+		groups.drainErr = errors.New("内核清理未确认")
 		if _, err = newSessions(ctx, fixture.node, groups, &fakeAuthority{}, sessionOptions(), sessionLogger()); err == nil {
 			t.Fatal("未回收遗留进程就启动成功")
 		}
 		if opened != 0 {
 			t.Fatal("旧会话回收失败仍恢复出网")
 		}
-		groups.failDrain = false
+		groups.drainErr = nil
 		restarted := fixture.sessionController(t, groups, sessionOptions())
 		state, err = fixture.node.journal.readSession(sessionKeyOf(session))
 		if err != nil || state.Phase != "closed" || groups.drains != 2 || opened != 1 {

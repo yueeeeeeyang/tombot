@@ -53,11 +53,13 @@ func (configuration Config) Validate() error {
 
 // Claim 的全部字段由节点私钥签名，重试仅更新时间，登记身份始终不变。
 type Claim struct {
-	NodeID       string                   `json:"node_id"`
-	Registration nodecatalog.Registration `json:"registration"`
-	URL          string                   `json:"url"`
-	Certificate  []byte                   `json:"certificate"`
-	IssuedAt     int64                    `json:"issued_at"`
+	Maintenance              *MaintenanceRequest      `json:"maintenance,omitempty"`
+	NodeID                   string                   `json:"node_id"`
+	Registration             nodecatalog.Registration `json:"registration"`
+	URL                      string                   `json:"url"`
+	Certificate              []byte                   `json:"certificate"`
+	IssuedAt                 int64                    `json:"issued_at"`
+	SupportsComputerUpgrades bool                     `json:"supports_computer_upgrades,omitempty"`
 }
 
 type Request struct {

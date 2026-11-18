@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
@@ -13,15 +14,18 @@ import (
 	"golang.org/x/sys/unix"
 	"io.yueyang/tom/internal/agentchannel"
 	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/desktopstream"
 	"io.yueyang/tom/internal/processgroup"
 )
 
 type kernelScopes struct {
 	interval time.Duration
 	windows  WindowFactory
+	logger   *slog.Logger
 }
 type kernelScope struct {
 	mu              sync.Mutex
+	logger          *slog.Logger
 	files           []*os.File
 	interval        time.Duration
 	drained, closed bool
@@ -33,14 +37,22 @@ type kernelScope struct {
 	desktop         *managedDesktop
 	agent           *agentAttempt
 	windows         WindowSession
+	transfers       fileTransfers
+	streams         map[string]*desktopstream.Relay
+	consoleViewer   string
+	consoleRevision int64
+	consoleAction   string
+	consoleFailure  error
+	isPaused        bool
+	desktopGroup    string
 }
 
 // NewKernelScopes 要求受信 Linux root 代理和完整的窗口工厂；具体资源身份在每次接收描述符时复验。
-func NewKernelScopes(interval time.Duration, windows WindowFactory) (ScopeFactory, error) {
-	if os.Geteuid() != 0 || interval < time.Millisecond || interval > 100*time.Millisecond || windows == nil {
+func NewKernelScopes(interval time.Duration, windows WindowFactory, logger *slog.Logger) (ScopeFactory, error) {
+	if os.Geteuid() != 0 || interval < time.Millisecond || interval > 100*time.Millisecond || windows == nil || logger == nil {
 		return nil, errors.New("电脑代理资源组后端配置无效")
 	}
-	return &kernelScopes{interval: interval, windows: windows}, nil
+	return &kernelScopes{interval: interval, windows: windows, logger: logger}, nil
 }
 
 func (factory *kernelScopes) Open(reference processgroup.Reference, files []*os.File) (Scope, error) {
@@ -50,7 +62,7 @@ func (factory *kernelScopes) Open(reference processgroup.Reference, files []*os.
 	if err := processgroup.ValidateControls(reference, files); err != nil {
 		return nil, err
 	}
-	scope := &kernelScope{files: files, interval: factory.interval}
+	scope := &kernelScope{files: files, interval: factory.interval, logger: factory.logger}
 	busy, err := scope.populated()
 	if err != nil {
 		return nil, err
@@ -117,6 +129,9 @@ func (scope *kernelScope) Revoke() error {
 		scope.windows.Revoke()
 	}
 	var failure error
+	for _, stream := range scope.streams {
+		failure = errors.Join(failure, stream.Close())
+	}
 	if scope.agent != nil && scope.agent.agent != nil {
 		if err := scope.agent.agent.closeStreams(); err != nil {
 			failure = errors.New("关闭 Bot Agent 私有流失败")
@@ -219,6 +234,7 @@ func (scope *kernelScope) Close() error {
 			}
 		}
 		scope.closed = true
+		scope.transfers.close()
 		scope.closeError = agentchannel.CloseFiles(scope.files)
 	}
 	return scope.closeError

@@ -64,7 +64,11 @@ func (storage *FileStorage) ensure(ctx context.Context, resource Resource) (Work
 			return Workspace{}, err
 		}
 	}
-	if err = storage.verifyImage(resource, state, true); err != nil {
+	return storage.mountExisting(ctx, resource, state)
+}
+
+func (storage *FileStorage) mountExisting(ctx context.Context, resource Resource, state *storageRecord) (Workspace, error) {
+	if err := storage.verifyImage(resource, state, true); err != nil {
 		return Workspace{}, err
 	}
 	// mount 成功但回包或 ready 记录丢失时，恢复布局而不是把已挂载的非空文件系统再次挂载。

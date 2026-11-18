@@ -13,7 +13,7 @@ import (
 )
 
 const MaximumBytes = 128 << 10
-const MaximumFiles = 4
+const MaximumFiles = 6
 
 // Message 仅承载一个有界控制动作；文件描述符数量与帧一起校验，业务字段另由类型协议验证。
 type Message struct {
@@ -32,7 +32,7 @@ func (message Message) validate() error {
 		return errors.New("电脑代理控制请求标识无效")
 	}
 	switch message.Method {
-	case "open", "renew", "close", "start", "read", "write", "resize", "desktop_start", "desktop_status", "desktop_capture", "desktop_image_read", "desktop_input", "agent_start", "agent_write", "agent_read", "browser_start", "browser_status", "browser_close", "browser_probe", "probe", "health", "node_control", "result":
+	case "open", "renew", "close", "start", "read", "write", "resize", "file_transfer", "console", "desktop_connect", "desktop_start", "desktop_status", "desktop_capture", "desktop_image_read", "desktop_input", "agent_start", "agent_write", "agent_read", "browser_start", "browser_status", "browser_close", "browser_probe", "probe", "health", "node_control", "result":
 	default:
 		return errors.New("电脑代理控制动作无效")
 	}

@@ -13,7 +13,7 @@ export function Dialog({
   children: ReactNode
   onClose: () => void
   isDismissible?: boolean
-  variant?: 'default' | 'search' | 'settings' | 'recruit' | 'dm'
+  variant?: 'default' | 'search' | 'settings' | 'recruit' | 'dm' | 'media' | 'computer'
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   useLayoutEffect(() => {

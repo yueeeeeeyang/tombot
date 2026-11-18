@@ -129,4 +129,11 @@ func TestDeploymentExample(t *testing.T) {
 	if err := configuration.Validate(); err != nil {
 		t.Fatal("部署示例与正式配置契约不符", err)
 	}
+	if browser := configuration.runtimeOptions().Browser; browser.StartupTimeout != 35*time.Second || browser.CallTimeout != 10*time.Second || browser.Limits.CallTimeoutMS != 5000 {
+		t.Fatal("浏览器冷启动与普通调用预算不符", browser)
+	}
+	configuration.API.CallTimeout = 30000
+	if err := configuration.Validate(); err != nil || configuration.runtimeOptions().Browser.StartupTimeout != 10*time.Second {
+		t.Fatal("旧安装记录的调用预算无法正常核验", err)
+	}
 }

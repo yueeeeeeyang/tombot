@@ -59,7 +59,6 @@ func (process *browserProcess) start(ctx context.Context, request taskprocess.Br
 			close(process.done)
 		}
 		if failure != nil {
-			process.recordFailure(failure)
 			failure = errors.Join(failure, process.revoke())
 			process.cancel()
 			service = nil
@@ -125,7 +124,8 @@ func (process *browserProcess) start(ctx context.Context, request taskprocess.Br
 	if err != nil {
 		return nil, errors.Join(browserprobe.StartFailure("browser_start_upload_failed", err), reader.Close(), writer.Close())
 	}
-	service, err = sharedbrowser.New(process.lifetime, reader, writer, options)
+	options.Native = sharedbrowser.NewNativeDesktop(request.RuntimeDirectory())
+	service, err = sharedbrowser.New(process.lifetime, ctx, reader, writer, options)
 	if err != nil {
 		// CDP 管道可先于 stderr 排空关闭；有界等待 Wait 汇合，避免丢失紧邻退出的启动分类。
 		drain, stop := context.WithTimeout(ctx, command.WaitDelay)
@@ -142,7 +142,7 @@ func (process *browserProcess) start(ctx context.Context, request taskprocess.Br
 				code = "browser_start_process_exited"
 			default:
 			}
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				code = "browser_start_timeout"
 			}
 		}
@@ -186,6 +186,12 @@ func (process *browserProcess) isStopping() bool {
 	return process.stopping
 }
 
+func (process *browserProcess) hasService() bool {
+	process.mu.Lock()
+	defer process.mu.Unlock()
+	return process.service != nil
+}
+
 func (process *browserProcess) close(ctx context.Context) error {
 	process.mu.Lock()
 	process.stopping = true
@@ -221,6 +227,10 @@ func (process *browserProcess) wait(ctx context.Context) error {
 	}
 	process.mu.Lock()
 	defer process.mu.Unlock()
+	// 启动失败由 Start 返回；未交付服务时，进程已退出即可与资源组一起完成回收核验。
+	if process.service == nil {
+		return errors.Join(process.failure, process.revokeError)
+	}
 	return errors.Join(process.exitError, process.failure, process.revokeError)
 }
 

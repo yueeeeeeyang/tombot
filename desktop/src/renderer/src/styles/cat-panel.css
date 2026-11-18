@@ -262,34 +262,6 @@
   width: 18px;
   height: 18px;
 }
-.message-image {
-  display: block;
-  max-width: 220px;
-  margin-top: 8px;
-  border-radius: 10px;
-}
-.message-file {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-.composer-files {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.composer-files span {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--surface);
-  font-size: 12px;
-}
 .member-panel {
   display: flex;
   flex-direction: column;
@@ -357,11 +329,6 @@
 .cat-panel-export {
   align-self: flex-start;
 }
-.computer-pane {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 .cat-panel-section {
   min-width: 0;
   margin-top: 8px;
@@ -391,6 +358,10 @@
 }
 .computer-card:hover {
   background: var(--hover);
+}
+.computer-card[aria-disabled='true'] {
+  cursor: wait;
+  opacity: 0.65;
 }
 .computer-card:focus-visible {
   outline: 2px solid var(--border-strong);
@@ -428,50 +399,6 @@
   );
   color: var(--muted);
 }
-.computer-sleep-face {
-  position: relative;
-  width: 23px;
-  height: 23px;
-  border-radius: 50%;
-  background: var(--muted);
-  opacity: 0.65;
-}
-.computer-sleep-face::before,
-.computer-sleep-face::after {
-  position: absolute;
-  top: 9px;
-  width: 5px;
-  height: 3px;
-  border-radius: 0 0 4px 4px;
-  background: var(--surface);
-  content: '';
-}
-.computer-sleep-face::before {
-  left: 5px;
-}
-.computer-sleep-face::after {
-  right: 5px;
-}
-.computer-sleep-marks {
-  position: absolute;
-  top: 2px;
-  right: 12px;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  opacity: 0.65;
-}
-.computer-sleep-marks > span {
-  position: absolute;
-  top: -4px;
-  left: 4px;
-  font-size: 7px;
-}
-.computer-controls:not([hidden]) {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
 .task-pane .cat-panel-empty {
   margin: 0;
   padding: 22px 12px;
@@ -503,56 +430,6 @@
   color: var(--muted);
   font-size: 12px;
   line-height: 1.6;
-}
-.computer-pane label {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.computer-pane input {
-  width: 100%;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-}
-.computer-controls button {
-  align-self: flex-start;
-  padding: 6px 12px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 13px;
-}
-.computer-pane [role='alert'] {
-  margin: 0;
-  color: var(--error-text);
-  font-size: 12px;
-}
-.computer-note {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.computer-pane iframe {
-  width: 100%;
-  height: 180px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-muted);
-}
-.computer-pane.is-expanded iframe {
-  height: min(68vh, 520px);
-}
-.computer-actions {
-  display: flex;
-  gap: 8px;
 }
 .cat-panel-empty {
   margin: 4px 0 0;
@@ -962,36 +839,43 @@
   min-width: 0;
 }
 .chat-library .chat-library-search {
-  position: relative;
   display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
   margin: 0;
-}
-.chat-library-search input {
-  width: 100%;
-  min-width: 0;
-  height: 38px;
-  padding: 8px 42px 8px 14px;
+  padding: 3px 4px 3px 10px;
   border: 1px solid var(--border);
-  border-radius: 20px;
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+.chat-library-search:focus-within {
+  border-color: var(--border-strong);
   background: var(--surface);
+}
+/* 搜索栏独立于面板中的编辑表单，避免通用输入规则覆盖紧凑字号与间距。 */
+.chat-library .chat-library-search input {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .chat-library-search input::placeholder {
   color: var(--muted);
 }
-.chat-library-search input:focus-visible {
-  outline: 1px solid var(--text-secondary);
-}
 .chat-library-search .icon-button {
-  position: absolute;
-  right: 5px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
 }
 .chat-library-help {
   margin: 0;

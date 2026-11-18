@@ -26,6 +26,7 @@ func (snapshot snapshot) absent() bool {
 }
 
 func (node *Runtime) load(ctx context.Context, resource Resource, state *record) (snapshot, error) {
+	resource = node.withStorage(resource, state)
 	var current snapshot
 	var err error
 	current.volume, err = node.engine.inspectVolume(ctx, resource.Name)
@@ -38,7 +39,7 @@ func (node *Runtime) load(ctx context.Context, resource Resource, state *record)
 		return current, err
 	}
 	current.hasContainer = err == nil
-	current.workspace, err = node.storage.Inspect(ctx, resource)
+	current.workspace, err = node.storage.Inspect(ctx, node.diskResource(resource, state))
 	if err != nil {
 		return current, err
 	}
@@ -270,11 +271,19 @@ func (node *Runtime) ensure(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, err
 	}
 	state.Phase = "creating"
+	if state.StorageGeneration != 0 && state.ContainerID == "" && current.hasContainer {
+		// 已识别为本代的 Docker 创建回包即使丢失，也必须先固定容器 ID 再启动。
+		state.ContainerID = current.container.ID
+	}
 	if err = node.journal.save(state); err != nil {
 		return computer.Observation{}, err
 	}
 	if !current.workspace.Ready {
-		current.workspace, err = node.storage.Ensure(ctx, resource)
+		if state.StorageGeneration == 0 {
+			current.workspace, err = node.storage.Ensure(ctx, resource)
+		} else {
+			current.workspace, err = node.storage.Restore(ctx, node.diskResource(resource, state))
+		}
 		if err != nil {
 			return computer.Observation{}, err
 		}
@@ -345,49 +354,8 @@ func (node *Runtime) remove(ctx context.Context, resource Resource, state *recor
 	if err = node.journal.save(state); err != nil {
 		return computer.Observation{}, err
 	}
-	if err = node.browsers.retire(ctx, resource); err != nil {
+	if err = node.retireRuntime(ctx, resource, current, ""); err != nil {
 		return computer.Observation{}, err
-	}
-	if err = node.egress.stop(ctx, resource); err != nil {
-		return computer.Observation{}, err
-	}
-	if err = node.probes.retire(ctx, resource); err != nil {
-		return computer.Observation{}, err
-	}
-	if current.hasContainer {
-		if err = node.engine.stopContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {
-			return computer.Observation{}, err
-		}
-		stopped, err := node.engine.inspectContainer(ctx, current.container.ID)
-		if err != nil && !errors.Is(err, errMissing) {
-			return computer.Observation{}, err
-		}
-		if err == nil {
-			if stopped.ID != current.container.ID || !sameLabels(stopped.Config.Labels, containerLabels(resource)) || stopped.State.Running {
-				return computer.Observation{}, failure("container_stop_unconfirmed")
-			}
-			if err = node.engine.removeContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {
-				return computer.Observation{}, err
-			}
-		}
-		if _, err = node.engine.inspectContainer(ctx, current.container.ID); !errors.Is(err, errMissing) {
-			if err != nil {
-				return computer.Observation{}, err
-			}
-			return computer.Observation{}, failure("container_removal_unconfirmed")
-		}
-	}
-	// 不使用 force 删除卷；若仍有其他实例挂载，Docker 必须拒绝，存储也不得继续清理。
-	if current.hasVolume {
-		if err = node.engine.removeVolume(ctx, resource.Name); err != nil && !errors.Is(err, errMissing) {
-			return computer.Observation{}, err
-		}
-	}
-	if _, err = node.engine.inspectVolume(ctx, resource.Name); !errors.Is(err, errMissing) {
-		if err != nil {
-			return computer.Observation{}, err
-		}
-		return computer.Observation{}, failure("volume_removal_unconfirmed")
 	}
 	// 未创建过物理磁盘的代次也必须持久关闭，防止后续代次越过或复活旧请求。
 	if err = node.storage.Remove(ctx, resource); err != nil {
@@ -406,6 +374,63 @@ func (node *Runtime) remove(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, err
 	}
 	return observed(resource, "absent", "", computer.Capabilities{}), nil
+}
+
+// retireRuntime 只关闭本代运行资源，避免电脑换镜像触及用户的持久磁盘。
+func (node *Runtime) retireRuntime(ctx context.Context, resource Resource, current snapshot, knownContainerID string) error {
+	if !current.hasContainer && knownContainerID != "" {
+		if _, err := node.engine.inspectContainer(ctx, knownContainerID); !errors.Is(err, errMissing) {
+			if err != nil {
+				return err
+			}
+			return failure("container_identity_mismatch")
+		}
+	}
+	if err := node.browsers.retire(ctx, resource); err != nil {
+		return err
+	}
+	if err := node.egress.stop(ctx, resource); err != nil {
+		return err
+	}
+	if err := node.probes.retire(ctx, resource); err != nil {
+		return err
+	}
+	if current.hasContainer {
+		if err := node.engine.stopContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {
+			return err
+		}
+		stopped, err := node.engine.inspectContainer(ctx, current.container.ID)
+		if err != nil && !errors.Is(err, errMissing) {
+			return err
+		}
+		if err == nil {
+			if stopped.ID != current.container.ID || !sameLabels(stopped.Config.Labels, containerLabels(resource)) || stopped.State.Running || knownContainerID != "" && stopped.State.Pid != 0 {
+				return failure("container_stop_unconfirmed")
+			}
+			if err = node.engine.removeContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {
+				return err
+			}
+		}
+		if _, err = node.engine.inspectContainer(ctx, current.container.ID); !errors.Is(err, errMissing) {
+			if err != nil {
+				return err
+			}
+			return failure("container_removal_unconfirmed")
+		}
+	}
+	// 不强制删除卷，Docker 必须拒绝仍被容器引用的卷。
+	if current.hasVolume {
+		if err := node.engine.removeVolume(ctx, resource.Name); err != nil && !errors.Is(err, errMissing) {
+			return err
+		}
+	}
+	if _, err := node.engine.inspectVolume(ctx, resource.Name); !errors.Is(err, errMissing) {
+		if err != nil {
+			return err
+		}
+		return failure("volume_removal_unconfirmed")
+	}
+	return nil
 }
 
 // validateNetwork 要求没有可路由接口；只通过控制目录中的宿主代理提供出网。

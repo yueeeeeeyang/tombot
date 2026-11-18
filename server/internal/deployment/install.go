@@ -24,6 +24,7 @@ import (
 const nodeServiceName = "tombot-node.service"
 
 type nodeInstaller struct {
+	maintain            func(context.Context, nodeInstallRequest, string, bool) error
 	checkListen         func(context.Context, string) error
 	detectHost          func(context.Context) (installationHost, error)
 	fetchBootstrap      func(context.Context, nodeenrollment.JoinCode) (nodeenrollment.BootstrapConfiguration, error)
@@ -61,6 +62,9 @@ func runNodeSystemctl(parent context.Context, arguments ...string) error {
 	budget := 30 * time.Second
 	if len(arguments) > 0 && arguments[0] == "enable" {
 		budget = 141 * time.Minute
+	}
+	if len(arguments) > 0 && arguments[0] == "stop" {
+		budget = 12 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
@@ -173,13 +177,16 @@ func (installer nodeInstaller) install(ctx context.Context, requestPath, executa
 		}
 		files = append(files, identity...)
 		defer clear(identity[1].content)
-		record = nodeInstallation{Version: 2, Request: encoded, RequestSHA256: requestDigest, BinarySHA256: contentDigest(program), Files: map[string]string{}}
+		record = nodeInstallation{ServiceSHA256: contentDigest(service), Version: 2, Request: encoded, RequestSHA256: requestDigest, BinarySHA256: contentDigest(program), Files: map[string]string{}}
 		for _, file := range files {
 			if file.source != "" {
 				record.Files[file.name] = file.digest
 			} else {
 				record.Files[file.name] = contentDigest(file.content)
 			}
+		}
+		if request.Server != nil {
+			record.UpdateUnits = updateUnitDigests()
 		}
 		receipt, err := json.MarshalIndent(record, "", "  ")
 		if err != nil {
@@ -204,13 +211,11 @@ func (installer nodeInstaller) install(ctx context.Context, requestPath, executa
 	if err := installer.fs.installExactFile(ctx, nodeServicePath, service, 0644); err != nil {
 		return NodeInstallationReport{}, err
 	}
-	for _, arguments := range [][]string{{"daemon-reload"}, {"enable", "--now", nodeServiceName}, {"is-active", "--quiet", nodeServiceName}} {
-		if err := ctx.Err(); err != nil {
-			return NodeInstallationReport{}, err
-		}
-		if err := installer.systemctl(ctx, arguments...); err != nil {
-			return NodeInstallationReport{}, err
-		}
+	if err := installer.installReleaseKey(ctx, executable); err != nil {
+		return NodeInstallationReport{}, err
+	}
+	if err := installer.startNodeServices(ctx, request.Server != nil, nil); err != nil {
+		return NodeInstallationReport{}, err
 	}
 	report.State = "control_started"
 	installer.logger.Info("节点已安装并设置开机启动，电脑能力仍须独立验收", "node_id", report.NodeID)

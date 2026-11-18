@@ -17,6 +17,10 @@ func validateResult(action string, input, result any) error {
 	case "inspect", "ensure", "remove":
 		value, ok := result.(computer.Observation)
 		valid = ok && value.Matches(input.(computer.Specification)) && (value.State != "ready" || value.Capabilities.Ready())
+	case "computer_upgrade":
+		value, ok := result.(computer.Observation)
+		upgrade := input.(computer.ImageUpgrade)
+		valid = ok && value.Matches(upgrade.Target) && value.State == "ready" && value.Capabilities.Ready() && value.ContainerID != upgrade.CurrentContainerID
 	case "open", "renew", "close":
 		value, ok := result.(computer.SessionObservation)
 		state := "active"
@@ -58,6 +62,12 @@ func validateResult(action string, input, result any) error {
 	case "agent_read":
 		value, ok := result.(computer.AgentOutput)
 		valid = ok && value.Validate(input.(computer.AgentRead).Offset) == nil
+	case "file_transfer":
+		value, ok := result.(computer.FileReceipt)
+		valid = ok && value.Validate(input.(computer.FileRequest)) == nil
+	case "console":
+		value, ok := result.(computer.ConsoleReceipt)
+		valid = ok && value.Validate(input.(computer.ConsoleRequest)) == nil
 	}
 	if !valid {
 		return errors.New("节点响应的资源身份、状态或范围不符")
@@ -89,6 +99,11 @@ func (client *Client) Ensure(ctx context.Context, input computer.Specification) 
 }
 func (client *Client) Remove(ctx context.Context, input computer.Specification) (computer.Observation, error) {
 	return call[computer.Observation](ctx, client, "remove", input)
+}
+
+// UpgradeComputer 请求节点迁移已有电脑，返回与目标代次匹配的完整验收回执。
+func (client *Client) UpgradeComputer(ctx context.Context, input computer.ImageUpgrade) (computer.Observation, error) {
+	return call[computer.Observation](ctx, client, "computer_upgrade", input)
 }
 func (client *Client) Open(ctx context.Context, input computer.SessionCommand) (computer.SessionObservation, error) {
 	return call[computer.SessionObservation](ctx, client, "open", input)
@@ -145,3 +160,15 @@ var _ computer.SessionRuntime = (*Client)(nil)
 var _ computer.TerminalRuntime = (*Client)(nil)
 var _ computer.DesktopRuntime = (*Client)(nil)
 var _ computer.AgentRuntime = (*Client)(nil)
+
+func (client *Client) TransferFile(ctx context.Context, input computer.FileRequest) (computer.FileReceipt, error) {
+	return call[computer.FileReceipt](ctx, client, "file_transfer", input)
+}
+
+var _ computer.FileRuntime = (*Client)(nil)
+
+func (client *Client) Console(ctx context.Context, input computer.ConsoleRequest) (computer.ConsoleReceipt, error) {
+	return call[computer.ConsoleReceipt](ctx, client, "console", input)
+}
+
+var _ computer.ConsoleRuntime = (*Client)(nil)

@@ -14,6 +14,12 @@ import (
 	"io.yueyang/tom/internal/computer"
 )
 
+// ExecutionControlFiles 包含两类进程入组、整组回收、存活状态及任务冻结控制和确认。
+const ExecutionControlFiles = 6
+
+// ErrContainerGroupAbsent 表示已核实的宿主 cgroup v2 中不再存在原容器父组的路径。
+var ErrContainerGroupAbsent = errors.New("容器进程资源组路径不存在")
+
 // Reference 由已核实容器的主进程定位，并持久绑定父资源组的设备号和 inode，不能由用户提供。
 type Reference struct {
 	Session      computer.ExecutionSession `json:"session"`

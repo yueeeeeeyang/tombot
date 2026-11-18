@@ -18,6 +18,51 @@ import (
 	"io.yueyang/tom/internal/taskprocess"
 )
 
+func TestKernelBrowserStartupUsesGrantDeadlineAcrossProtocol(t *testing.T) {
+	fixture := newFixture(t)
+	browsers, _, factory := newBrowserControlFixture(t, fixture)
+	factory.prepare = func(scope *fakeBrowserScope) {
+		scope.start = func(ctx context.Context, _ taskprocess.BrowserRequest, options sharedbrowser.Options) (BrowserService, error) {
+			deadline, bounded := ctx.Deadline()
+			if !bounded || time.Until(deadline) <= 2*time.Second || options.CallTimeout != time.Second {
+				return nil, errors.New("冷启动被普通调用预算截断")
+			}
+			return unusedWindowBrowser{}, nil
+		}
+	}
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), browsers, sameTestProcess, time.Second, 4, fixture.guard.logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	client, err := NewClient(func(context.Context) (*net.UnixConn, error) {
+		left, right := protocolPair(t)
+		go func() { done <- server.serveConnection(t.Context(), right) }()
+		return left, nil
+	}, sameTestProcess, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant := browserGrant(fixture)
+	grant.Request.Deadline, err = agentchannel.FromDeadline(time.Now().Add(4 * time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := probeFiles(t)
+	defer func() {
+		if err := agentchannel.CloseFiles(files); err != nil {
+			t.Error(err)
+		}
+	}()
+	observed, err := client.StartBrowser(t.Context(), grant, files)
+	if err != nil || observed.Phase != "active" {
+		t.Fatal("冷启动未获得授权期限", observed, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestKernelBrowserMalformedStartupReturnsFixedClassification(t *testing.T) {
 	fixture := newFixture(t)
 	browsers, store, factory := newBrowserControlFixture(t, fixture)

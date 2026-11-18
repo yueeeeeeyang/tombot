@@ -160,6 +160,25 @@ func (storage *FileStorage) Ensure(ctx context.Context, resource Resource) (Work
 	return storage.locked(ctx, resource, storage.ensure)
 }
 
+// Restore 只重新挂载已完成分配的原磁盘，不创建磁盘、格式化或初始化子目录。
+func (storage *FileStorage) Restore(ctx context.Context, resource Resource) (Workspace, error) {
+	return storage.locked(ctx, resource, storage.restore)
+}
+
+func (storage *FileStorage) restore(ctx context.Context, resource Resource) (Workspace, error) {
+	state, err := storage.load(resource)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if state == nil || state.Phase != "ready" || state.ImageInode == 0 {
+		return Workspace{}, failure("retained_storage_unconfirmed")
+	}
+	if err := storage.checkDirectory(resource, false); err != nil {
+		return Workspace{}, err
+	}
+	return storage.mountExisting(ctx, resource, state)
+}
+
 // Remove 仅在节点已确认本次未启用容器及卷被删除后调用；忙挂载和延迟解除关联都阻止删除镜像。
 func (storage *FileStorage) Remove(ctx context.Context, resource Resource) error {
 	_, err := storage.locked(ctx, resource, storage.remove)

@@ -93,7 +93,7 @@ func (service *Service) submitInput(ctx context.Context, transaction *sql.Tx, us
 	input := append(inputBlocks(request, reaction), attachments...)
 	var activeRun, activeTurn string
 	err = transaction.QueryRowContext(ctx, `SELECT r.id,r.turn_id FROM tombot.runs r JOIN tombot.turns t ON t.user_id=r.user_id AND t.id=r.turn_id
-            WHERE r.user_id=$1 AND r.conversation_id=$2 AND t.status IN ('queued','running','canceling') AND r.status IN ('queued','running','canceling') ORDER BY r.id DESC LIMIT 1`, userID, conversationID).Scan(&activeRun, &activeTurn)
+            WHERE r.user_id=$1 AND r.conversation_id=$2 AND t.source<>'console' AND t.status IN ('queued','running','canceling') AND r.status IN ('queued','running','canceling') ORDER BY r.id DESC LIMIT 1`, userID, conversationID).Scan(&activeRun, &activeTurn)
 	if err == nil {
 		if source == "routine" {
 			return ErrConflict

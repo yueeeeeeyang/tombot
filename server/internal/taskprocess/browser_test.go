@@ -63,7 +63,7 @@ func TestBrowserAuthorizationAndFixedInvocation(t *testing.T) {
 		}
 	}
 	for _, value := range arguments {
-		if strings.HasPrefix(value, "--no-sandbox") || strings.HasPrefix(value, "--remote-debugging-port") || strings.HasPrefix(value, "--proxy-pac-url") {
+		if strings.HasPrefix(value, "--headless") || strings.HasPrefix(value, "--no-sandbox") || strings.HasPrefix(value, "--remote-debugging-port") || strings.HasPrefix(value, "--proxy-pac-url") {
 			t.Fatal("浏览器绕过隔离或开放网络调试")
 		}
 	}

@@ -241,6 +241,70 @@ describe('主进程服务地址确认', () => {
       value: { phase: 'address', serverUrl: base },
     })
   })
+
+  it.each(['CONNECTION_REFUSED', 'IDENTITY_UNAVAILABLE', 'AUTH_RATE_LIMITED'])(
+    '续期前暂时不可用时保留会话，服务恢复后自动续期：%s',
+    async (code) => {
+      const refreshToken = token()
+      mocks.readFile.mockResolvedValue(
+        JSON.stringify({
+          serverUrl: base,
+          refreshToken,
+          accessExpiresAt: new Date(0).toISOString(),
+        }),
+      )
+      mocks.writeFile.mockClear()
+      let isReachable = false
+      const fetcher = vi.fn(async (url: string, options: RequestInit) => {
+        if (url.endsWith('/auth/session'))
+          return Response.json({ principal: { user_id: 'test-user' } })
+        expect(url).toBe(`${base}/api/v2/auth/refresh`)
+        expect(JSON.parse(String(options.body))).toEqual({ refresh_token: refreshToken })
+        if (isReachable)
+          return Response.json({
+            access_token: token(),
+            refresh_token: token(),
+            access_expires_at: new Date(Date.now() + 300_000).toISOString(),
+            principal: { username: 'test-user' },
+          })
+        if (code === 'CONNECTION_REFUSED') {
+          throw Object.assign(new Error('暂时无法连接服务'), { code, isRequestUnsent: true })
+        }
+        return Response.json({ code }, { status: code === 'AUTH_RATE_LIMITED' ? 429 : 503 })
+      })
+      vi.stubGlobal('fetch', fetcher)
+      expect(await invoke('desktop:session')).toMatchObject({
+        ok: true,
+        value: { phase: 'offline', errorCode: code, serverUrl: base },
+      })
+      expect(mocks.writeFile).not.toHaveBeenCalled()
+      isReachable = true
+      expect(await invoke('desktop:session')).toMatchObject({
+        ok: true,
+        value: { phase: 'ready', serverUrl: base, username: 'test-user' },
+      })
+      expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+        '/api/v2/auth/refresh',
+        '/api/v2/auth/refresh',
+        '/api/v2/auth/session',
+      ])
+    },
+  )
+
+  it('续期响应丢失时要求重新授权，后续探测不会重放旧凭据', async () => {
+    mocks.readFile.mockResolvedValue(JSON.stringify({ serverUrl: base, refreshToken: token() }))
+    const fetcher = vi.fn().mockRejectedValue(new Error('续期响应连接中断'))
+    vi.stubGlobal('fetch', fetcher)
+    expect(await invoke('desktop:session')).toMatchObject({
+      ok: true,
+      value: { phase: 'address', serverUrl: base },
+    })
+    expect(await invoke('desktop:session')).toMatchObject({
+      ok: true,
+      value: { phase: 'address', serverUrl: base },
+    })
+    expect(fetcher).toHaveBeenCalledOnce()
+  })
 })
 
 describe('主进程浏览器登录', () => {

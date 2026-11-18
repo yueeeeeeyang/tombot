@@ -50,6 +50,10 @@ var _ Catalog = (*bots.Service)(nil)
 
 // Execution 只暴露用户消息和运行查询，不把调度租约、模型绑定或操作写入权交给客户端。
 type Execution interface {
+	OpenConsole(context.Context, identity.Principal, string, string) (execution.Console, error)
+	ConsoleStatus(context.Context, identity.Principal, string) (execution.Console, error)
+	CloseConsole(context.Context, identity.Principal, string) (execution.Console, error)
+	ControlConsole(context.Context, identity.Principal, string, bool) (execution.Console, error)
 	ConversationPreviews(context.Context, identity.Principal, []string) ([]execution.ConversationPreview, error)
 	ChatFiles(context.Context, identity.Principal, string, string, string) (chatlibrary.Page, error)
 	ChatFileContent(context.Context, identity.Principal, string, string) (chatlibrary.Content, error)
@@ -87,6 +91,7 @@ type eventTiming struct {
 }
 
 type Handler struct {
+	console     ConsoleIO
 	catalog     Catalog
 	executor    Execution
 	events      Events
@@ -101,11 +106,12 @@ type requestIdentity struct {
 }
 
 // New 将所有路由置于桌面认证范围，管理 Cookie 不能直接读取用户内容。
-func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
-	if catalog == nil || executor == nil || events == nil || gate == nil || logger == nil {
+func New(catalog Catalog, executor Execution, console ConsoleIO, events Events, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
+	if catalog == nil || executor == nil || console == nil || events == nil || gate == nil || logger == nil {
 		return nil, errors.New("用户 HTTP 依赖无效")
 	}
 	handler := &Handler{catalog: catalog, executor: executor, events: events, logger: logger, eventTiming: eventTiming{pollInterval: eventPollInterval, heartbeat: eventHeartbeat, drainMargin: eventDrainMargin, minimumWindow: eventMinimumWindow}}
+	handler.console = console
 	router := chi.NewRouter()
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		handler.failure(w, r, 404, "NOT_FOUND", "接口不存在")
@@ -118,6 +124,12 @@ func New(catalog Catalog, executor Execution, events Events, gate *authapi.Handl
 	router.Get("/api/v2/bots", handler.listBots)
 	router.Post("/api/v2/bots", handler.createBot)
 	router.Get("/api/v2/bots/{botID}", handler.getBot)
+	router.Post("/api/v2/bots/{botID}/console", handler.openConsole)
+	router.Post("/api/v2/consoles/{consoleID}/heartbeat", handler.consoleStatus)
+	router.Post("/api/v2/consoles/{consoleID}/close", handler.closeConsole)
+	router.Post("/api/v2/consoles/{consoleID}/takeover", handler.takeConsole)
+	router.Post("/api/v2/consoles/{consoleID}/release", handler.releaseConsole)
+	router.Get("/api/v2/consoles/{consoleID}/stream", handler.consoleStream)
 	router.Get("/api/v2/bots/{botID}/tasks", handler.listTasks)
 	router.Post("/api/v2/bots/{botID}/tasks/{taskID}/state", handler.taskState)
 	router.Delete("/api/v2/bots/{botID}/tasks/{taskID}", handler.deleteTask)

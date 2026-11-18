@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import { getBackend, type SessionPhase, type SessionSnapshot } from '../desktop/backend'
+import { isTransientSessionError, readSession, watchSession } from './sessionProbe'
+
+/** 证书与其他明确拒绝需要用户处理，后台只探测暂时不可用的会话。 */
+function isTemporarySessionFailure({
+  phase,
+  errorCode,
+}: Pick<SessionSnapshot, 'phase' | 'errorCode'>): boolean {
+  return phase === 'offline' && (!errorCode || isTransientSessionError(errorCode))
+}
 
 /** 先确认服务地址，再让用户在系统浏览器里完成登录；未登录不进入工作空间。 */
 export function useSession() {
@@ -13,6 +22,7 @@ export function useSession() {
   const [certificateNotice, setCertificateNotice] = useState('')
   const [pending, setPending] = useState(false)
   const signingOut = useRef(false)
+  const stopSessionRecovery = useRef<(() => void) | undefined>(undefined)
   const apply = useCallback((result: SessionSnapshot) => {
     setPhase(result.phase)
     setMessage(result.message ?? '')
@@ -24,23 +34,37 @@ export function useSession() {
     // 内存测试用同步会话，避免首屏闪一下加载。真实客户端没有这个方法，必须自己接住失败。
     if (backend.trySessionSync) return
     let cancelled = false
-    void backend
-      .session()
-      .then((result) => {
-        if (cancelled) return
-        apply(result)
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return
-        setPhase('offline')
-        setMessage(
-          error instanceof Error ? error.message : '无法连接服务。请确认地址和网络后重试。',
-        )
-      })
+    void readSession(backend).then((result) => {
+      if (!cancelled) apply(result)
+    })
     return () => {
       cancelled = true
     }
   }, [apply, backend])
+
+  const canRecover =
+    Boolean(serverUrl) && !pending && isTemporarySessionFailure({ phase, errorCode })
+  useEffect(() => {
+    if (!canRecover) return
+    const stop = watchSession(
+      backend,
+      (result) => {
+        apply(result)
+        return isTemporarySessionFailure(result)
+      },
+      false,
+    )
+    stopSessionRecovery.current = stop
+    return () => {
+      stop()
+      stopSessionRecovery.current = undefined
+    }
+  }, [apply, backend, canRecover, serverUrl])
+
+  /** 用户开始修改地址时停掉已发出的探测的回调，避免迟到结果替换正在编辑的页面。 */
+  function pauseRecovery(): void {
+    stopSessionRecovery.current?.()
+  }
 
   /** 打开系统浏览器登录；授权完成后客户端自动拿到会话并进入工作空间。 */
   async function startBrowserLogin(): Promise<void> {
@@ -58,6 +82,7 @@ export function useSession() {
   }
 
   async function connect(input: string): Promise<void> {
+    pauseRecovery()
     let normalized: string
     try {
       normalized = normalizeServerAddress(input)
@@ -153,6 +178,7 @@ export function useSession() {
     pending,
     startBrowserLogin,
     connect,
+    pauseRecovery,
     changeServer,
     signOut,
   }

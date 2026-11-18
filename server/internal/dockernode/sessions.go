@@ -305,19 +305,31 @@ func (controller *SessionController) drain(ctx context.Context, state *sessionRe
 	if err := controller.node.journal.saveSession(state); err != nil {
 		return err
 	}
-	// 即使代理失联，也必须尝试宿主整组清理；只有两端均确认才能交接新会话。
+	// 即使没有宿主组，也先请代理确认屏障；失联时必须独立核实原容器已退出。
 	agentErr := controller.agent.close(ctx, state.Command, state.Group)
-	if state.Group != nil {
-		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), controller.options.CallTimeout)
-		defer stop()
-		if err := controller.groups.Drain(cleanup, *state.Group); err != nil {
-			state.Phase = "quarantined"
-			return errors.Join(agentErr, err, controller.node.journal.saveSession(state))
+	cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), controller.options.CallTimeout)
+	defer stop()
+	var stopped bool
+	if agentErr != nil {
+		var err error
+		stopped, err = controller.containerExited(cleanup, state.Command.Session)
+		if stopped {
+			agentErr = nil
+		} else {
+			agentErr = errors.Join(agentErr, err)
 		}
 	}
-	if agentErr != nil {
+	// Open 在创建宿主组或发送授权前持久化组身份；有组时还须回收宿主组。
+	var groupErr error
+	if state.Group != nil {
+		groupErr = controller.groups.Drain(cleanup, *state.Group)
+		if stopped && groupErr == processgroup.ErrContainerGroupAbsent {
+			groupErr = nil
+		}
+	}
+	if err := errors.Join(agentErr, groupErr); err != nil {
 		state.Phase = "quarantined"
-		return errors.Join(agentErr, controller.node.journal.saveSession(state))
+		return errors.Join(err, controller.node.journal.saveSession(state))
 	}
 	state.Phase = "closed"
 	if err := controller.node.journal.saveSession(state); err != nil {
@@ -325,6 +337,29 @@ func (controller *SessionController) drain(ctx context.Context, state *sessionRe
 	}
 	controller.forget(sessionKeyOf(state.Command.Session))
 	return nil
+}
+
+// containerExited 核实原容器已退出且不会自动重启，替代已无法应答的容器代理确认。
+func (controller *SessionController) containerExited(ctx context.Context, session computer.ExecutionSession) (bool, error) {
+	state, err := controller.node.journal.read(session.UserID)
+	if err != nil {
+		return false, err
+	}
+	if state == nil || state.Specification.UserID != session.UserID || state.Specification.ComputerID != session.ComputerID || state.Specification.NodeID != session.NodeID || state.Specification.Generation != session.Generation || state.ContainerID != session.ContainerID {
+		return false, failure("session_computer_mismatch")
+	}
+	current, err := controller.node.engine.inspectContainer(ctx, session.ContainerID)
+	if err != nil {
+		return false, err
+	}
+	if err = ctx.Err(); err != nil {
+		return false, err
+	}
+	resource := controller.node.resource(state.Specification)
+	if current.ID != session.ContainerID || current.Name != "/"+resource.Name || !sameLabels(current.Config.Labels, containerLabels(resource)) {
+		return false, failure("session_computer_mismatch")
+	}
+	return current.State.Status == "exited" && !current.State.Running && current.State.Pid == 0 && current.HostConfig.PidMode == "" && current.HostConfig.RestartPolicy.Name == "no", nil
 }
 
 // Membership 在受桌面锁保护的活动会话中发放入组描述符；调用者只能交给受信容器引导程序。

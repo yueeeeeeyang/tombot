@@ -187,7 +187,7 @@ func (controller *Controller) openAt(ctx context.Context, command computer.Sessi
 		return observation, err
 	}
 	defer leave()
-	if command.Validate() != nil || !controller.identity.matches(command.Session) || reference.Validate() != nil || reference.Session != command.Session || len(files) != 4 || !time.Now().Before(deadline) {
+	if command.Validate() != nil || !controller.identity.matches(command.Session) || reference.Validate() != nil || reference.Session != command.Session || len(files) != processgroup.ExecutionControlFiles || !time.Now().Before(deadline) {
 		return observation, errors.New("电脑代理桌面开启授权无效")
 	}
 	guard, err := controller.desktop(ctx, command.Session.DesktopIdentity, true)

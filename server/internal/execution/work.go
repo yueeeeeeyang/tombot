@@ -57,6 +57,12 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if err != nil {
 			return err
 		}
+		if err = transaction.QueryRowContext(ctx, `SELECT source='console' FROM tombot.turns WHERE user_id=$1 AND id=$2`, lease.UserID, lease.TurnID).Scan(&work.IsConsole); err != nil {
+			return err
+		}
+		if work.IsConsole {
+			return nil
+		}
 		var snapshot []byte
 		var policy *string
 		var version *int64
@@ -78,13 +84,12 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		if err = transaction.QueryRowContext(ctx, `SELECT message_sequence FROM tombot.conversations WHERE user_id=$1 AND id=$2 FOR UPDATE`, lease.UserID, lease.ConversationID).Scan(&contextSequence); err != nil {
 			return err
 		}
-		var triggerSequence int64
-		work.GroupContext, triggerSequence, err = groupContext(ctx, transaction, lease)
+		work.GroupContext, work.TriggerSequence, err = groupContext(ctx, transaction, lease)
 		if err != nil {
 			return err
 		}
 		if work.GroupContext != "" {
-			contextSequence = triggerSequence
+			contextSequence = work.TriggerSequence
 		}
 		var private bool
 		if err = transaction.QueryRowContext(ctx, `SELECT kind='bot_dm' FROM tombot.conversations WHERE user_id=$1 AND id=$2`, lease.UserID, lease.ConversationID).Scan(&private); err != nil {
@@ -96,6 +101,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 			if err = transaction.QueryRowContext(ctx, `SELECT p.trigger_message_id,m.sequence,request.deliver_to_user FROM tombot.bot_private_runs p JOIN tombot.messages m ON m.user_id=p.user_id AND m.id=p.trigger_message_id JOIN tombot.bot_private_messages request ON request.user_id=p.user_id AND request.id=p.response_to WHERE p.user_id=$1 AND p.run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger, &contextSequence, &direct); err != nil {
 				return err
 			}
+			work.TriggerSequence = contextSequence
 			delivery := "Your final answer automatically replies to the requesting cat. Do not send a separate acknowledgment back."
 			if direct {
 				delivery = "This request has automatic direct delivery enabled. Your final answer goes directly to the human user in your own chat. Address the user and provide the actual result. Do not call send_user_message or merely acknowledge delivery."

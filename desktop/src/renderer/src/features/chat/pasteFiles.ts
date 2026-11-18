@@ -1,16 +1,22 @@
 import type { ClipboardEvent } from 'react'
 import { getBackend } from '../desktop/backend'
 
-/** 图片和浏览器文件直接上传；Finder 的文件引用通过受限剪贴板接口读取。 */
+/** 图片和文件先加入本地草稿；Finder 的文件引用通过受限剪贴板接口读取。 */
 export function pasteFiles(
   event: ClipboardEvent,
-  upload: (files: File[]) => Promise<void>,
+  stageFiles: (files: File[]) => Promise<void>,
   onError: (message: string) => void,
 ): void {
   const files = [...event.clipboardData.files]
+  if (!files.length) {
+    for (const item of Array.from(event.clipboardData.items ?? [])) {
+      const file = item.kind === 'file' ? item.getAsFile() : null
+      if (file) files.push(file)
+    }
+  }
   if (files.length) {
     event.preventDefault()
-    void upload(files).catch((failure: Error) => onError(failure.message))
+    void stageFiles(files).catch((failure: Error) => onError(failure.message))
     return
   }
   const types = event.clipboardData.types
@@ -25,7 +31,7 @@ export function pasteFiles(
   void read()
     .then((items) => {
       if (items.length)
-        return upload(
+        return stageFiles(
           items.map(
             (item) => new File([new Uint8Array(item.bytes)], item.name, { type: item.type }),
           ),

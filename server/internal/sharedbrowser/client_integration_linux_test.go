@@ -150,7 +150,7 @@ func TestSharedChromeLocalAgentClient(t *testing.T) {
 	firstPath, secondPath := filepath.Join(directory, "共享甲.txt"), filepath.Join(directory, "共享乙.txt")
 	for index, session := range sessions {
 		directory := session.RuntimeDirectory()
-		if err := os.Mkdir(directory, 0700); err != nil {
+		if err := os.MkdirAll(directory, 0700); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chown(directory, session.UID, session.GID); err != nil {
@@ -174,7 +174,7 @@ func TestSharedChromeLocalAgentClient(t *testing.T) {
 		// 此夹具验证真实 UID、Unix 对端和 Chrome；生产 cgroup 正向证据仍由宿主验收提供。
 		gateway, err := NewGateway(observedScreenshotBrowser{Browser: chrome.service, t: t}, session, func(ctx context.Context, current computer.ExecutionSession, _ Peer) error {
 			return access.check(ctx, current)
-		}, GatewayOptions{Width: options.Width, Height: options.Height, MaximumConnections: 4, CallTimeout: 6 * time.Second, ShutdownTimeout: time.Second}, options.Logger)
+		}, GatewayOptions{Width: computer.DesktopWidth, Height: computer.DesktopHeight, MaximumConnections: 4, CallTimeout: 6 * time.Second, ShutdownTimeout: time.Second}, options.Logger)
 		if err != nil {
 			t.Fatal(err)
 		}

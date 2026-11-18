@@ -1,3 +1,4 @@
+import { attachmentMediaType } from '../shared/attachmentMedia'
 import { clipboard } from 'electron'
 import { spawn } from 'node:child_process'
 import { constants } from 'node:fs'
@@ -61,17 +62,16 @@ export async function readClipboardFiles(): Promise<
       if (bytesRead !== stat.size || after.size !== stat.size || after.mtimeMs !== stat.mtimeMs)
         throw new Error('文件正在变化，请重新复制后粘贴。')
       const types: Record<string, string> = {
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.webp': 'image/webp',
         '.pdf': 'application/pdf',
         '.txt': 'text/plain',
         '.md': 'text/markdown',
       }
       result.push({
         name: basename(path),
-        type: types[extname(path).toLowerCase()] ?? 'application/octet-stream',
+        type:
+          attachmentMediaType(basename(path), '') ??
+          types[extname(path).toLowerCase()] ??
+          'application/octet-stream',
         bytes: new Uint8Array(buffer.subarray(0, bytesRead)),
       })
     } finally {

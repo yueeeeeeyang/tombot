@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Server } from 'lucide-react'
 import { Link } from 'react-router'
+import { NodeUpgradeDialog } from './NodeUpgradeDialog'
 import { NodeStatus } from './NodeDetailPage'
 import { NodeEditDialog } from './NodeEditDialog'
 import { AdminClient } from '../api/client'
@@ -17,6 +18,7 @@ const grantSchema = z.object({
 export function NodesPage({ client }: { client: AdminClient }) {
   const [before, setBefore] = useState('')
   const nodes = useQuery(client, pagePath('/computer-nodes', before), nodesSchema)
+  const [upgrading, setUpgrading] = useState(false)
   const [registering, setRegistering] = useState(false)
   const [editingNodeID, setEditingNodeID] = useState<string | null>(null)
   return (
@@ -29,6 +31,9 @@ export function NodesPage({ client }: { client: AdminClient }) {
         <div className="actions">
           <button className="icon-button" aria-label="刷新节点" onClick={nodes.reload}>
             <RefreshCw size={17} />
+          </button>
+          <button className="secondary-button" onClick={() => setUpgrading(true)}>
+            远程升级
           </button>
           <button className="primary-button" onClick={() => setRegistering(true)}>
             <Plus size={16} />
@@ -103,6 +108,13 @@ export function NodesPage({ client }: { client: AdminClient }) {
             setEditingNodeID(null)
             nodes.reload()
           }}
+        />
+      )}
+      {upgrading && (
+        <NodeUpgradeDialog
+          client={client}
+          nodes={nodes.value?.nodes ?? []}
+          onClose={() => setUpgrading(false)}
         />
       )}
       {registering && <EnrollmentToken client={client} onClose={() => setRegistering(false)} />}

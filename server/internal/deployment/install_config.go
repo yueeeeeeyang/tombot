@@ -75,6 +75,8 @@ type NodeInstallationReport struct {
 }
 
 type nodeInstallation struct {
+	UpdateUnits   map[string]string `json:"update_units,omitempty"`
+	ServiceSHA256 string            `json:"service_sha256,omitempty"`
 	Version       int               `json:"version"`
 	RequestSHA256 string            `json:"request_sha256"`
 	BinarySHA256  string            `json:"binary_sha256"`

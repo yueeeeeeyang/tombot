@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Download, Search } from 'lucide-react'
+import { chatFilePath, fileSizeLabel } from '../../../../shared/chatFiles'
+import { useChatImageCache } from './ChatImagePreviewProvider'
 import { LibraryFileCard } from './LibraryFileCard'
 import { Dialog } from '../../components/Dialog'
 import { getBackend } from '../desktop/backend'
@@ -9,13 +11,6 @@ import {
   type ChatFilePreview,
 } from '../../../../shared/chatFiles'
 
-function sizeLabel(bytes: number): string {
-  return bytes < 1024
-    ? `${bytes} B`
-    : bytes < 1024 * 1024
-      ? `${(bytes / 1024).toFixed(1)} KB`
-      : `${(bytes / 1024 / 1024).toFixed(1)} MB`
-}
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : '文件操作失败，请重试。'
 }
@@ -128,15 +123,9 @@ function Library({ conversationId }: { conversationId: string }) {
           onChange={(event) => setSearch(event.target.value)}
         />
         <button className="icon-button" aria-label="搜索文件" type="submit">
-          <Search size={16} />
+          <Search size={14} strokeWidth={1.7} />
         </button>
       </form>
-      <p className="chat-library-help">聊天中你和猫咪发出的文件会自动收录。</p>
-      {page && (
-        <p className="chat-library-help">
-          已用 {sizeLabel(page.used_bytes)} / {sizeLabel(page.max_bytes)}
-        </p>
-      )}
       {notice && (
         <p role="status" className="chat-library-help">
           {notice}
@@ -163,7 +152,7 @@ function Library({ conversationId }: { conversationId: string }) {
           <LibraryFileCard
             key={file.id}
             file={file}
-            size={sizeLabel(file.size)}
+            size={fileSizeLabel(file.size)}
             onAction={(kind) => {
               if (kind === 'download') void download(file)
               else setOperation({ kind, file })
@@ -207,6 +196,7 @@ function FileDialog({
   onChanged: () => void
 }) {
   const { file, kind } = operation
+  const imageCache = useChatImageCache()
   const [name, setName] = useState(file.name)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -239,7 +229,10 @@ function FileDialog({
     try {
       if (kind === 'rename')
         await getBackend().renameChatFile(conversationId, file.id, file.revision, name.trim())
-      else await getBackend().deleteChatFile(conversationId, file.id, file.revision)
+      else {
+        await getBackend().deleteChatFile(conversationId, file.id, file.revision)
+        imageCache?.invalidate(chatFilePath(file))
+      }
       onChanged()
     } catch (failure) {
       setError(errorText(failure))

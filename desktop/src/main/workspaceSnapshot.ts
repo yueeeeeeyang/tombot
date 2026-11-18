@@ -85,7 +85,6 @@ export function workspaceFromSnapshot(
         messages: [],
         draft: local.drafts[bot.id] ?? '',
         artifacts: local.artifacts[bot.id] ?? [],
-        computerUrl: '',
       }
     })
   const first = agents[0]?.id ?? ''

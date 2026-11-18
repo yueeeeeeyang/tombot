@@ -12,7 +12,7 @@ describe('猫咪侧栏面板', () => {
   it('动态内展示电脑和任务卡片，仅保留动态和资料库页签', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
-    render(<CatSidePanel agent={agent} onClose={onClose} onComputerUrl={vi.fn()} />)
+    render(<CatSidePanel agent={agent} onClose={onClose} />)
     expect(screen.getByRole('heading', { name: '小黑' })).toHaveTextContent('小黑')
     expect(screen.queryByText('介绍')).not.toBeInTheDocument()
     expect(screen.queryByText('相处久一点，会更了解彼此。')).not.toBeInTheDocument()
@@ -39,8 +39,14 @@ describe('猫咪侧栏面板', () => {
     await user.keyboard('{ArrowRight}')
     expect(screen.getByRole('tab', { name: '动态', selected: true })).toHaveFocus()
     await user.click(screen.getByRole('button', { name: '小黑的电脑' }))
-    expect(screen.getByLabelText('远端电脑地址')).toBeInTheDocument()
-    await user.click(screen.getByRole('tab', { name: '动态' }))
+    const viewer = within(screen.getByRole('dialog', { name: '小黑的电脑' }))
+    expect(await viewer.findByRole('alert')).toHaveTextContent('当前客户端未连接电脑服务。')
+    expect(viewer.getByRole('button', { name: '重新连接' })).toBeVisible()
+    expect(viewer.queryByRole('button', { name: '取得控制权' })).not.toBeInTheDocument()
+    expect(viewer.queryByLabelText('远端电脑地址')).not.toBeInTheDocument()
+    await user.click(viewer.getByRole('button', { name: '关闭观看' }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
     expect(screen.queryByText(/自动使用管理员分配的模型策略/)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '导出草稿' })).not.toBeInTheDocument()
     const close = screen.getByRole('button', { name: '关闭猫咪面板' })
@@ -70,23 +76,11 @@ describe('猫咪侧栏面板', () => {
           revision: 1,
         },
       ])
-    const view = render(<CatSidePanel agent={agent} onClose={vi.fn()} onComputerUrl={vi.fn()} />)
+    const view = render(<CatSidePanel agent={agent} onClose={vi.fn()} />)
     await waitFor(() => expect(load).toHaveBeenCalledTimes(1))
-    view.rerender(
-      <CatSidePanel
-        agent={{ ...agent, name: '新名称' }}
-        onClose={vi.fn()}
-        onComputerUrl={vi.fn()}
-      />,
-    )
+    view.rerender(<CatSidePanel agent={{ ...agent, name: '新名称' }} onClose={vi.fn()} />)
     expect(load).toHaveBeenCalledTimes(1)
-    view.rerender(
-      <CatSidePanel
-        agent={{ ...agent, id: 'another-cat' }}
-        onClose={vi.fn()}
-        onComputerUrl={vi.fn()}
-      />,
-    )
+    view.rerender(<CatSidePanel agent={{ ...agent, id: 'another-cat' }} onClose={vi.fn()} />)
     expect(await screen.findByRole('switch', { name: '禁用新的提醒' })).toBeInTheDocument()
     finish([])
     await waitFor(() => expect(screen.getByText('新的提醒')).toBeInTheDocument())
@@ -95,7 +89,7 @@ describe('猫咪侧栏面板', () => {
 
   it('动态里的任务请求失败时显示错误卡片', async () => {
     vi.spyOn(memoryBackend, 'listTasks').mockRejectedValue(new Error('定时读取失败'))
-    render(<CatSidePanel agent={agent} onClose={vi.fn()} onComputerUrl={vi.fn()} />)
+    render(<CatSidePanel agent={agent} onClose={vi.fn()} />)
     expect(
       await within(screen.getByRole('region', { name: '任务' })).findByRole('alert'),
     ).toHaveTextContent('定时读取失败')
@@ -116,7 +110,7 @@ describe('猫咪侧栏面板', () => {
         revision: 1,
       },
     ])
-    render(<CatSidePanel agent={agent} onClose={close} onComputerUrl={vi.fn()} />)
+    render(<CatSidePanel agent={agent} onClose={close} />)
     fireEvent.contextMenu(await screen.findByText('晨跑提醒'))
     expect(await screen.findByRole('menu', { name: '任务' })).toBeInTheDocument()
     await user.keyboard('{Escape}')
@@ -128,7 +122,7 @@ describe('猫咪侧栏面板', () => {
 
   it('按下 Esc 关闭面板', () => {
     const onClose = vi.fn()
-    render(<CatSidePanel agent={agent} onClose={onClose} onComputerUrl={vi.fn()} />)
+    render(<CatSidePanel agent={agent} onClose={onClose} />)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -152,7 +146,7 @@ describe('猫咪侧栏面板', () => {
       max_bytes: 1024,
       max_file_bytes: 1024,
     })
-    render(<CatSidePanel agent={agent} onClose={vi.fn()} onComputerUrl={vi.fn()} />)
+    render(<CatSidePanel agent={agent} onClose={vi.fn()} />)
     await user.click(screen.getByRole('tab', { name: '资料库' }))
     expect(await screen.findByText('用户上传.txt')).toBeInTheDocument()
     expect(screen.getByText('猫咪报告.md')).toBeInTheDocument()

@@ -19,7 +19,8 @@ import (
 
 func TestSharedChromeSequentialDialogLifecycle(t *testing.T) {
 	options, access, sessions := testOptions()
-	options.CallTimeout, options.DialogTimeout = 2*time.Second, 3*time.Second
+	// 包含真实桌面和 Chrome 冷启动；仍验证等待超过普通调用预算后的顺序答复。
+	options.CallTimeout, options.DialogTimeout = 4*time.Second, 5*time.Second
 	directory, err := os.MkdirTemp("/workspace", "dialog-lifecycle-")
 	if err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func TestSharedChromeSequentialDialogLifecycle(t *testing.T) {
 		return address
 	}
 	address, other := open(0), open(1)
-	command := Command{Sequence: 2, Kind: "click", X: 60, Y: 30}
+	command := desktopPoint(t, service, address, Command{Sequence: 2, Kind: "click", X: 60, Y: 30})
 	call, cancel := context.WithCancel(t.Context())
 	receipt, err := service.Execute(call, address, command)
 	cancel()

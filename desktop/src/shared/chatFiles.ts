@@ -31,3 +31,11 @@ export function parseChatFilePath(path: string): { conversationId: string; fileI
   if (!match) throw new Error('聊天文件地址无效。')
   return { conversationId: match[1]!, fileId: match[2]! }
 }
+
+export function fileSizeLabel(bytes: number): string {
+  return bytes < 1024
+    ? `${bytes} B`
+    : bytes < 1024 * 1024
+      ? `${(bytes / 1024).toFixed(1)} KB`
+      : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}

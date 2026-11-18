@@ -80,7 +80,7 @@ describe('工作台快照映射', () => {
     expect(first?.avatar).toBe('orange-tabby')
     expect(second?.avatar).toBe('bombay')
     expect(second?.group).toBe('未分组')
-    expect(first?.computerUrl).toBe('')
+    expect(first).not.toHaveProperty('computerUrl')
     expect(first?.messages).toEqual([])
   })
 

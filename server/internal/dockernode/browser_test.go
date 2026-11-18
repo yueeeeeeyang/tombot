@@ -119,7 +119,7 @@ func (b *fakeComputerBrowsers) retire(context.Context, Resource) error { return 
 func (*fakeComputerBrowsers) shutdown(context.Context) error           { return nil }
 
 func testBrowserOptions() BrowserOptions {
-	return BrowserOptions{CallTimeout: time.Second, CleanupTimeout: 3 * time.Second, ShutdownTimeout: 5 * time.Second, Groups: testProbeOptions().Groups, Limits: computeragent.BrowserLimits{Width: 1280, Height: 800, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 16, MaximumEvents: 32, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}}
+	return BrowserOptions{StartupTimeout: 2 * time.Second, CallTimeout: time.Second, CleanupTimeout: 3 * time.Second, ShutdownTimeout: 5 * time.Second, Groups: testProbeOptions().Groups, Limits: computeragent.BrowserLimits{Width: 1280, Height: 800, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 16, MaximumEvents: 32, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}}
 }
 
 func newBrowserFixture(t *testing.T) (fixture, *nodeBrowsers, *probeGroups, Resource, container, *[]string) {
@@ -139,9 +139,15 @@ func newBrowserFixture(t *testing.T) (fixture, *nodeBrowsers, *probeGroups, Reso
 			if state.Phase != "dispatched" || len(files) != 3 {
 				t.Fatal("未持久消费就启动", state)
 			}
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) <= browsers.options.CallTimeout {
+				t.Fatal("节点冷启动仍使用普通调用预算")
+			}
 		case "status":
 			if state.Phase != "active" || len(files) != 0 {
 				t.Fatal("查询错误实例", state)
+			}
+			if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > browsers.options.CallTimeout {
+				t.Fatal("普通查询使用了冷启动预算")
 			}
 		case "close":
 			phase = "closed"

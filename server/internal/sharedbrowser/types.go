@@ -39,6 +39,7 @@ type Options struct {
 	Authorize                                        Authorizer
 	Logger                                           *slog.Logger
 	Uploads                                          *UploadStore
+	Native                                           NativeDesktop
 }
 
 // Validate 校验视口、容量、时限和完整会话授权；调用方应在启动进程前完成检查。
@@ -136,7 +137,7 @@ func (command Command) Validate(width, height int) error {
 		remaining.URL = ""
 	case "back", "forward", "reload":
 	case "type":
-		if command.Text == "" || !validText(command.Text, 4096) {
+		if command.Text == "" || !validText(command.Text, 4096) || utf8.RuneCountInString(command.Text) > 256 {
 			return ErrInvalid
 		}
 		remaining.Text = ""

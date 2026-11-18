@@ -58,6 +58,9 @@ func (node *Runtime) restoreUserEgress(ctx context.Context, userID string) (resu
 		return failure("egress_journal_identity_invalid")
 	}
 	resource := node.resource(state.Specification)
+	if state.upgradeInProgress() {
+		return node.egress.stop(ctx, resource)
+	}
 	current, err := node.load(ctx, resource, state)
 	if err != nil {
 		return err

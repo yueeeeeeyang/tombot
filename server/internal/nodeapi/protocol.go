@@ -20,6 +20,8 @@ type Operations struct {
 	Terminals computer.TerminalRuntime
 	Desktops  computer.DesktopRuntime
 	Agents    computer.AgentRuntime
+	Files     computer.FileRuntime
+	Console   computer.ConsoleRuntime
 }
 
 // request 携带剩余时长而不是绝对时刻：API 与节点不再共享内核时钟，
@@ -74,6 +76,13 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 			err = value.Validate()
 		}
 		input, node = value, value.NodeID
+	case "computer_upgrade":
+		var value computer.ImageUpgrade
+		err = agentchannel.Decode(encoded, &value)
+		if err == nil {
+			err = value.Validate()
+		}
+		input, node = value, value.Target.NodeID
 	case "open", "renew", "close":
 		var value computer.SessionCommand
 		err = agentchannel.Decode(encoded, &value)
@@ -154,6 +163,20 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 			err = value.Validate()
 		}
 		input, node = value, value.Session.NodeID
+	case "file_transfer":
+		var value computer.FileRequest
+		err = agentchannel.Decode(encoded, &value)
+		if err == nil {
+			err = value.Validate()
+		}
+		input, node = value, value.Session.NodeID
+	case "console":
+		var value computer.ConsoleRequest
+		err = agentchannel.Decode(encoded, &value)
+		if err == nil {
+			err = value.Validate()
+		}
+		input, node = value, value.Session.NodeID
 	default:
 		return nil, 0, errors.New("节点动作不受支持")
 	}
@@ -173,6 +196,12 @@ func (operations Operations) invoke(ctx context.Context, action string, input an
 		return operations.Computers.Ensure(ctx, input.(computer.Specification))
 	case "remove":
 		return operations.Computers.Remove(ctx, input.(computer.Specification))
+	case "computer_upgrade":
+		upgrader, ok := operations.Computers.(computer.ImageUpgrader)
+		if !ok {
+			return nil, &computer.Failure{Code: "computer_upgrade_unavailable", IsPermanent: true}
+		}
+		return upgrader.UpgradeComputer(ctx, input.(computer.ImageUpgrade))
 	case "open":
 		return operations.Sessions.Open(ctx, input.(computer.SessionCommand))
 	case "renew":
@@ -206,6 +235,10 @@ func (operations Operations) invoke(ctx context.Context, action string, input an
 		return agentReceipt{offset}, err
 	case "agent_read":
 		return operations.Agents.ReadAgent(ctx, input.(computer.AgentRead))
+	case "file_transfer":
+		return operations.Files.TransferFile(ctx, input.(computer.FileRequest))
+	case "console":
+		return operations.Console.Console(ctx, input.(computer.ConsoleRequest))
 	default:
 		return nil, errors.New("节点动作不受支持")
 	}

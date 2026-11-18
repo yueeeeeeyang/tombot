@@ -2,9 +2,12 @@ import type {
   SessionSnapshot,
   StreamEvent,
   UserEvent,
+  WorkspaceLoadFailure,
+  WorkspaceSnapshot,
 } from '../renderer/src/features/desktop/backend'
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { NewAgent } from '../renderer/src/features/workspace/model'
+import type { DesktopConsole, ConsoleStreamEvent } from '../shared/console'
 
 interface BootstrapStatus {
   phase: string
@@ -25,13 +28,78 @@ async function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
   return result.value
 }
 
+type EventSubscriber = { onEvent: (event: UserEvent) => void; onError: (error: Error) => void }
+
+const eventSubscribers = new Set<EventSubscriber>()
+let activeEventWatchId: string | undefined
+let wasSessionOffline = false
+
+function receiveUserEvent(_event: IpcRendererEvent, payload: UserEvent, watchId: string): void {
+  if (watchId !== activeEventWatchId) return
+  for (const subscriber of [...eventSubscribers]) subscriber.onEvent(payload)
+}
+
+function clearEventWatch(): void {
+  activeEventWatchId = undefined
+  ipcRenderer.removeListener('desktop:user-event', receiveUserEvent)
+}
+
+function cancelEventWatch(): void {
+  const watchId = activeEventWatchId
+  if (!watchId) return
+  clearEventWatch()
+  ipcRenderer.send('desktop:unwatch-events', watchId)
+}
+
+/** 同一窗口共用事件流，避免并发连接各自推进同一个事件游标。 */
+function startEventWatch(needsRefresh = false): void {
+  if (activeEventWatchId || !eventSubscribers.size) return
+  const watchId = crypto.randomUUID()
+  activeEventWatchId = watchId
+  ipcRenderer.on('desktop:user-event', receiveUserEvent)
+  void invoke('desktop:watch-events', watchId, needsRefresh).then(
+    () => {
+      if (activeEventWatchId === watchId) clearEventWatch()
+    },
+    (error: Error) => {
+      if (activeEventWatchId !== watchId) return
+      clearEventWatch()
+      // 断线保留业务监听，等会话探测确认服务可达再恢复事件流。
+      for (const subscriber of [...eventSubscribers]) subscriber.onError(error)
+    },
+  )
+}
+
+/** 返回本地监听的取消函数，最后一个监听取消时才终止主进程订阅。 */
+function watchEvents(onEvent: EventSubscriber['onEvent'], onError: EventSubscriber['onError']) {
+  const subscriber = { onEvent, onError }
+  eventSubscribers.add(subscriber)
+  if (eventSubscribers.size === 1) startEventWatch()
+  return () => {
+    if (eventSubscribers.delete(subscriber) && eventSubscribers.size === 0) cancelEventWatch()
+  }
+}
+
+/** 会话恢复后替换可能尚未退出的旧连接，不等旧连接超时。 */
+async function inspectSession(): Promise<SessionSnapshot> {
+  const session = await invoke<SessionSnapshot>('desktop:session')
+  if (session.phase === 'offline') wasSessionOffline = true
+  if (session.phase === 'ready') {
+    const needsRefresh = wasSessionOffline
+    wasSessionOffline = false
+    if (needsRefresh) cancelEventWatch()
+    startEventWatch(needsRefresh)
+  }
+  return session
+}
+
 // 只暴露平台标识和桌面服务通道。页面拿不到令牌，也不能发任意请求。
 contextBridge.exposeInMainWorld(
   'desktop',
   Object.freeze({
     platform: process.platform,
     backend: Object.freeze({
-      session: () => invoke('desktop:session'),
+      session: inspectSession,
       loadUserProfile: () => invoke('desktop:user-profile'),
       watchWindowFocus: (onFocus: () => void) => {
         const listener = () => onFocus()
@@ -54,7 +122,13 @@ contextBridge.exposeInMainWorld(
       trustServerCertificate: (address: string, fingerprint: string) =>
         invoke('desktop:trust-server-certificate', address, fingerprint),
       logout: () => invoke('desktop:logout'),
-      loadWorkspace: () => invoke('desktop:load-workspace'),
+      loadWorkspace: async (): Promise<WorkspaceSnapshot | WorkspaceLoadFailure> => {
+        // 保留错误分类，以便工作空间只在暂时断线后重试。
+        const result = (await ipcRenderer.invoke(
+          'desktop:load-workspace',
+        )) as CallResult<WorkspaceSnapshot>
+        return result.ok ? result.value : { errorCode: result.code, message: result.message }
+      },
       loadAbout: () => invoke('desktop:about'),
       loadConversationPreviews: (ids: string[]) => invoke('desktop:conversation-previews', ids),
       loadAgentConversation: (agentId: string, before?: number) =>
@@ -63,21 +137,7 @@ contextBridge.exposeInMainWorld(
         invoke('desktop:create-agent', profile, requestId),
       readClipboardFiles: () => invoke('desktop:clipboard-files'),
       saveWorkspace: (workspace: unknown) => invoke('desktop:save-workspace', workspace),
-      watchEvents: (onEvent: (event: UserEvent) => void, onError: (error: Error) => void) => {
-        const listener = (_event: IpcRendererEvent, payload: UserEvent) => onEvent(payload)
-        ipcRenderer.on('desktop:user-event', listener)
-        let stopped = false
-        const watchId = crypto.randomUUID()
-        void invoke('desktop:watch-events', watchId).catch((error: Error) => {
-          // 订阅被动结束后不再回调；主动停止不算错误。
-          if (!stopped) onError(error)
-        })
-        return () => {
-          stopped = true
-          ipcRenderer.send('desktop:unwatch-events', watchId)
-          ipcRenderer.removeListener('desktop:user-event', listener)
-        }
-      },
+      watchEvents,
       deliverMessage: (
         agentId: string,
         content: string,
@@ -105,7 +165,38 @@ contextBridge.exposeInMainWorld(
           ipcRenderer.removeListener('desktop:stream-event', listener)
         })
       },
-      openComputer: (agentId: string) => invoke<string>('desktop:computer', agentId),
+      openConsole: (botId: string, requestId: string) =>
+        invoke<DesktopConsole>('desktop:console-open', botId, requestId),
+      consoleStatus: (id: string) => invoke<DesktopConsole>('desktop:console-status', id),
+      closeConsole: (id: string) => invoke<DesktopConsole>('desktop:console-close', id),
+      controlConsole: (id: string, takeover: boolean) =>
+        invoke<DesktopConsole>('desktop:console-control', id, takeover),
+      connectConsole: (
+        id: string,
+        streamId: string,
+        receive: (event: ConsoleStreamEvent) => void,
+      ) => {
+        const listener = (
+          _event: IpcRendererEvent,
+          incoming: string,
+          message: ConsoleStreamEvent,
+        ) => {
+          if (incoming !== streamId) return
+          receive(message)
+          if (message.kind === 'bytes')
+            ipcRenderer.send('desktop:console-stream-ack', streamId, message.bytes.byteLength)
+        }
+        ipcRenderer.on('desktop:console-stream', listener)
+        ipcRenderer.send('desktop:console-stream-open', id, streamId)
+        return {
+          send: (bytes: Uint8Array) =>
+            ipcRenderer.send('desktop:console-stream-write', streamId, bytes),
+          close: () => {
+            ipcRenderer.removeListener('desktop:console-stream', listener)
+            ipcRenderer.send('desktop:console-stream-close', streamId)
+          },
+        }
+      },
       startBootstrap: () => invoke('desktop:bootstrap'),
       watchBootstrap: (
         onStatus: (status: BootstrapStatus) => void,

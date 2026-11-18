@@ -1,16 +1,18 @@
 import { act, renderHook } from '@testing-library/react'
 import { expect, it, vi } from 'vitest'
-import { useAttachments } from './useAttachments'
 import type { MessageAttachment } from '../workspace/model'
+import { useAttachments } from './useAttachments'
 
-const attachment: MessageAttachment = {
-  name: '资料.txt',
-  kind: 'file',
-  mediaType: 'text/plain',
-  path: 'shared/a.txt',
-  sha256: 'a'.repeat(64),
+function uploaded(file: File): MessageAttachment {
+  return {
+    name: file.name,
+    kind: 'file',
+    mediaType: file.type,
+    path: 'chat-files/' + file.name,
+    sha256: 'a'.repeat(64),
+  }
 }
-it('拒绝超量批次与并发上传，失败保留已上传附件并解除锁定', async () => {
+it('选取、移除或超量均不上传；发送期间锁住草稿，阻止重复提交和并发添加', async () => {
   let finish!: (item: MessageAttachment) => void
   const upload = vi.fn(
     () =>
@@ -18,26 +20,47 @@ it('拒绝超量批次与并发上传，失败保留已上传附件并解除锁�
         finish = resolve
       }),
   )
+  const submit = vi.fn(() => true)
   const { result } = renderHook(() => useAttachments(upload))
-  const file = new File(['内容'], '资料.txt')
+  const file = new File(['正文'], '资料.txt')
   await expect(result.current.addFiles(Array<File>(5).fill(file))).rejects.toThrow('最多 4')
+  await act(() => result.current.addFiles([file, file]))
+  act(() => result.current.removeFile(result.current.draftFiles[0]!.id))
   expect(upload).not.toHaveBeenCalled()
-  let pending!: Promise<void>
+  let sending!: Promise<boolean>
   act(() => {
-    pending = result.current.addFiles([file])
+    sending = result.current.sendFiles(submit)
   })
-  expect(result.current.isUploading).toBe(true)
-  await expect(result.current.addFiles([file])).rejects.toThrow('正在上传')
+  expect(result.current.isSending).toBe(true)
+  await expect(result.current.addFiles([file])).rejects.toThrow('正在发送')
+  await expect(result.current.sendFiles(submit)).resolves.toBe(false)
+  expect(submit).not.toHaveBeenCalled()
   await act(async () => {
-    finish(attachment)
-    await pending
+    finish(uploaded(file))
+    await sending
   })
-  expect(result.current.pending).toEqual([attachment])
-  expect(result.current.isUploading).toBe(false)
-  upload.mockRejectedValueOnce(new Error('失败'))
+  expect(submit).toHaveBeenCalledExactlyOnceWith([uploaded(file)])
+  expect(result.current.draftFiles).toEqual([])
+  expect(result.current.isSending).toBe(false)
+})
+it('部分上传失败保留整批草稿，重试复用成功附件，消息提交失败也不重复上传', async () => {
+  const upload = vi.fn(async (file: File) => uploaded(file))
+  const first = new File(['a'], 'a.txt'),
+    second = new File(['b'], 'b.txt')
+  upload.mockResolvedValueOnce(uploaded(first)).mockRejectedValueOnce(new Error('上传失败'))
+  const submit = vi.fn(() => true)
+  const { result } = renderHook(() => useAttachments(upload))
+  await act(() => result.current.addFiles([first, second]))
   await act(async () => {
-    await expect(result.current.addFiles([file])).rejects.toThrow('失败')
+    await expect(result.current.sendFiles(submit)).rejects.toThrow('上传失败')
   })
-  expect(result.current.pending).toEqual([attachment])
-  expect(result.current.isUploading).toBe(false)
+  expect(result.current.isSending).toBe(false)
+  expect(result.current.draftFiles.map((entry) => entry.file)).toEqual([first, second])
+  expect(submit).not.toHaveBeenCalled()
+  await act(() => result.current.sendFiles(() => false).then(() => {}))
+  expect(result.current.draftFiles).toHaveLength(2)
+  await act(() => result.current.sendFiles(submit).then(() => {}))
+  expect(upload.mock.calls.map(([file]) => file)).toEqual([first, second, second])
+  expect(submit).toHaveBeenCalledExactlyOnceWith([uploaded(first), uploaded(second)])
+  expect(result.current.draftFiles).toHaveLength(0)
 })

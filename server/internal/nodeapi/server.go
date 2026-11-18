@@ -34,11 +34,12 @@ type Server struct {
 	operations Operations
 	options    ServerOptions
 	logger     *slog.Logger
+	streams    sync.WaitGroup
 }
 
 // NewServer 固定节点标识与调用预算，缺少任一电脑能力实现时拒绝构造。
 func NewServer(operations Operations, options ServerOptions, logger *slog.Logger) (*Server, error) {
-	if operations.Node == nil || operations.Computers == nil || operations.Sessions == nil || operations.Terminals == nil || operations.Desktops == nil || operations.Agents == nil || options.Validate() != nil || logger == nil {
+	if operations.Node == nil || operations.Computers == nil || operations.Sessions == nil || operations.Terminals == nil || operations.Desktops == nil || operations.Agents == nil || operations.Files == nil || operations.Console == nil || options.Validate() != nil || logger == nil {
 		return nil, errors.New("电脑节点服务配置无效")
 	}
 	return &Server{operations: operations, options: options, logger: logger}, nil
@@ -83,6 +84,13 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) (failure
 		// 连接未在预算内收尾说明仍有在途动作，进程必须退出并由持久记录恢复。
 		return errors.Join(failure, ErrUnfinishedOperations, err)
 	}
+	streamsDone := make(chan struct{})
+	go func() { server.streams.Wait(); close(streamsDone) }()
+	select {
+	case <-streamsDone:
+	case <-shutdown.Done():
+		return errors.Join(failure, ErrUnfinishedOperations)
+	}
 	if err := limited.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		failure = errors.Join(failure, errors.New("关闭节点监听失败"))
 	}
@@ -98,6 +106,10 @@ func (server *Server) Serve(ctx context.Context, listener net.Listener) (failure
 
 // serveAction 只接受一个固定动作；请求期限按收包时刻重建，传输耗时不延长任何授权。
 func (server *Server) serveAction(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v2/desktop" {
+		server.serveDesktopStream(w, r)
+		return
+	}
 	if r.Method != http.MethodPost || r.URL.Path != "/v2/actions" || r.URL.RawQuery != "" {
 		writeFailure(w, http.StatusNotFound)
 		return

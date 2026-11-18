@@ -20,7 +20,7 @@ func (controller *Controller) StartDesktop(ctx context.Context, session computer
 		if !ok {
 			return errors.New("当前电脑代理未提供图形会话能力")
 		}
-		membership, err := guard.scope.Membership("shell")
+		membership, err := guard.scope.Membership("browser")
 		if err != nil {
 			return err
 		}

@@ -1,13 +1,16 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, renderHook, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../../App'
 import type { DesktopBackend, SessionSnapshot } from '../desktop/backend'
 import { memoryBackend } from '../desktop/memoryBackend'
+import { CONNECTION_CHECK_MS } from './sessionProbe'
+import { useSession } from './useSession'
 
 const previous = window.desktop
 
 afterEach(() => {
+  vi.useRealTimers()
   window.desktop = previous
 })
 
@@ -31,6 +34,31 @@ function installBackend(overrides: Partial<DesktopBackend> = {}): DesktopBackend
 }
 
 describe('服务地址', () => {
+  it('工作空间加载中断时显示失败原因，服务恢复后打开之前的工作空间', async () => {
+    const { workspace } = memoryBackend.tryWorkspaceSync()
+    const session = vi
+      .fn<DesktopBackend['session']>()
+      .mockResolvedValueOnce({ phase: 'ready' })
+      .mockResolvedValueOnce({ phase: 'offline' })
+      .mockResolvedValue({ phase: 'ready' })
+    const loadWorkspace = vi
+      .fn<DesktopBackend['loadWorkspace']>()
+      .mockResolvedValueOnce({ errorCode: 'OFFLINE', message: '无法连接服务' })
+      .mockResolvedValue({ workspace, pristine: false })
+    const backend = Object.create(memoryBackend) as DesktopBackend
+    backend.trySessionSync = undefined
+    backend.tryWorkspaceSync = undefined
+    backend.session = session
+    backend.loadWorkspace = loadWorkspace
+    window.desktop = { platform: 'linux', backend }
+    render(<App />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('无法连接服务')
+    expect(screen.queryByRole('heading', { name: '招聘第一只猫咪' })).not.toBeInTheDocument()
+    await act(async () => window.dispatchEvent(new Event('online')))
+    expect(await screen.findByRole('textbox', { name: '给小黑发消息' })).toBeInTheDocument()
+    expect(loadWorkspace).toHaveBeenCalledTimes(2)
+  })
+
   it.each([false, true])(
     '未受信任证书提供核对入口并支持验证重试（跨进程状态：%s）',
     async (isSnapshot) => {
@@ -240,5 +268,81 @@ describe('服务地址', () => {
     await user.click(screen.getByRole('button', { name: '重新连接' }))
     expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
     expect(memoryBackend.serverUrl).toBe('https://tom.example.com')
+  })
+})
+
+describe('已保存会话的恢复', () => {
+  const serverUrl = 'https://tom.example.test'
+
+  it('启动时网络异常，服务恢复后通过后台探测直接回到已登录状态', async () => {
+    vi.useFakeTimers()
+    const backend = installBackend({
+      session: vi
+        .fn()
+        .mockResolvedValueOnce({ phase: 'offline', errorCode: 'CONNECTION_TIMEOUT', serverUrl })
+        .mockResolvedValueOnce({ phase: 'offline', errorCode: 'IDENTITY_UNAVAILABLE', serverUrl })
+        .mockResolvedValue({ phase: 'ready', serverUrl }),
+    })
+    const { result } = renderHook(useSession)
+    await act(async () => {})
+    expect(result.current.phase).toBe('offline')
+    await act(() => vi.advanceTimersByTimeAsync(CONNECTION_CHECK_MS))
+    expect(result.current.phase).toBe('offline')
+    await act(() => vi.advanceTimersByTimeAsync(CONNECTION_CHECK_MS))
+    expect(result.current.phase).toBe('ready')
+    await act(() => vi.advanceTimersByTimeAsync(CONNECTION_CHECK_MS))
+    expect(backend.session).toHaveBeenCalledTimes(3)
+    expect(backend.connect).not.toHaveBeenCalled()
+    expect(backend.browserLogin).not.toHaveBeenCalled()
+  })
+
+  it('恢复时发现证书变化，停止后台探测并要求用户核对', async () => {
+    vi.useFakeTimers()
+    const backend = installBackend({
+      session: vi
+        .fn()
+        .mockResolvedValueOnce({ phase: 'offline', errorCode: 'OFFLINE', serverUrl })
+        .mockResolvedValue({ phase: 'offline', errorCode: 'CERTIFICATE_CHANGED', serverUrl }),
+    })
+    const { result } = renderHook(useSession)
+    await act(async () => {})
+    await act(async () => window.dispatchEvent(new Event('online')))
+    expect(result.current.needsCertificateTrust).toBe(true)
+    await act(async () => window.dispatchEvent(new Event('focus')))
+    await act(() => vi.advanceTimersByTimeAsync(CONNECTION_CHECK_MS))
+    expect(backend.session).toHaveBeenCalledTimes(2)
+    expect(backend.browserLogin).not.toHaveBeenCalled()
+  })
+
+  it('用户编辑服务地址后，迟到的恢复结果不能覆盖输入或发起下一次探测', async () => {
+    let complete!: (snapshot: SessionSnapshot) => void
+    const backend = installBackend({
+      session: vi
+        .fn()
+        .mockResolvedValueOnce({ phase: 'offline', errorCode: 'OFFLINE', serverUrl })
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              complete = resolve
+            }),
+        ),
+    })
+    const user = userEvent.setup()
+    render(<App />)
+    const address = await screen.findByLabelText('服务地址')
+    act(() => window.dispatchEvent(new Event('online')))
+    expect(backend.session).toHaveBeenCalledTimes(2)
+    const changedAddress = 'https://changed.example.test'
+    await user.clear(address)
+    await user.type(address, changedAddress)
+    await act(async () => complete({ phase: 'ready', serverUrl }))
+    act(() => window.dispatchEvent(new Event('focus')))
+    expect(backend.session).toHaveBeenCalledTimes(2)
+    expect(screen.getByRole('heading', { name: '无法连接服务' })).toBeInTheDocument()
+    expect(address).toHaveValue(changedAddress)
+    await user.click(screen.getByRole('button', { name: '重新连接' }))
+    expect(await screen.findByRole('heading', { name: '登录 TomBot' })).toBeInTheDocument()
+    expect(backend.connect).toHaveBeenCalledOnce()
+    expect(backend.connect).toHaveBeenCalledWith(changedAddress)
   })
 })

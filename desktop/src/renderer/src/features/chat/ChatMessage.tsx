@@ -1,13 +1,9 @@
 import { Avatar } from '../../components/Avatar'
 import type { Agent } from '../workspace/model'
+import { attachmentCaption, MessageFile } from './MessageFile'
 import { MarkdownMessage } from './MarkdownMessage'
-import { Clock3, Ellipsis, FileText, Reply, Smile } from 'lucide-react'
-import {
-  useEffect,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-} from 'react'
+import { Clock3, Ellipsis, Reply, Smile } from 'lucide-react'
+import { type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react'
 import type { ChatMessage as ChatMessageModel, MessageAttachment } from '../workspace/model'
 
 /** 用户气泡在右侧，助手气泡在左侧；快捷按钮放在朝向会话中央的一侧。 */
@@ -38,6 +34,8 @@ export function ChatMessage({
   onDownload?: (attachment: MessageAttachment) => void
   onPreview?: (attachment: MessageAttachment) => Promise<string>
 }) {
+  const caption = attachmentCaption(message.content, message.attachments)
+  const attachmentOnly = !caption && Boolean(message.attachments?.length) && !message.replyTo
   const needsStatus = !isPending && (message.status === 'unsent' || message.status === 'failed')
   const statusLabel = message.status === 'failed' ? '发送失败，点击重试' : '未发送，点击重试'
 
@@ -97,7 +95,7 @@ export function ChatMessage({
           {message.role === 'user' && actions}
           {message.role === 'user' && status}
           <div
-            className={`message-bubble ${message.role === 'user' ? 'user-bubble' : 'assistant-bubble'}${message.replyTo ? ' has-quote' : ''}`}
+            className={`message-bubble ${message.role === 'user' ? 'user-bubble' : 'assistant-bubble'}${message.replyTo ? ' has-quote' : ''}${attachmentOnly ? ' attachment-only' : ''}`}
           >
             {message.replyTo && (
               <button
@@ -126,14 +124,15 @@ export function ChatMessage({
                 <span>{speaker}</span>
               </div>
             ) : null}
-            {message.role === 'assistant' ? (
-              <MarkdownMessage content={message.content} />
-            ) : (
-              <div className="message-text">{message.content}</div>
-            )}
+            {caption &&
+              (message.role === 'assistant' ? (
+                <MarkdownMessage content={caption} />
+              ) : (
+                <div className="message-text">{caption}</div>
+              ))}
             {message.attachments?.map((attachment) => (
               <MessageFile
-                key={attachment.path}
+                key={`${attachment.path}:${attachment.sha256}`}
                 attachment={attachment}
                 onPreview={onPreview}
                 onDownload={onDownload}
@@ -166,70 +165,5 @@ export function ChatMessage({
         </div>
       </div>
     </div>
-  )
-}
-
-function MessageFile({
-  attachment,
-  onPreview,
-  onDownload,
-}: {
-  attachment: MessageAttachment
-  onDownload?: (attachment: MessageAttachment) => void
-  onPreview?: (attachment: MessageAttachment) => Promise<string>
-}) {
-  const [preview, setPreview] = useState('')
-  const [previewError, setPreviewError] = useState('')
-  useEffect(() => {
-    if (attachment.kind !== 'image' || !onPreview) return
-    let cancelled = false
-    void onPreview(attachment).then(
-      (url) => {
-        if (!cancelled) {
-          setPreview(url)
-          setPreviewError('')
-        }
-      },
-      () => {
-        if (!cancelled) setPreviewError('图片暂时无法预览，请下载文件。')
-      },
-    )
-    return () => {
-      cancelled = true
-    }
-  }, [attachment, onPreview])
-  const content =
-    attachment.kind === 'image' && preview ? (
-      <img
-        className="message-image"
-        src={preview}
-        alt={attachment.name}
-        onError={() => {
-          setPreview('')
-          setPreviewError('图片暂时无法预览，请下载文件。')
-        }}
-      />
-    ) : (
-      <>
-        <FileText size={14} />
-        <span>{attachment.name}</span>
-      </>
-    )
-  return (
-    <>
-      {onDownload ? (
-        <button
-          type="button"
-          className="message-file"
-          aria-label={`下载 ${attachment.name}`}
-          onClick={() => onDownload(attachment)}
-        >
-          {content}
-        </button>
-      ) : (
-        <p className="message-file">{content}</p>
-      )}
-      {previewError && <small role="status">{previewError}</small>}
-    </>
   )
 }

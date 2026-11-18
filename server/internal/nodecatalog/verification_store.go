@@ -89,11 +89,12 @@ func (verifier *Verifier) claim(parent context.Context) (*verification, error) {
 			return err
 		}
 		var registeredImage string
-		err = tx.QueryRowContext(ctx, `SELECT image_id FROM tombot.node_connections WHERE node_id=$1 FOR SHARE`, verifier.service.nodeID).Scan(&registeredImage)
+		var maintenance bool
+		err = tx.QueryRowContext(ctx, `SELECT image_id,EXISTS(SELECT 1 FROM tombot.node_upgrades WHERE node_id=$1 AND NOT is_finished) FROM tombot.node_connections WHERE node_id=$1 FOR SHARE`, verifier.service.nodeID).Scan(&registeredImage, &maintenance)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if err == nil && registeredImage != verifier.options.ImageID {
+		if err == nil && (maintenance || registeredImage != verifier.options.ImageID) {
 			return nil
 		}
 		current, lease, next, token, err := readVerification(ctx, tx, verifier.service.nodeID)

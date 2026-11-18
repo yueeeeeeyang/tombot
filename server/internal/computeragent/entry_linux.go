@@ -47,7 +47,24 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 		if controller == nil {
 			return errors.New("电脑代理尚未完成桌面授权组合")
 		}
-		return controller.withScope(ctx, session, func(context.Context, *desktopGuard) error { return nil })
+		status, err := controller.StartDesktop(ctx, session)
+		for err == nil && status.State == "starting" {
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+			status, err = controller.InspectDesktop(ctx, session)
+		}
+		if err != nil {
+			return err
+		}
+		if status.State != "ready" {
+			return errors.New("原生浏览器需要已就绪的 Bot 桌面")
+		}
+		return nil
 	}
 	// 工厂只在全部监督器构造完成并开始接单后使用，窗口不能在恢复阶段发放执行权。
 	factory, err := NewKernelScopes(time.Duration(options.PollIntervalMS)*time.Millisecond, func(reference processgroup.Reference) (WindowSession, error) {
@@ -55,7 +72,7 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 			return nil, errors.New("电脑代理尚未完成窗口服务组合")
 		}
 		return openWindowSession(reference, browsers, authorize, options.guardOptions(), logger, controller.fail)
-	})
+	}, logger)
 	if err != nil {
 		return errors.Join(err, store.Close())
 	}

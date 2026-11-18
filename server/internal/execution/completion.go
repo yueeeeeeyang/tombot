@@ -14,7 +14,7 @@ import (
 // 成功必须有已绑定模型的成功操作；取消中的运行只能按取消结果收尾。
 func (service *Service) Complete(ctx context.Context, lease Lease, outcome Outcome) (Run, error) {
 	if !isTerminal(outcome.Status) || (outcome.Answer != "" && !validText(outcome.Answer, 64<<10)) ||
-		(outcome.Status == "succeeded" && (outcome.ErrorCode != "" || outcome.Answer == "")) || (outcome.Status != "succeeded" && !codePattern.MatchString(outcome.ErrorCode)) {
+		(outcome.Status == "succeeded" && outcome.ErrorCode != "") || (outcome.Status != "succeeded" && !codePattern.MatchString(outcome.ErrorCode)) {
 		return Run{}, ErrInvalidInput
 	}
 	var run Run
@@ -44,12 +44,30 @@ func (service *Service) Complete(ctx context.Context, lease Lease, outcome Outco
 		if run.Status != "running" && run.Status != "canceling" && !(run.Status == "queued" && outcome.Status != "succeeded") {
 			return ErrConflict
 		}
+		var isConsole bool
+		if err = transaction.QueryRowContext(ctx, `SELECT source='console' FROM tombot.turns WHERE user_id=$1 AND id=$2`, lease.UserID, lease.TurnID).Scan(&isConsole); err != nil {
+			return err
+		}
+		if outcome.Status == "succeeded" && isConsole {
+			var confirmed bool
+			if outcome.Answer != "" {
+				return ErrInvalidInput
+			}
+			if err = transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.desktop_consoles WHERE user_id=$1 AND run_id=$2 AND state='closed') AND NOT EXISTS(SELECT 1 FROM tombot.desktop_consoles WHERE user_id=$1 AND run_id=$2 AND state<>'closed')`, lease.UserID, lease.RunID).Scan(&confirmed); err != nil {
+				return err
+			}
+			if !confirmed {
+				return ErrUncertain
+			}
+		} else if outcome.Status == "succeeded" && outcome.Answer == "" {
+			return ErrInvalidInput
+		}
 		var started, unknown, modelSucceeded bool
 		if err = transaction.QueryRowContext(ctx, `SELECT COALESCE(bool_or(status='started'),false),COALESCE(bool_or(status='unknown'),false),COALESCE(bool_or(kind='model' AND status='succeeded'),false)
 			FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&started, &unknown, &modelSucceeded); err != nil {
 			return err
 		}
-		if started || outcome.Status == "succeeded" && (unknown || !modelSucceeded) {
+		if started || outcome.Status == "succeeded" && (unknown || !modelSucceeded && !isConsole) {
 			return ErrUncertain
 		}
 		if err = finishRun(ctx, transaction, lease, outcome); err != nil {
@@ -145,7 +163,10 @@ func finishRun(ctx context.Context, transaction *sql.Tx, lease Lease, outcome Ou
 			return err
 		}
 	}
-	if _, err := transaction.ExecContext(ctx, `UPDATE tombot.runs SET status=$3,error_code=$4,finished_at=clock_timestamp() WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID, outcome.Status, outcome.ErrorCode); err != nil {
+	if _, err := transaction.ExecContext(ctx, `UPDATE tombot.runs SET status=$3,error_code=$4,finished_at=clock_timestamp(),accepts_console=false WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID, outcome.Status, outcome.ErrorCode); err != nil {
+		return err
+	}
+	if _, err := transaction.ExecContext(ctx, `UPDATE tombot.desktop_consoles SET state='failed',error_code='RUN_ENDED' WHERE user_id=$1 AND run_id=$2 AND state IN ('waiting','pausing','active','resuming')`, lease.UserID, lease.RunID); err != nil {
 		return err
 	}
 	if _, err := transaction.ExecContext(ctx, `UPDATE tombot.jobs SET status='finished',lease_owner=NULL,lease_expires_at=NULL,fencing_token=fencing_token+1,updated_at=clock_timestamp() WHERE user_id=$1 AND id=$2`, lease.UserID, lease.JobID); err != nil {

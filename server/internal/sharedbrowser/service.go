@@ -6,11 +6,9 @@ import (
 	"io"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
-	"github.com/chromedp/cdproto/emulation"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -22,6 +20,8 @@ type entry struct {
 	window         Window
 	session        computer.ExecutionSession
 	target         target.ID
+	nativeID       int64
+	nativeGate     chan struct{}
 	ctx            context.Context
 	stop           context.CancelFunc
 	life           context.Context
@@ -38,31 +38,36 @@ type entry struct {
 }
 
 type Service struct {
-	options      Options
-	root         context.Context
-	stop         context.CancelFunc
-	connection   chromedp.Transport
-	browser      *chromedp.Browser
-	listTargets  func(context.Context) ([]*target.Info, error)
-	mu           sync.Mutex
-	windows      map[string]*entry
-	targets      map[target.ID]*entry
-	probeTargets map[target.ID]bool
-	probeGate    chan struct{}
-	creation     chan struct{}
-	events       chan any
-	done         chan struct{}
-	failed       bool
-	closed       bool
-	commands     sync.WaitGroup
-	uploads      sync.WaitGroup
-	uploadGate   chan struct{}
+	options        Options
+	nativeWindows  map[int64]nativeWindow
+	nativeSequence int
+	root           context.Context
+	stop           context.CancelFunc
+	connection     chromedp.Transport
+	browser        *chromedp.Browser
+	listTargets    func(context.Context) ([]*target.Info, error)
+	mu             sync.Mutex
+	windows        map[string]*entry
+	targets        map[target.ID]*entry
+	probeTargets   map[target.ID]bool
+	probeGate      chan struct{}
+	creation       chan struct{}
+	events         chan any
+	done           chan struct{}
+	failed         bool
+	closed         bool
+	commands       sync.WaitGroup
+	uploads        sync.WaitGroup
+	uploadGate     chan struct{}
 }
 
-// New 接管 Chrome 的两端私有管道并核验浏览器能力；启动失败关闭管道，不留下可继续使用的半初始化实例。
+// New 接管 Chrome 的两端私有管道并在 startup 的绝对期限内初始化；ctx 约束服务存活时间。
 // 监督器负责非 root 浏览器、独立服务资源组、私有 profile、出网代理和最终进程回收。
-func New(ctx context.Context, reader io.ReadCloser, writer io.WriteCloser, options Options) (*Service, error) {
-	if ctx == nil || reader == nil || writer == nil || options.Validate() != nil {
+func New(ctx, startup context.Context, reader io.ReadCloser, writer io.WriteCloser, options Options) (*Service, error) {
+	if ctx == nil || startup == nil || reader == nil || writer == nil || options.Validate() != nil || options.Native == nil {
+		return nil, ErrInvalid
+	}
+	if _, bounded := startup.Deadline(); !bounded {
 		return nil, ErrInvalid
 	}
 	connection := chromedp.NewPipeConn(&frameReader{ReadCloser: reader}, frameWriter{writer})
@@ -72,21 +77,21 @@ func New(ctx context.Context, reader io.ReadCloser, writer io.WriteCloser, optio
 	root, _ := chromedp.NewContext(base, chromedp.WithErrorf(func(string, ...any) {
 		options.Logger.Warn("共享浏览器协议异常", "user_id", options.UserID, "computer_id", options.ComputerID)
 	}))
-	service := &Service{options: options, root: root, stop: stop, connection: connection, windows: map[string]*entry{}, targets: map[target.ID]*entry{}, creation: make(chan struct{}, 1), events: make(chan any, options.MaximumEvents), done: make(chan struct{}), uploadGate: make(chan struct{}, 1)}
+	service := &Service{options: options, nativeWindows: map[int64]nativeWindow{}, root: root, stop: stop, connection: connection, windows: map[string]*entry{}, targets: map[target.ID]*entry{}, creation: make(chan struct{}, 1), events: make(chan any, options.MaximumEvents), done: make(chan struct{}), uploadGate: make(chan struct{}, 1)}
 	service.probeTargets, service.probeGate = map[target.ID]bool{}, make(chan struct{}, 1)
-	// 首次 chromedp 初始化必须在长期上下文执行；只由超时取消，不能让请求结束关闭整个浏览器。
-	timer := time.AfterFunc(options.CallTimeout, stop)
-	err := chromedp.Do(root)
-	timer.Stop()
+	// 初始化占用签发的冷启动预算。启动成功后，取消本次请求不能关闭已交付的浏览器。
+	stopStartup := context.AfterFunc(startup, stop)
+	err := startup.Err()
+	if err == nil {
+		err = chromedp.Do(root)
+	}
 	if err == nil {
 		service.browser = chromedp.FromContext(root).Browser
 		service.listTargets = func(ctx context.Context) ([]*target.Info, error) {
 			listed, err := cdp.Call(ctx, service.browser, target.GetTargets, target.GetTargetsParams{})
 			return listed.TargetInfos, err
 		}
-		startup, cancel := context.WithTimeout(root, options.CallTimeout)
-		defer cancel()
-		_, err = cdp.Call(startup, service.browser, browser.SetDownloadBehavior, browser.SetDownloadBehaviorParams{Behavior: browser.SetDownloadBehaviorBehaviorDeny})
+		_, err = cdp.Call(startup, service.browser, browser.SetDownloadBehavior, browser.SetDownloadBehaviorParams{Behavior: browser.SetDownloadBehaviorBehaviorAllow, DownloadPath: computer.DownloadDirectory})
 		if err == nil {
 			// 不恢复上次运行的无主页面；只有新授权窗口可以继续执行网页脚本。
 			var result page.NavigateResult
@@ -105,13 +110,14 @@ func New(ctx context.Context, reader io.ReadCloser, writer io.WriteCloser, optio
 			_, err = cdp.Call(startup, service.browser, target.SetDiscoverTargets, target.SetDiscoverTargetsParams{Discover: true})
 		}
 	}
-	if err != nil {
+	stopStartup()
+	if err = errors.Join(err, startup.Err(), root.Err()); err != nil {
 		stop()
 		var closeError error
 		if options.Uploads != nil {
 			closeError = options.Uploads.Close()
 		}
-		return nil, errors.Join(ErrUnavailable, connection.Close(), closeError)
+		return nil, errors.Join(ErrUnavailable, startup.Err(), connection.Close(), closeError)
 	}
 	go service.runEvents()
 	return service, nil
@@ -202,7 +208,7 @@ func (service *Service) Open(ctx context.Context, address Address) (Window, erro
 		return Window{}, ErrCapacity
 	}
 	positive := true
-	created, err := cdp.Call(bounded, service.browser, target.CreateTarget, target.CreateTargetParams{URL: "about:blank", NewWindow: &positive, Background: &positive, Width: int64(service.options.Width), Height: int64(service.options.Height + 120)})
+	created, err := cdp.Call(bounded, service.browser, target.CreateTarget, target.CreateTargetParams{URL: "about:blank", NewWindow: &positive, Background: &positive, Width: int64(service.options.Width), Height: int64(service.options.Height)})
 	if err != nil || created.TargetID == "" {
 		service.fail()
 		return Window{}, ErrUnknown
@@ -246,17 +252,13 @@ func (service *Service) attach(ctx context.Context, address Address, id target.I
 		stop()
 		return Window{}, ErrUnavailable
 	}
-	tab := chromedp.FromContext(pageContext).Target
-	_, err = cdp.Call(ctx, tab, emulation.SetDeviceMetricsOverride, emulation.SetDeviceMetricsOverrideParams{Width: int64(service.options.Width), Height: int64(service.options.Height), DeviceScaleFactor: 1})
-	if err == nil {
-		_, err = cdp.Call(ctx, tab, emulation.SetFocusEmulationEnabled, emulation.SetFocusEmulationEnabledParams{Enabled: true})
-	}
+	nativeID, err := service.bindNative(ctx, address.Session, id)
 	if err != nil {
 		stop()
-		return Window{}, ErrUnavailable
+		return Window{}, err
 	}
 	life, revoke := context.WithCancel(service.root)
-	item := &entry{window: Window{ID: address.WindowID, BotID: address.Session.BotID, DesktopID: address.Session.DesktopID, ParentID: parent, State: "ready", URL: "about:blank"}, session: address.Session, target: id, ctx: pageContext, stop: stop, life: life, revoke: revoke, gate: make(chan struct{}, 1), dialogGate: make(chan struct{}, 1)}
+	item := &entry{window: Window{ID: address.WindowID, BotID: address.Session.BotID, DesktopID: address.Session.DesktopID, ParentID: parent, State: "ready", URL: "about:blank"}, session: address.Session, target: id, nativeID: nativeID, nativeGate: service.nativeWindows[nativeID].gate, ctx: pageContext, stop: stop, life: life, revoke: revoke, gate: make(chan struct{}, 1), dialogGate: make(chan struct{}, 1)}
 	if err := chromedp.Listen(pageContext, func(event any) { service.observeDialog(item, event) }); err != nil {
 		revoke()
 		stop()

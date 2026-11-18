@@ -39,7 +39,7 @@ func (tool chatFileTool) Execute(ctx context.Context, invocation Invocation) (bo
 		if err := lockDispatch(ctx, tx, lease.UserID); err != nil {
 			return err
 		}
-		conversation, isGroup, err := libraryConversation(ctx, tx, lease)
+		conversation, _, err := libraryConversation(ctx, tx, lease)
 		if err != nil {
 			return err
 		}
@@ -103,37 +103,11 @@ func (tool chatFileTool) Execute(ctx context.Context, invocation Invocation) (bo
 			if len(input.Content) > 64<<10 || !utf8.ValidString(input.Content) {
 				return chatlibrary.ErrInput
 			}
-			if isGroup {
-				var count int
-				if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tombot.messages WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&count); err != nil {
-					return err
-				}
-				if count >= groupchat.MaxPosts-1 {
-					return chatlibrary.ErrCapacity
-				}
-			}
 			file, failure := chatlibrary.Save(ctx, tx, lease.UserID, conversation, chatlibrary.Upload{ClientRequestID: operation.ID, Name: input.Name, Content: []byte(input.Content)})
 			if failure != nil {
 				return failure
 			}
-			blocks := []Block{{Kind: "text", Text: file.Name, UserMessage: !isGroup, SourceRunID: lease.RunID}, {Kind: "chat_file", ChatFile: &file}}
-			if isGroup {
-				var trigger string
-				if err = tx.QueryRowContext(ctx, `SELECT trigger_message_id FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger); err != nil {
-					return err
-				}
-				reply, failure := groupReplyReference(ctx, tx, lease, trigger)
-				if failure != nil {
-					return failure
-				}
-				err = writeGroupMessage(ctx, tx, lease.UserID, conversation, lease.TurnID, lease.RunID, lease.BotID, ids.New(), reply, blocks, "complete")
-			} else {
-				_, err = writeDirectMessage(ctx, tx, lease.UserID, lease.BotID, blocks)
-			}
-			if err != nil {
-				return err
-			}
-			if err = chatlibrary.Publish(ctx, tx, lease.UserID, file); err != nil {
+			if err = publishComputerFile(ctx, tx, lease, file); err != nil {
 				return err
 			}
 			output = file
@@ -193,4 +167,39 @@ func libraryConversation(ctx context.Context, tx *sql.Tx, lease Lease) (string, 
 		err = chatlibrary.ErrNotFound
 	}
 	return conversation, isGroup, err
+}
+
+// publishComputerFile 统一文本和二进制附件投递，群消息额度、引用与文件可见性一起提交。
+func publishComputerFile(ctx context.Context, tx *sql.Tx, lease Lease, file chatlibrary.File) error {
+	conversation, isGroup, err := libraryConversation(ctx, tx, lease)
+	if err != nil {
+		return err
+	}
+	if conversation != file.ConversationID {
+		return ErrConflict
+	}
+	blocks := []Block{{Kind: "text", Text: file.Name, UserMessage: !isGroup, SourceRunID: lease.RunID}, {Kind: "chat_file", ChatFile: &file}}
+	if isGroup {
+		var count int
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM tombot.messages WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&count); err != nil {
+			return err
+		}
+		if count >= groupchat.MaxPosts-1 {
+			return chatlibrary.ErrCapacity
+		}
+		var trigger string
+		if err = tx.QueryRowContext(ctx, `SELECT trigger_message_id FROM tombot.group_deliveries WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&trigger); err != nil {
+			return err
+		}
+		reply, err := groupReplyReference(ctx, tx, lease, trigger)
+		if err != nil {
+			return err
+		}
+		if err = writeGroupMessage(ctx, tx, lease.UserID, conversation, lease.TurnID, lease.RunID, lease.BotID, ids.New(), reply, blocks, "complete"); err != nil {
+			return err
+		}
+	} else if _, err = writeDirectMessage(ctx, tx, lease.UserID, lease.BotID, blocks); err != nil {
+		return err
+	}
+	return chatlibrary.Publish(ctx, tx, lease.UserID, file)
 }

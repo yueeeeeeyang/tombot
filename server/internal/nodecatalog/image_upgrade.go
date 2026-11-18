@@ -4,29 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+
 	"io.yueyang/tom/internal/infra/ids"
 )
 
-// UpgradeImageInTransaction 只供已验证原节点证书的登记事务调用；不修改旧镜像或已有电脑。
-// 空闲节点撤销旧能力证据，并先清理旧验收资源，随后才能验证新镜像。
+// UpgradeImageInTransaction 在已验证原节点证书的登记事务中切换分配镜像，已有电脑继续引用原镜像。
+// 切换先撤销旧能力证据，后续验收必须先清理旧验收资源。
 func (service *Service) UpgradeImageInTransaction(ctx context.Context, tx *sql.Tx, registration Registration) error {
 	if tx == nil || registration.Validate() != nil || registration.PreviousImageID == "" {
 		return ErrInvalidInput
 	}
-	var reserved int
-	if err := tx.QueryRowContext(ctx, `SELECT reserved FROM tombot.computer_nodes WHERE id=$1 FOR UPDATE`, service.nodeID).Scan(&reserved); err != nil {
+	if err := service.RequireNoVerificationLeaseInTransaction(ctx, tx); err != nil {
 		return err
-	}
-	if reserved != 0 {
-		return ErrConflict
-	}
-	var leased bool
-	err := tx.QueryRowContext(ctx, `SELECT coalesce(lease_expires_at>clock_timestamp(),false) FROM tombot.node_verifications WHERE node_id=$1 FOR UPDATE`, service.nodeID).Scan(&leased)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	if leased {
-		return ErrConflict
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO tombot.computer_images(id,reference,is_enabled) VALUES($1,$2,true) ON CONFLICT DO NOTHING`, registration.ImageID, registration.ImageReference)
 	if err != nil {
@@ -47,4 +36,21 @@ func (service *Service) UpgradeImageInTransaction(ctx context.Context, tx *sql.T
 		return err
 	}
 	return audit(ctx, tx, ids.New(), "升级节点电脑镜像", "computer_node", service.nodeID, map[string]any{"previous_image_id": registration.PreviousImageID, "image_id": registration.ImageID})
+}
+
+// RequireNoVerificationLeaseInTransaction 在节点锁内检查验收租约，调用方须在同一事务撤销分配资格。
+func (service *Service) RequireNoVerificationLeaseInTransaction(ctx context.Context, tx *sql.Tx) error {
+	var nodeID string
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM tombot.computer_nodes WHERE id=$1 FOR UPDATE`, service.nodeID).Scan(&nodeID); err != nil {
+		return err
+	}
+	var leased bool
+	err := tx.QueryRowContext(ctx, `SELECT coalesce(lease_expires_at>clock_timestamp(),false) FROM tombot.node_verifications WHERE node_id=$1 FOR UPDATE`, service.nodeID).Scan(&leased)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if leased {
+		return ErrConflict
+	}
+	return nil
 }

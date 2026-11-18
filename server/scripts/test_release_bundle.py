@@ -82,7 +82,7 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertEqual(set(release.HOST_PROGRAMS), {"tomd", "tomnode"})
         self.assertFalse(any(name.startswith("admin/") for name in self.manifest["files"]))
         self.assertEqual({name for name in self.manifest["files"] if name.startswith("deploy/systemd/")},
-                         {"deploy/systemd/tombot-node.service"})
+                         {"deploy/systemd/tombot-node.service", "deploy/systemd/tombot-node-update.service", "deploy/systemd/tombot-node-update.timer"})
         for obsolete in ("tomdeploy-config", "tomdeploy-check", "tomdocker-bootstrap", "tomimage-prepare"):
             self.assertFalse(any(name.endswith("/bin/" + obsolete) for name in self.manifest["files"]))
         self.assertEqual({path.name for path in self.directory.iterdir()}, {"payload", "one.tar.gz", "two.tar.gz"})

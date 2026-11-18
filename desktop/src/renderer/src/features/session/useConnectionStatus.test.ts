@@ -1,7 +1,8 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { memoryBackend } from '../desktop/memoryBackend'
-import { CONNECTION_CHECK_MS, useConnectionStatus } from './useConnectionStatus'
+import { CONNECTION_CHECK_MS } from './sessionProbe'
+import { useConnectionStatus } from './useConnectionStatus'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -43,5 +44,31 @@ describe('服务端连接状态', () => {
     unmount()
     await act(async () => complete({ phase: 'ready' }))
     expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('探测期间网络恢复，合并多次唤醒并在旧请求结束后立即重新探测', async () => {
+    vi.useFakeTimers()
+    let complete!: (value: { phase: 'offline' }) => void
+    const session = vi
+      .spyOn(memoryBackend, 'session')
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve
+          }),
+      )
+      .mockResolvedValue({ phase: 'ready' })
+    const { result } = renderHook(useConnectionStatus)
+    act(() => {
+      window.dispatchEvent(new Event('offline'))
+      window.dispatchEvent(new Event('online'))
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(result.current).toBe('disconnected')
+    expect(session).toHaveBeenCalledTimes(1)
+    await act(async () => complete({ phase: 'offline' }))
+    await act(() => vi.advanceTimersByTimeAsync(0))
+    expect(session).toHaveBeenCalledTimes(2)
+    expect(result.current).toBe('connected')
   })
 })

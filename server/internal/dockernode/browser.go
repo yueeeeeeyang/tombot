@@ -16,8 +16,9 @@ import (
 	"io.yueyang/tom/internal/taskprocess"
 )
 
-// BrowserOptions 分别限制单次调用、原实例回收及整个节点停服，不从用户请求读取预算。
+// BrowserOptions 分别限制冷启动、单次调用、原实例回收及整个节点停服。
 type BrowserOptions struct {
+	StartupTimeout  time.Duration
 	CallTimeout     time.Duration
 	CleanupTimeout  time.Duration
 	ShutdownTimeout time.Duration
@@ -26,7 +27,7 @@ type BrowserOptions struct {
 }
 
 func (options BrowserOptions) Validate() error {
-	if options.Groups.Validate() != nil || options.Limits.Validate() != nil || options.CallTimeout < time.Second || options.CallTimeout > taskprocess.BrowserMaximumStartTime || options.CleanupTimeout <= options.CallTimeout+options.Groups.GracePeriod+options.Groups.PollInterval || options.CleanupTimeout > time.Minute || options.ShutdownTimeout < options.CleanupTimeout || options.ShutdownTimeout > 5*time.Minute {
+	if options.Groups.Validate() != nil || options.Limits.Validate() != nil || options.CallTimeout < time.Second || options.StartupTimeout < options.CallTimeout || options.StartupTimeout > taskprocess.BrowserMaximumStartTime || options.CleanupTimeout <= options.CallTimeout+options.Groups.GracePeriod+options.Groups.PollInterval || options.CleanupTimeout > time.Minute || options.ShutdownTimeout < options.CleanupTimeout || options.ShutdownTimeout > 5*time.Minute {
 		return errors.New("节点共享浏览器预算无效")
 	}
 	return nil
@@ -118,12 +119,16 @@ func (browsers *nodeBrowsers) previous(resource Resource) (*browserRecord, error
 
 // ensure 只有显式对账能够创建新授权；活动服务只查询原授权，查询失败封闭原实例并返回失败。
 func (browsers *nodeBrowsers) ensure(ctx context.Context, resource Resource, current container) (result error) {
-	ctx, cancel := context.WithTimeout(ctx, browsers.options.CallTimeout)
-	defer cancel()
 	previous, err := browsers.previous(resource)
 	if err != nil {
 		return err
 	}
+	timeout := browsers.options.StartupTimeout
+	if previous != nil && previous.Phase != "closed" {
+		timeout = browsers.options.CallTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	parent, err := browsers.node.serviceParent(ctx, resource, current.ID, browsers.locate)
 	if err != nil {
 		return err
@@ -332,7 +337,11 @@ func (browsers *nodeBrowsers) recover(ctx context.Context) error {
 func (browsers *nodeBrowsers) shutdown(ctx context.Context) error { return browsers.recover(ctx) }
 
 func (browsers *nodeBrowsers) call(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-	client, err := browsers.node.serviceClient(ctx, resource, grant.Request.Group.Container, browsers.locate, browsers.options.CallTimeout)
+	timeout := browsers.options.CallTimeout
+	if action == "start" {
+		timeout = browsers.options.StartupTimeout
+	}
+	client, err := browsers.node.serviceClient(ctx, resource, grant.Request.Group.Container, browsers.locate, timeout)
 	if err != nil {
 		return computeragent.BrowserObservation{}, err
 	}

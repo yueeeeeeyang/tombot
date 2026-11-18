@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/chromedp/cdproto/browser"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
@@ -72,6 +73,21 @@ func (service *Service) handleEvent(event any) error {
 		service.mu.Unlock()
 		if known {
 			return nil
+		}
+		if parent == nil {
+			// 用户在已有 Chrome 窗口按 Ctrl+T 时没有 opener；只继承已经登记的同一原生窗口。
+			window, err := cdp.Call(ctx, service.browser, browser.GetWindowForTarget, browser.GetWindowForTargetParams{TargetID: info.TargetID})
+			if err == nil {
+				service.mu.Lock()
+				for _, candidate := range service.targets {
+					if candidate.nativeID == int64(window.WindowID) && candidate.life.Err() == nil {
+						parent = candidate
+						full = service.full(parent.session)
+						break
+					}
+				}
+				service.mu.Unlock()
+			}
 		}
 		if parent == nil || parent.life.Err() != nil || full || service.authorize(ctx, parent.session) != nil {
 			if parent != nil && full {

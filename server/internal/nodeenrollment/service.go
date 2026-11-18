@@ -81,6 +81,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 	if err != nil {
 		return Receipt{}, err
 	}
+	state := "registered"
 	err = service.control.Platform(ctx, func(tx *sql.Tx) error {
 		// 首次接入争用总量与多个唯一身份，固定全局顺序避免并发突破容量或重复消费。
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('tombot.node-enrollment',0))`); err != nil {
@@ -95,8 +96,23 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 			if url != claim.URL {
 				return ErrConflict
 			}
+			if claim.Maintenance != nil {
+				state, err = reserveUpgrade(ctx, tx, catalog, claim, imageID, requestID)
+				if err != nil || !claim.SupportsComputerUpgrades {
+					return err
+				}
+				_, err = tx.ExecContext(ctx, `UPDATE tombot.node_connections SET supports_computer_upgrades=true WHERE node_id=$1 AND NOT supports_computer_upgrades`, claim.NodeID)
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `UPDATE tombot.node_connections SET supports_computer_upgrades=$2 WHERE node_id=$1 AND supports_computer_upgrades<>$2`, claim.NodeID, claim.SupportsComputerUpgrades); err != nil {
+				return err
+			}
 			if imageID != claim.Registration.ImageID {
-				if claim.Registration.PreviousImageID != imageID {
+				var conflicting bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.node_upgrades WHERE node_id=$1 AND NOT is_finished AND target_image_id<>$2)`, claim.NodeID, claim.Registration.ImageID).Scan(&conflicting); err != nil {
+					return err
+				}
+				if conflicting || claim.Registration.PreviousImageID != imageID {
 					return ErrConflict
 				}
 				if err := catalog.UpgradeImageInTransaction(ctx, tx, claim.Registration); err != nil {
@@ -110,7 +126,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if claim.Registration.PreviousImageID != "" {
+		if claim.Maintenance != nil || claim.Registration.PreviousImageID != "" {
 			return ErrConflict
 		}
 		raw, err := parseToken(token)
@@ -136,7 +152,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 		if _, err := catalog.RegisterInTransaction(ctx, tx, claim.Registration, requestID); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO tombot.node_connections(node_id,url,certificate_fingerprint,image_id) VALUES($1,$2,$3,$4)`, claim.NodeID, claim.URL, fingerprint, claim.Registration.ImageID); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO tombot.node_connections(node_id,url,certificate_fingerprint,image_id,supports_computer_upgrades) VALUES($1,$2,$3,$4,$5)`, claim.NodeID, claim.URL, fingerprint, claim.Registration.ImageID, claim.SupportsComputerUpgrades); err != nil {
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE tombot.computer_nodes SET status=CASE WHEN status='ready' THEN 'bootstrapping' ELSE status END,control_expires_at=NULL,capability_expires_at=NULL WHERE id=$1`, claim.NodeID); err != nil {
@@ -151,7 +167,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 	if err != nil {
 		return Receipt{}, transactionError(err)
 	}
-	return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: "registered"}, nil
+	return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: state}, nil
 }
 
 // Resolve 只返回已授权且不可变的节点连接，不接受调用方提供的目标地址。

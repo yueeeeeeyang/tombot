@@ -46,7 +46,7 @@ func (probe *capabilityProbe) Check(ctx context.Context, resource Resource, cont
 	if parent != state.Grant.Request.Group.Container {
 		return computer.Capabilities{}, failure("capability_parent_changed")
 	}
-	if err := probe.node.storage.VerifyFilesystem(ctx, resource, evidence.FilesystemType, evidence.FilesystemSize); err != nil {
+	if err := probe.node.storage.VerifyFilesystem(ctx, probe.node.diskResource(resource, lifecycle), evidence.FilesystemType, evidence.FilesystemSize); err != nil {
 		return computer.Capabilities{}, err
 	}
 	if err := probe.node.browsers.check(ctx, resource, current.container); err != nil {

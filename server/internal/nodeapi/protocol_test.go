@@ -101,7 +101,15 @@ func testObservation(input computer.Specification, state string) computer.Observ
 	return value
 }
 func testOperations(node *testNode) Operations {
-	return Operations{Node: node, Computers: node, Sessions: node, Terminals: node, Desktops: node, Agents: node}
+	return Operations{Node: node, Computers: node, Sessions: node, Terminals: node, Desktops: node, Agents: node, Files: node, Console: node}
+}
+
+func (node *testNode) TransferFile(_ context.Context, input computer.FileRequest) (computer.FileReceipt, error) {
+	return computer.FileReceipt{Session: input.Session, OperationID: input.OperationID, State: "ready", Path: input.Path, Size: 0, SHA256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, node.enter()
+}
+
+func (node *testNode) Console(_ context.Context, input computer.ConsoleRequest) (computer.ConsoleReceipt, error) {
+	return computer.ConsoleReceipt{Session: input.Session, Revision: input.Revision, State: "paused"}, node.enter()
 }
 func testSession() computer.ExecutionSession {
 	return computer.ExecutionSession{DesktopIdentity: computer.DesktopIdentity{UserID: ids.New(), ComputerID: ids.New(), BotID: ids.New(), DesktopID: ids.New(), UID: computer.DesktopUIDBase + 1, GID: computer.DesktopSharedGID, DisplayNumber: 1}, NodeID: ids.New(), ContainerID: strings.Repeat("a", 64), Generation: 1, SessionID: ids.New(), RunID: ids.New(), FencingToken: 1}
@@ -112,8 +120,10 @@ func testInputs(session computer.ExecutionSession) map[string]any {
 	address := computer.TerminalAddress{Session: session, OperationID: ids.New()}
 	capture := computer.DesktopCapture{Session: session, Sequence: 1}
 	return map[string]any{"heartbeat": computer.NodeQuery{NodeID: session.NodeID}, "inspect": specification, "ensure": specification, "remove": specification, "open": command, "renew": command, "close": command,
-		"start": computer.TerminalStart{TerminalAddress: address, Command: computer.ProcessCommand{WorkingDirectory: "/workspace", Program: "/bin/bash", Arguments: []string{"-c", "pwd"}}, Columns: 100, Rows: 30},
-		"read":  computer.TerminalRead{TerminalAddress: address, Cursor: 3, MaximumBytes: 64}, "write": computer.TerminalWrite{TerminalAddress: address, Sequence: 1, Text: "你好\n"}, "resize": computer.TerminalResize{TerminalAddress: address, Columns: 120, Rows: 40},
+		"console":       computer.ConsoleRequest{Session: session, ViewerID: session.SessionID, Revision: 1, Action: "pause"},
+		"file_transfer": computer.FileRequest{Session: session, OperationID: ids.New(), Action: "export_start", Path: "/workspace/report.pdf"},
+		"start":         computer.TerminalStart{TerminalAddress: address, Command: computer.ProcessCommand{WorkingDirectory: "/workspace", Program: "/bin/bash", Arguments: []string{"-c", "pwd"}}, Columns: 100, Rows: 30},
+		"read":          computer.TerminalRead{TerminalAddress: address, Cursor: 3, MaximumBytes: 64}, "write": computer.TerminalWrite{TerminalAddress: address, Sequence: 1, Text: "你好\n"}, "resize": computer.TerminalResize{TerminalAddress: address, Columns: 120, Rows: 40},
 		"desktop_capture": capture, "desktop_image_read": computer.DesktopImageRead{DesktopCapture: capture, Offset: 0, MaximumBytes: computer.MaximumDesktopChunkBytes},
 		"desktop_input": computer.DesktopInput{Session: session, Sequence: 1, Events: []computer.DesktopEvent{{Kind: "pointer", X: 20, Y: 30}}},
 		"desktop_start": session, "desktop_status": session, "agent_start": session, "agent_write": computer.AgentWrite{Session: session, Offset: 3, Bytes: []byte{1, 0, 255}}, "agent_read": computer.AgentRead{Session: session, Offset: 3}}
@@ -153,7 +163,7 @@ func TestTypedNodeProtocol(t *testing.T) {
 			t.Fatal("接受无身份内容", action)
 		}
 	}
-	if node.calls.Load() != 19 {
+	if node.calls.Load() != 21 {
 		t.Fatal("协议未覆盖全部动作", node.calls.Load())
 	}
 	if _, _, err := decodeInput(session.NodeID, "docker_exec", []byte(`{}`)); err == nil {
@@ -170,6 +180,8 @@ func TestNodeResultBinding(t *testing.T) {
 		action string
 		result any
 	}{
+		{"console", computer.ConsoleReceipt{Session: wrong, Revision: 1, State: "paused"}},
+		{"file_transfer", computer.FileReceipt{Session: wrong, OperationID: ids.New(), State: "ready", Path: "/workspace/report.pdf"}},
 		{"heartbeat", computer.NodeHeartbeat{NodeID: ids.New(), InstanceID: ids.New(), Generation: 1, Sequence: 1}},
 		{"heartbeat", computer.NodeHeartbeat{NodeID: session.NodeID, InstanceID: ids.New(), Generation: 0, Sequence: 1}},
 		{"heartbeat", computer.NodeHeartbeat{NodeID: session.NodeID, InstanceID: ids.New(), Generation: 1, Sequence: 0}},
