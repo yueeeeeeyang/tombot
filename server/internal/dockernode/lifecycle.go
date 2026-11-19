@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"runtime"
 	"slices"
@@ -454,7 +455,8 @@ func (node *Runtime) retireRuntime(ctx context.Context, resource Resource, curre
 			return err
 		}
 		if err == nil {
-			if stopped.ID != current.container.ID || !sameLabels(stopped.Config.Labels, containerLabels(resource)) || stopped.State.Running || knownContainerID != "" && stopped.State.Pid != 0 {
+			// 原容器可能使用旧镜像布局。停止后须与刚刚核验的同一实例比对，任何受管标签变化都应中止。
+			if stopped.ID != current.container.ID || stopped.Name != current.container.Name || !maps.Equal(stopped.Config.Labels, current.container.Config.Labels) || stopped.State.Running || knownContainerID != "" && stopped.State.Pid != 0 {
 				return failure("container_stop_unconfirmed")
 			}
 			if err = node.engine.removeContainer(ctx, current.container.ID); err != nil && !errors.Is(err, errMissing) {

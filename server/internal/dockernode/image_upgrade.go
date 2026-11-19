@@ -100,8 +100,16 @@ func validUpgradeFence(previous, target computer.Specification) bool {
 	return target.FencingToken > previous.FencingToken || target.FencingToken == previous.FencingToken && target.LeaseExpiresAt.Equal(previous.LeaseExpiresAt)
 }
 
-// CheckUpgradeSource 在安装器停机前只读核对原实例。实际退役仍在用户独占锁内重新核验规格和宿主资源。
-func CheckUpgradeSource(directory string, owner uint32, source computer.Specification, containerID string, requireMarker bool) (result error) {
+// UpgradeRecoveryProof 绑定控制服务已隔离的原电脑、目标镜像及最后一次切换的控制版本。
+type UpgradeRecoveryProof struct {
+	Source                              computer.Specification
+	ContainerID, TargetImage, ErrorCode string
+	TargetFence                         int64
+}
+
+// CheckSource 在申请维护窗口前核对本机记录。退役时仍会在用户锁内重新核验容器、挂载和原盘。
+func (proof UpgradeRecoveryProof) CheckSource(ctx context.Context, directory string, owner uint32, socket string, timeout time.Duration) (result error) {
+	source := proof.Source
 	if source.Validate() != nil {
 		return failure("computer_image_upgrade_source_mismatch")
 	}
@@ -114,10 +122,32 @@ func CheckUpgradeSource(directory string, owner uint32, source computer.Specific
 	if err != nil {
 		return err
 	}
-	if state == nil || !immutableEqual(state.Specification, source) || state.Specification.FencingToken != source.FencingToken || state.ContainerID != containerID {
+	if state == nil || !immutableEqual(state.Specification, source) || state.ContainerID != proof.ContainerID {
 		return failure("computer_image_upgrade_source_mismatch")
 	}
-	if requireMarker {
+	if proof.ErrorCode == "container_stop_unconfirmed" {
+		plan := state.ImageUpgrade
+		if state.Phase != "upgrading" || plan == nil || plan.Current.FencingToken != source.FencingToken || plan.Target.FencingToken != proof.TargetFence || plan.Target.ImageReference != proof.TargetImage {
+			return failure("computer_image_upgrade_source_mismatch")
+		}
+		engine, err := newEngine(socket, timeout)
+		if err != nil {
+			return err
+		}
+		defer engine.close()
+		current, err := engine.inspectContainer(ctx, proof.ContainerID)
+		if err != nil {
+			return err
+		}
+		if current.ID != proof.ContainerID || current.Name != "/"+resourceName(source) || current.Config.Image != source.ImageReference || current.State.Status != "exited" || current.State.Running || current.State.Pid != 0 || current.State.Dead || current.HostConfig.RestartPolicy.Name != "no" {
+			return failure("container_stop_unconfirmed")
+		}
+		return journal.requireClosedSessions(ctx, source.UserID)
+	}
+	if state.Specification.FencingToken != source.FencingToken || (proof.ErrorCode != "" && proof.ErrorCode != "computer_image_upgrade_source_mismatch") {
+		return failure("computer_image_upgrade_source_mismatch")
+	}
+	if proof.ErrorCode == "" {
 		confirmed, err := journal.hasComputerRecovery(state)
 		if err != nil {
 			return err

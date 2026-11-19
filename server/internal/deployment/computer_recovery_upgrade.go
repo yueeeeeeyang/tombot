@@ -120,7 +120,8 @@ func (installer nodeInstaller) upgradeWithRecovery(ctx context.Context, executab
 			if inspection.Source == nil || inspection.Source.NodeID != current.NodeID || inspection.Target.Release != options.PackageSHA256 || inspection.Target.ComputerID != inspection.Source.ComputerID {
 				return report, errors.New("控制服务返回的电脑恢复身份不符")
 			}
-			if err := dockernode.CheckUpgradeSource(installer.fs.resolve(node.Runtime.StateDirectory), installer.fs.owner, *inspection.Source, inspection.Target.ContainerID, inspection.ErrorCode == ""); err != nil {
+			proof := dockernode.UpgradeRecoveryProof{Source: *inspection.Source, ContainerID: inspection.Target.ContainerID, TargetImage: current.Image.Reference, TargetFence: inspection.Target.Fence, ErrorCode: inspection.ErrorCode}
+			if err := proof.CheckSource(wait, installer.fs.resolve(node.Runtime.StateDirectory), installer.fs.owner, installer.fs.resolve(node.Runtime.Socket), time.Duration(node.Runtime.CallTimeout)*time.Millisecond); err != nil {
 				return report, fmt.Errorf("电脑 %s 的原容器或恢复标记未通过核验：%w", inspection.Target.ComputerID, err)
 			}
 			if !checkedArchive && options.ImagePackage != "" {

@@ -12,6 +12,13 @@ import (
 
 // 标准升级以已登记节点的签名，验证跨节点隔离、过期控制版本和回执重放。
 func TestSignedStandardUpgradeRecoversOnlyBoundPlan(t *testing.T) {
+	for _, code := range []string{"computer_image_upgrade_source_mismatch", "container_stop_unconfirmed"} {
+		t.Run(code, func(t *testing.T) { checkBoundRecovery(t, code) })
+	}
+}
+
+func checkBoundRecovery(t *testing.T, code string) {
+	t.Helper()
 	s, pool, actor, _ := serviceFixture(t, 2)
 	ctx := t.Context()
 	pair := certificate(t)
@@ -76,7 +83,10 @@ func TestSignedStandardUpgradeRecoversOnlyBoundPlan(t *testing.T) {
 	if err := hold(target); !errors.Is(err, ErrConflict) {
 		t.Fatal("其他故障被自动重试", err)
 	}
-	exec(`UPDATE tombot.computer_image_upgrades SET last_failure_code='computer_image_upgrade_source_mismatch' WHERE user_id=$1`, user)
+	exec(`UPDATE tombot.computer_image_upgrades SET last_failure_code=$2 WHERE user_id=$1`, user, code)
+	if check := inspect("retry"); check.ErrorCode != code || check.Target != target {
+		t.Fatal("恢复窗口未绑定原故障与控制版本", check)
+	}
 	other := claim
 	other.NodeID = ids.New()
 	other.Maintenance = &MaintenanceRequest{InspectRelease: release}

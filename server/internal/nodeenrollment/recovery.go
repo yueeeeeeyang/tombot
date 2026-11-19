@@ -46,7 +46,7 @@ func inspectRecovery(ctx context.Context, tx *sql.Tx, nodeID, imageID, release s
       IS DISTINCT FROM (p.node_id,p.source_image_id,p.source_generation,p.source_container_id) THEN 'blocked'
  WHEN p.state IN ('draining','switching') THEN 'waiting'
  WHEN p.attempt_count=0 OR p.lease_expires_at IS NOT NULL OR p.recovery_release=$3 OR
-      (p.last_failure_code IS NOT NULL AND p.last_failure_code<>'computer_image_upgrade_source_mismatch') THEN 'blocked'
+      NOT tombot.can_retry_computer_upgrade_failure(p.last_failure_code) THEN 'blocked'
  WHEN EXISTS (SELECT 1 FROM tombot.node_verifications v WHERE v.node_id=p.node_id AND v.lease_expires_at>clock_timestamp()) THEN 'waiting'
  ELSE 'retry' END,p.source_specification,p.computer_id,p.source_container_id,
  coalesce((p.target_specification->>'fencing_token')::bigint,0),coalesce(p.last_failure_code,'')
