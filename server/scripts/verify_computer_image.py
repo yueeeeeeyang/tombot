@@ -431,6 +431,49 @@ def verify_desktop_browsers(first, second, restored=False):
 
 
 
+def verify_program_entrypoints():
+    """通过镜像中的正式入口启动外置代理，核对真实进程版本、控制监听及降权 Bot 入口。"""
+    control = Path("/run/tombot-control")
+    revision = os.environ["TOM_TEST_PROGRAM_CORE"]
+    (control / "program-core").write_text(revision + "\n")
+    agent = "/usr/lib/tombot/computer-agent"
+    require(subprocess.run([agent], capture_output=True, timeout=5).returncode != 0, "未配置的电脑代理不能报告成功")
+    options = json.loads(os.environ["TOM_TEST_AGENT_OPTIONS"])
+    identity = {name: str(number).zfill(26) for number, name in enumerate(("user_id", "computer_id", "node_id"), 1)}
+    config = control / "config.json"
+    config.write_text(json.dumps({"version": 4, "identity": {**identity, "generation": 1}, "options": options}, separators=(",", ":")))
+    config.chmod(0o600)
+    (control / "program-core").write_text("0" * 64 + "\n")
+    missing = subprocess.run([agent], capture_output=True, timeout=5)
+    require(missing.returncode == 127 and not (control / "agent.sock").exists(), "选定的程序缺失时仍启动了电脑代理")
+    (control / "program-core").write_text(revision + "\n")
+    with subprocess.Popen([agent], stdout=subprocess.DEVNULL) as process:
+        try:
+            wait_for(lambda: (control / "agent.sock").is_socket() or process.poll() is not None, "外置电脑代理启动超时", 12)
+            require(process.poll() is None, "外置电脑代理在建立控制监听前退出")
+            # 在限制进程窥探的正式 seccomp 配置下，使用内核返回的监听对端确认该启动进程已就绪。
+            with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as client:
+                client.settimeout(3)
+                client.connect(str(control / "agent.sock"))
+                peer_pid, _, _ = struct.unpack("3i", client.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                require(peer_pid == process.pid, "监听入口的进程与节点启动的外置代理不一致")
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+                raise
+        require(process.returncode == 0, "外置电脑代理未正常停止")
+    task = subprocess.run(["/usr/lib/tombot/computer-task", "--invalid"], capture_output=True, timeout=5)
+    require(task.returncode == 125 and "任务引导".encode() in task.stderr, "基础任务入口未运行所选程序")
+    bot = subprocess.run(["/usr/lib/tombot/bot-agent", "--invalid"], user=100001, group=20000, extra_groups=[],
+                         capture_output=True, timeout=5)
+    require(bot.returncode == 125 and b"Bot Agent" in bot.stderr, "降权后的桌面无法执行当前 Bot 程序")
+    return revision
+
+
 def inside(restored=False):
     require(os.getuid() == 0 and Path("/etc/os-release").is_file(), "验收入口必须运行在测试容器内")
     release = Path("/etc/os-release").read_text()
@@ -442,10 +485,10 @@ def inside(restored=False):
         subprocess.run(preparation, user=0, group=20000, extra_groups=[], check=True, timeout=10)
     require(subprocess.run(preparation, user=100001, group=20000, extra_groups=[],
                            capture_output=True, timeout=5).returncode != 0, "普通 Bot 不得执行运行空间初始化")
-    require(subprocess.run(["/usr/lib/tombot/computer-agent"], capture_output=True, timeout=5).returncode != 0,
-            "未配置的电脑代理不能报告成功")
+    revision = verify_program_entrypoints()
     for uid in (0, 30001):
-        probe = subprocess.run(["/usr/lib/tombot/computer-probe"], user=uid, group=0 if uid == 0 else 20000,
+        probe_path = "/usr/lib/tombot/computer-probe" if uid == 0 else f"/usr/lib/tombot/programs/{revision}/computer-probe"
+        probe = subprocess.run([probe_path], user=uid, group=0 if uid == 0 else 20000,
                                extra_groups=[], capture_output=True, timeout=5)
         require(probe.returncode == 125 and not probe.stdout,
                 "没有封存授权和真实服务组的探针不得输出成功证据")
@@ -526,15 +569,55 @@ for name, uid, mode in [('workspace', 0, 0o2770), ('desktops', 0, 0o711)]:
         subprocess.run(["docker", "volume", "rm", name], check=True, timeout=30)
 
 
-def verify(image, report):
+@contextmanager
+def mounted_programs(architecture, package):
+    """在宿主端准备只读挂载，验收真实的外置 ELF；不把测试程序写入镜像。"""
+    from node_release import PROGRAMS, verify as verify_package
+    import tarfile
+    with tempfile.TemporaryDirectory(prefix="tombot-image-programs-") as path:
+        root = Path(path).resolve()
+        binaries = root / "bin"
+        binaries.mkdir()
+        if package:
+            profile = verify_package(package)
+            require(set(profile) == {"version", "label", "platform"} and profile["version"] == 2 and profile.get("platform") == "linux/" + architecture,
+                    "程序包与待验收镜像架构不匹配")
+            with tarfile.open(package, "r:gz") as archive:
+                for name in PROGRAMS[1:]:
+                    with archive.extractfile(name) as src, (binaries / name).open("xb") as dst:
+                        shutil.copyfileobj(src, dst)
+                    (binaries / name).chmod(0o755)
+        else:
+            environment = {**os.environ, "GOOS": "linux", "GOARCH": architecture, "CGO_ENABLED": "0"}
+            for name in PROGRAMS[1:]:
+                subprocess.run(["go", "build", "-trimpath", "-o", str(binaries / name), "./cmd/" + name],
+                               cwd=Path(__file__).resolve().parents[1], env=environment, check=True, timeout=300)
+        revision = hashlib.sha256("".join(n + " " + hashlib.sha256((binaries / n).read_bytes()).hexdigest() + "\n"
+                                          for n in PROGRAMS[1:] if n != "bot-agent").encode()).hexdigest()
+        programs = root / "programs"
+        programs.mkdir()
+        bot = hashlib.sha256((binaries / "bot-agent").read_bytes()).hexdigest()
+        (programs / bot).mkdir()
+        (binaries / "bot-agent").rename(programs / bot / "bot-agent")
+        binaries.rename(programs / revision)
+        (programs / "bot").symlink_to(bot)
+        agent_options = json.loads((Path(__file__).resolve().parents[1] / "deploy/node.example.json").read_bytes())["agent"]
+        yield ["--mount", f"type=bind,src={programs},dst=/usr/lib/tombot/programs,readonly",
+               "--tmpfs", "/run/tombot-control:rw,nosuid,nodev,noexec,mode=0700,size=1048576",
+               "--env", "TOM_TEST_AGENT_OPTIONS=" + json.dumps(agent_options), "--env", "TOM_TEST_PROGRAM_CORE=" + revision]
+
+
+def verify(image, report, package=None):
     name = "tombot-image-check-" + uuid.uuid4().hex
     profile = Path(__file__).resolve().parents[1] / "deploy/computer/seccomp.json"
     inspected = json.loads(subprocess.run(["docker", "image", "inspect", image], check=True, timeout=30, capture_output=True).stdout)
     require(len(inspected) == 1 and inspected[0]["Config"]["Labels"].get("io.tombot.computer.storage-layout") == "2"
-            and inspected[0]["Config"]["Labels"].get("io.tombot.computer.desktop-browser") == "1",
+            and inspected[0]["Config"]["Labels"].get("io.tombot.computer.desktop-browser") == "1"
+            and inspected[0]["Config"]["Labels"].get("io.tombot.computer.external-programs") == "1",
             "镜像持久盘布局版本不匹配")
-    with tempfile.TemporaryDirectory(prefix="tombot-image-evidence-") as directory, test_volume(name + "-volume", image) as volume:
-        command = ["--init", "--hostname", "desktop-verification", "--network", "none", "--read-only",
+    with tempfile.TemporaryDirectory(prefix="tombot-image-evidence-") as directory, test_volume(name + "-volume", image) as volume, \
+            mounted_programs(inspected[0]["Architecture"], package) as mounts:
+        command = [*mounts, "--init", "--hostname", "desktop-verification", "--network", "none", "--read-only",
                    "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--pids-limit", "768",
                    "--security-opt", f"seccomp={profile}",
                    "--env", "TOM_TEST_SECCOMP_SHA256=" + hashlib.sha256(profile.read_bytes()).hexdigest(),
@@ -565,6 +648,7 @@ def verify(image, report):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default="tombot-computer:trixie")
+    parser.add_argument("--program-package", type=Path, help="与镜像配套的节点程序包")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--restore-logins", action="store_true", help=argparse.SUPPRESS)
@@ -574,4 +658,4 @@ if __name__ == "__main__":
     else:
         target = arguments.report or Path(tempfile.gettempdir()) / ("tombot-image-report-" + uuid.uuid4().hex)
         require(not target.exists(), "验收产物目录已存在，不覆盖旧结果")
-        verify(arguments.image, target.resolve())
+        verify(arguments.image, target.resolve(), arguments.program_package)

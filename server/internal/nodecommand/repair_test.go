@@ -56,17 +56,22 @@ func TestRepairCommandOptionsAndFailures(t *testing.T) {
 	}
 }
 
-func TestUpgradeRequiresNoPathOrEndpoint(t *testing.T) {
-	for _, args := range [][]string{{"tomnode", "upgrade"}, {"tomnode", "upgrade", "/other"}, {"tomnode", "upgrade", "--listen", "10.0.0.1:9444"}} {
+func TestUpgradeAcceptsOnlyAnExplicitAbsoluteImageDirectory(t *testing.T) {
+	for _, args := range [][]string{{"tomnode", "upgrade"}, {"tomnode", "upgrade", "--image-package", "/image"}, {"tomnode", "upgrade", "--image-package", "relative"}, {"tomnode", "upgrade", "/other"}, {"tomnode", "upgrade", "--listen", "10.0.0.1:9444"}} {
 		calls := 0
+		image := ""
+		if len(args) == 4 && args[2] == "--image-package" && args[3] == "/image" {
+			image = args[3]
+		}
+		valid := len(args) == 2 || image != ""
 		code := execute(t.Context(), args, func(string) string { return "" }, io.Discard, slog.Default(), dependencies{repair: func(_ context.Context, o deployment.NodeRepairOptions) (deployment.NodeInstallationReport, error) {
 			calls++
-			if !o.Upgrade || o.Listen != "" || o.ImagePackage != "" {
+			if !o.Upgrade || o.Listen != "" || o.ImagePackage != image {
 				t.Fatal(o)
 			}
 			return deployment.NodeInstallationReport{State: "control_started"}, nil
 		}})
-		if len(args) == 2 && (code != 0 || calls != 1) || len(args) != 2 && (code != 2 || calls != 0) {
+		if valid && (code != 0 || calls != 1) || !valid && (code != 2 || calls != 0) {
 			t.Fatal(args, code, calls)
 		}
 	}

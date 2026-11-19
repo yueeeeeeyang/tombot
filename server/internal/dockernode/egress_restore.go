@@ -78,6 +78,15 @@ func (node *Runtime) restoreUserEgress(ctx context.Context, logger *slog.Logger,
 	if state.Phase == "absent" && !current.absent() {
 		return failure("closed_generation_has_resources")
 	}
+	if wasReady && current.hasContainer && current.container.State.Running && resource.ExternalPrograms {
+		core, err := node.selectedComputerPrograms(resource)
+		if err != nil {
+			return err
+		}
+		if core != node.options.ProgramCore {
+			return node.restoreComputer(ctx, logger, resource, state, current)
+		}
+	}
 	if resuming || wasReady && !current.container.State.Running {
 		return node.restoreComputer(ctx, logger, resource, state, current)
 	}

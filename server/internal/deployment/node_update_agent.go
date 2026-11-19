@@ -32,7 +32,7 @@ type updateClient struct {
 }
 
 func (c updateClient) call(ctx context.Context, action, job, state string, index int, max int64) ([]byte, error) {
-	message, err := (noderelease.Call{Node: c.node, Platform: c.platform, Action: action, Job: job, Index: index, State: state}).Sign(c.pair)
+	message, err := (noderelease.Call{PackageVersion: 2, Node: c.node, Platform: c.platform, Action: action, Job: job, Index: index, State: state}).Sign(c.pair)
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +124,18 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 		if m.Platform != c.platform {
 			return errors.New("节点与发布包架构不匹配")
 		}
+		if m.Kind == noderelease.Image {
+			installer := nodeInstaller{fs: fs, systemctl: runNodeSystemctl}
+			installer.inspectRecovery = installer.inspectNodeRecovery
+			installed, err := installer.installedReleaseImage(ctx, m)
+			if err != nil {
+				return err
+			}
+			if installed {
+				state = "started"
+				return nil
+			}
+		}
 		dir := filepath.Join(updateCache, a.Artifact)
 		if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 			if err = c.stage(ctx, dir, a, m); err != nil {
@@ -135,15 +147,21 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 		if err = fs.directory(dir, account{}, false, false, false); err != nil {
 			return err
 		}
-		sums, err := fs.readInstallationSource(filepath.Join(dir, "SHA256SUMS"), 64<<10, fs.owner)
+		sums, err := fs.readInstallationSource(filepath.Join(dir, noderelease.SumFile(m.Kind)), 64<<10, fs.owner)
 		if err != nil || noderelease.Digest(sums) != m.Checksums {
 			return errors.New("缓存校验清单与本次升级任务不符")
 		}
-		program, err := fs.readInstallationSource(filepath.Join(dir, "tomnode"), maximumNodeBinaryBytes, fs.owner)
-		if err != nil || !strings.Contains("\n"+string(sums), "\n"+contentDigest(program)+"  tomnode\n") || noderelease.ValidateExecutable(program, c.platform) != nil {
-			return errors.New("缓存程序身份或架构无效")
+		path := nodeBinaryPath
+		args := []string{"upgrade", "--image-package", dir}
+		if m.Kind != noderelease.Image {
+			path = filepath.Join(dir, "tomnode")
+			program, err := fs.readInstallationSource(path, maximumNodeBinaryBytes, fs.owner)
+			if err != nil || !strings.Contains("\n"+string(sums), "\n"+contentDigest(program)+"  tomnode\n") || noderelease.ValidateExecutable(program, c.platform) != nil {
+				return errors.New("缓存程序身份或架构无效")
+			}
+			args = []string{"upgrade"}
 		}
-		command := exec.CommandContext(ctx, filepath.Join(dir, "tomnode"), "upgrade")
+		command := exec.CommandContext(ctx, path, args...)
 		command.Dir = dir
 		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
 		command.Stdout = os.Stdout
@@ -217,4 +235,49 @@ func (c updateClient) stage(ctx context.Context, dest string, a noderelease.Assi
 		return err
 	}
 	return syncDirectory(filepath.Dir(dest))
+}
+
+// installedReleaseImage 仅复用已提交、已复核且无待恢复安装事务的相同镜像；中断事务仍进入原升级流程。
+func (installer nodeInstaller) installedReleaseImage(ctx context.Context, manifest noderelease.Manifest) (installed bool, failure error) {
+	fs := installer.fs
+	unlock, err := fs.lockNodeInstallation()
+	if err != nil {
+		return false, err
+	}
+	defer func() { failure = errors.Join(failure, unlock()) }()
+	if _, err = os.Lstat(fs.resolve(nodeRepairDirectory)); err == nil {
+		return false, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	record, err := installer.installedNodeRecord()
+	if err != nil {
+		return false, err
+	}
+	req, digest, err := parseNodeInstallRequest(record.Request)
+	if err != nil || digest != record.RequestSHA256 {
+		return false, errors.New("镜像复用前无法核对节点安装记录")
+	}
+	if !req.Programs.valid() || req.Image.Reference != manifest.ImageReference || req.Image.ArchiveSHA256 != manifest.ArchiveSHA256 {
+		return false, nil
+	}
+	runtimeDigest, err := noderelease.RuntimeDigest(req.Docker)
+	if err != nil || runtimeDigest != manifest.RuntimeSHA256 {
+		return false, err
+	}
+	if _, err := installer.verifyInstallation(ctx, record); err != nil {
+		return false, err
+	}
+	status, err := installer.inspectRecovery(ctx, req, manifest.Checksums)
+	if err != nil {
+		return false, err
+	}
+	if status == nil || status.State != "clear" {
+		return false, nil
+	}
+	if err := installer.systemctl(ctx, "is-active", "--quiet", nodeServiceName); err != nil {
+		// 未启动时交回完整安装流程，由其启动节点并验收。
+		return false, nil
+	}
+	return true, nil
 }

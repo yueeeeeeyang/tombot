@@ -95,7 +95,7 @@ class ReleaseBundleTest(unittest.TestCase):
 
     def test_required_host_programs_and_image_context_cannot_be_missing(self):
         for name in ("linux-amd64/bin/tomd", "linux-arm64/bin/tomnode",
-                     "linux-arm64/computer-image/bin/bot-agent", "linux-amd64/computer-image/Dockerfile",
+                     "linux-arm64/bin/bot-agent", "linux-amd64/computer-image/Dockerfile",
                      "linux-arm64/computer-image/desktop-environment.json", "deploy/tomd.service",
                      "linux-amd64/bin/tomnode", "linux-arm64/bin/tomnode",
                      "deploy/CONFIGURE.md", "deploy/NODE.md", "deploy/SERVER.md", "deploy/node-install.example.json",
@@ -225,6 +225,24 @@ class ReleaseBundleTest(unittest.TestCase):
         (source / "ui/linked.css").symlink_to(source / "ui/theme.css")
         with self.assertRaises(OSError):
             release.snapshot_sources(source)
+
+    def test_snapshot_accepts_declared_image_files_only_at_their_image_paths(self):
+        source, snapshot = self.directory / "source", self.directory / "snapshot"
+        make_source(source)
+        image = Path("server/deploy/computer")
+        (source / image).mkdir()
+        for name in release.IMAGE_FILES:
+            (source / image / name).write_bytes(name.encode())
+        digest = release.snapshot_sources(source, snapshot)
+        for name in release.IMAGE_FILES:
+            self.assertEqual((snapshot / image / name).read_bytes(), name.encode())
+        self.assertEqual(release.snapshot_sources(snapshot), digest)
+        for path in (image / "unknown.desktop", Path("ui/tombot-browser.desktop")):
+            with self.subTest(path=path):
+                (source / path).touch()
+                with self.assertRaisesRegex(release.ReleaseError, "未声明的文件类型"):
+                    release.snapshot_sources(source)
+                (source / path).unlink()
 
     def test_shared_frontend_asset_is_required_and_part_of_snapshot_digest(self):
         source = self.directory / "source"

@@ -9,10 +9,13 @@ import (
 	"unicode/utf8"
 )
 
+// MaximumConfigBytes 限制节点配置原文大小，升级迁移前也使用相同上限。
+const MaximumConfigBytes = 16 << 10
+
 // decodeConfig 允许缩进及字段重排，拒绝重复键、空值、大小写别名和转换后改变含义的值。
 func decodeConfig(encoded []byte, target *Config) error {
 	invalid := errors.New("节点配置 JSON 无效或包含歧义字段")
-	if len(encoded) == 0 || len(encoded) > 16<<10 || !utf8.Valid(encoded) {
+	if len(encoded) == 0 || len(encoded) > MaximumConfigBytes || !utf8.Valid(encoded) {
 		return invalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))

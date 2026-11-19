@@ -51,6 +51,9 @@ func (node *Runtime) UpgradeComputer(ctx context.Context, request computer.Image
 		if err != nil {
 			return observation, err
 		}
+		if err := node.verifyProgramImage(image, node.resource(request.Target)); err != nil {
+			return observation, err
+		}
 		if err := image.validate(request.Target.ImageReference, "linux/"+runtime.GOARCH); err != nil {
 			return observation, err
 		}

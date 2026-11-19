@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""在独立构建上下文中编译电脑程序并制作 Debian 13 专用镜像。"""
+"""在独立构建上下文中制作 Debian 13 专用镜像。"""
 
 import argparse
-import os
 from pathlib import Path
 import platform
 import re
@@ -13,7 +12,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_FILE = ROOT / "internal/computer/desktop-environment.json"
-IMAGE_FILES = ("Dockerfile", "desktop.py", "files.py", "open_browser.py", "tombot-browser.desktop", "prepare.py", "xfce4-session.xml", "xfwm4.xml", "xfce4-desktop.xml",
+IMAGE_FILES = ("Dockerfile", "start_program.sh", "desktop.py", "files.py", "open_browser.py", "tombot-browser.desktop", "prepare.py", "xfce4-session.xml", "xfwm4.xml", "xfce4-desktop.xml",
                "install_tools.py", "tools.lock.json", "verify_tools.py",
                "seccomp.json", "seccomp-source.json", "seccomp.LICENSE")
 
@@ -25,17 +24,12 @@ def image_tag(value):
 
 
 def build(tag, architecture):
-    environment = {**os.environ, "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": architecture}
     with tempfile.TemporaryDirectory(prefix="tombot-computer-build-") as directory:
         context = Path(directory)
-        (context / "bin").mkdir()
         for name in IMAGE_FILES:
             (context / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(ROOT / "deploy" / "computer" / name, context / name)
         shutil.copyfile(ENVIRONMENT_FILE, context / "desktop-environment.json")
-        for name in ("computer-agent", "computer-task", "computer-probe", "bot-agent"):
-            subprocess.run(["go", "build", "-trimpath", "-o", str(context / "bin" / name), f"./cmd/{name}"],
-                           cwd=ROOT, env=environment, check=True, timeout=300)
         subprocess.run(["docker", "buildx", "build", "--load", "--platform", f"linux/{architecture}",
                         "--tag", tag, str(context)], check=True, timeout=1800)
     subprocess.run(["docker", "image", "inspect", "--format", "{{.Id}} {{.Architecture}}", tag],

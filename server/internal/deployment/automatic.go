@@ -80,14 +80,23 @@ func (installer nodeInstaller) prepareAutomatic(ctx context.Context, optionsPath
 	}
 	profileBytes, err := installer.fs.readInstallationSource(filepath.Join(filepath.Dir(executable), "node-release.json"), 64<<10, installer.caller)
 	if err != nil {
-		return installationInput{}, errors.New("缺少配套离线安装清单，请完整解压安装包后运行")
+		return installationInput{}, errors.New("缺少配套离线安装清单，请把程序包和电脑镜像包解压到同一目录后运行")
 	}
 	var release nodeRelease
-	if decodePreparation(profileBytes, &release) != nil || release.Version != 1 || release.Platform != installer.platform || computer.ValidateImageReference(release.ImageReference) != nil || len(release.ArchiveSHA256) != 64 || strings.Trim(release.ArchiveSHA256, "0123456789abcdef") != "" {
+	if decodePreparation(profileBytes, &release) != nil || (release.Version != 1 && release.Version != 2) || release.Platform != installer.platform || computer.ValidateImageReference(release.ImageReference) != nil || len(release.ArchiveSHA256) != 64 || strings.Trim(release.ArchiveSHA256, "0123456789abcdef") != "" {
 		return installationInput{}, errors.New("离线发布清单或平台无效")
 	}
 	if _, err := dockerbootstrap.ParseManifest(release.Docker); err != nil {
 		return installationInput{}, err
+	}
+	if release.Version == 2 {
+		if _, err := installer.checkUpgradePackage(filepath.Dir(executable), nil); err != nil {
+			return installationInput{}, err
+		}
+	} else if programs, err := installer.fs.hasReleaseManifest(filepath.Dir(executable), "program-release.json", noderelease.ProgramSums); err != nil {
+		return installationInput{}, err
+	} else if programs {
+		return installationInput{}, errMixedNodePackages
 	}
 	discover := installer.detectHost
 	if discover == nil {
@@ -178,6 +187,16 @@ func (installer nodeInstaller) prepareAutomatic(ctx context.Context, optionsPath
 		Server:  &nodeInstallServer{URL: code.URL, Fingerprints: code.Fingerprints, NodeURL: nodeURL},
 		Control: nodeInstallControl{Listen: listen, AllowPublic: !address.Addr().IsPrivate(), ClientFingerprints: bootstrap.ClientFingerprints},
 		Image:   imageSettings{Reference: release.ImageReference, ArchiveFile: filepath.Join(deploy.NodeDirectory, "computer-image.tar"), ArchiveSHA256: release.ArchiveSHA256, CallTimeoutSeconds: 30, TimeoutSeconds: 3600}, Docker: release.Docker}
+	if release.Version == 2 {
+		binary, err := installer.fs.readInstallationSource(executable, maximumNodeBinaryBytes, installer.caller)
+		if err != nil {
+			return installationInput{}, err
+		}
+		request.Programs, _, err = installer.stagePrograms(ctx, filepath.Dir(executable), binary)
+		if err != nil {
+			return installationInput{}, err
+		}
+	}
 	if _, _, err := renderNodeInstallation(request, installer.platform); err != nil {
 		return installationInput{}, err
 	}

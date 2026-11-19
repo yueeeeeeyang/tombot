@@ -21,16 +21,18 @@ import (
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/computerprobe"
 	"io.yueyang/tom/internal/egressproxy"
+	"io.yueyang/tom/internal/noderelease"
 	"io.yueyang/tom/internal/processgroup"
 )
 
 // Resource 的宿主存储目录和 Docker 名称均由节点派生，调用者不能传入任意名称或路径。
 type Resource struct {
-	Specification computer.Specification
-	Name          string
-	WorkspacePath string
-	ControlPath   string
-	Labels        map[string]string
+	ExternalPrograms bool
+	Specification    computer.Specification
+	Name             string
+	WorkspacePath    string
+	ControlPath      string
+	Labels           map[string]string
 }
 
 // Workspace 区分资源存在和可用挂载；只有 Ready 时 CapacityBytes 才表示已执行的硬容量。
@@ -57,6 +59,8 @@ type Probe interface {
 
 // Options 全部来自受保护节点配置，不通过管理 HTTP 接受 Docker 地址、入口命令或宿主目录。
 type Options struct {
+	ProgramCore            string
+	ProgramImage           string
 	NodeID                 string
 	Socket                 string
 	StateDirectory         string
@@ -172,6 +176,9 @@ func checkRootDockerSocket(path string) error {
 func (options Options) Validate() error { return validateOptions(options) }
 
 func validateOptions(options Options) error {
+	if options.ProgramCore != "" && (!noderelease.ValidDigest(options.ProgramCore) || computer.ValidateImageReference(options.ProgramImage) != nil) {
+		return failure("node_program_configuration_invalid")
+	}
 	if (computer.NodeQuery{NodeID: options.NodeID}).Validate() != nil {
 		return errors.New("电脑节点标识无效")
 	}
@@ -251,7 +258,7 @@ func (node *Runtime) resource(specification computer.Specification) Resource {
 		panic("电脑资源身份无法编码")
 	}
 	digest := sha256.Sum256(encoded)
-	return Resource{Specification: specification, Name: name, WorkspacePath: filepath.Join(node.options.StorageDirectory, name, "workspace"), ControlPath: filepath.Join(node.options.StateDirectory, "agent-"+name), Labels: map[string]string{
+	return Resource{ExternalPrograms: node.options.ProgramCore != "" && specification.ImageReference == node.options.ProgramImage, Specification: specification, Name: name, WorkspacePath: filepath.Join(node.options.StorageDirectory, name, "workspace"), ControlPath: filepath.Join(node.options.StateDirectory, "agent-"+name), Labels: map[string]string{
 		"io.tombot.managed": "computer", "io.tombot.node": specification.NodeID, "io.tombot.user": specification.UserID,
 		"io.tombot.computer": specification.ComputerID, "io.tombot.operation": specification.OperationID, "io.tombot.generation": fmt.Sprint(specification.Generation), "io.tombot.identity": hex.EncodeToString(digest[:])}}
 }

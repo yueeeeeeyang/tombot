@@ -43,14 +43,14 @@ make computer-image
 make test-computer-image
 ```
 
-默认构建当前机器的 amd64 或 arm64 架构，只加载到本地 Docker，不推送镜像。构建上下文只含镜像配置与本次编译的 `computer-agent`、`computer-task`、`computer-probe`、`bot-agent`，不发送整个仓库、用户文件或本地环境配置。也可以指定目标：
+默认构建当前机器的 amd64 或 arm64 架构，只加载到本地 Docker，不推送镜像。构建上下文只含桌面环境及固定启动脚本。四个 Go 程序由节点按版本只读挂入容器，不发送整个仓库、用户文件或本地环境配置。也可以指定目标：
 
 ```sh
 make computer-image IMAGE_ARGS="--architecture amd64 --tag tombot-computer:trixie"
 make test-computer-image IMAGE_TEST_ARGS="--image tombot-computer:trixie"
 ```
 
-构建需要本地 Go、Docker Buildx，以及访问官方 Debian、Node.js、Go、Google 和 GitHub 下载源。项目程序仍按 `go.mod` 构建；用户电脑内的 Go 工具链为 1.27，两者用途不同。联网构建有超时和有限重试，摘要不匹配、版本不符或下载失败均中止，不切换为缺少工具的镜像。
+构建镜像需要 Docker Buildx，以及访问官方 Debian、Node.js、Go、Google 和 GitHub 下载源。验收脚本支持 `--program-package` 指定同架构的节点程序包；省略时会用本地 Go 按 `go.mod` 编译测试所需程序；用户电脑内的 Go 工具链为 1.27，两者用途不同。联网构建有超时和有限重试，摘要不匹配、版本不符或下载失败均中止，不切换为缺少工具的镜像。
 
 验收脚本创建全新临时卷和容器：禁网、只读根目录、使用下述默认拒绝的专用 seccomp 配置、不可提权、限定 CPU/内存/进程，仅添加与电脑代理相同的六项 capability。不挂载 Docker socket、宿主 cgroup 或已有用户卷。测试验证工具版本、Python 虚拟环境、Go/Rust/C 编译运行、LibreOffice 转 PDF 与读取、Chrome 真实页面执行及沙箱状态、两个独立图形桌面、真实 RFB 输入、共享文件和工具、跨桌面连接拒绝、固定截图尺寸以及定向关闭。结束后删除全部测试容器和临时卷，输出截图、工具清单和 Chrome 沙箱报告。
 
@@ -122,7 +122,7 @@ Python 项目通过 venv 或 uv 在共享工作目录建立环境；不覆盖 De
 
 ## Bot Agent 运行位置
 
-同一用户的 Bot 继续共用本容器，每个 Bot 需要独立的非 root Agent 进程和桌面。镜像的 `computer-agent` 是电脑基础设施监督器；新增 `/usr/lib/tombot/bot-agent` 承载模型与工具循环，使用私有标准流连接受限中继。入口拒绝 root、命令行覆盖和普通文件/终端作为协议通道；非 Linux 平台不能运行。
+同一用户的 Bot 继续共用本容器，每个 Bot 需要独立的非 root Agent 进程和桌面。节点只读挂入容器的 `computer-agent` 是电脑基础设施监督器；新增 `/usr/lib/tombot/bot-agent` 承载模型与工具循环，使用私有标准流连接受限中继。入口拒绝 root、命令行覆盖和普通文件/终端作为协议通道；非 Linux 平台不能运行。
 
 两个真实降权进程已验证独立循环，一个中断后另一个继续运行；信号取消能够唤醒等待回包的读取。测试启动器直接降权，没有代替生产任务引导与 cgroup 验收。Worker 分发、电脑代理监督及持久模型/操作中继已接通模块接口，Worker 不再调用同进程循环；现有主入口、业务工具与真实 cgroup 联合验收仍待完成。供应商配置和凭据继续只在服务端保存，不能让容器不可用时回退到宿主执行。完整协议及限制见 [Bot Agent 模块](../../internal/botagent/README.md)。
 

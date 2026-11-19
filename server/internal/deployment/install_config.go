@@ -50,6 +50,7 @@ type nodeInstallControl struct {
 
 // nodeInstallRequest 只包含公开部署参数与文件引用，私钥在节点首次安装时生成。
 type nodeInstallRequest struct {
+	Programs        programVersions    `json:"programs,omitzero"`
 	PreviousImageID string             `json:"previous_image_id,omitempty"`
 	Server          *nodeInstallServer `json:"server,omitempty"`
 	Name            string             `json:"node_name,omitempty"`
@@ -172,6 +173,10 @@ func renderNodeInstallation(request nodeInstallRequest, platform string) (config
 	if _, err := nodeapi.ParseListenAddress(node.Listen, node.AllowPublic); err != nil {
 		return configuration{}, nil, err
 	}
+	if request.Programs != (programVersions{}) && !request.Programs.valid() {
+		return configuration{}, nil, errors.New("节点程序安装记录无效")
+	}
+	node.Runtime.ProgramCore = request.Programs.Core
 	docker, err := dockerbootstrap.ParseManifest(request.Docker)
 	if err != nil || jsonshape.Validate(request.Docker, &dockerbootstrap.Manifest{}) != nil {
 		return configuration{}, nil, errors.New("节点安装需要有效的 Docker 引导清单")

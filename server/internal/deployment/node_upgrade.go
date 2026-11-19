@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
-	"io.yueyang/tom/internal/noderelease"
 	"os"
 	"path/filepath"
 	"time"
@@ -13,32 +12,43 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/nodecatalog"
 	"io.yueyang/tom/internal/nodeenrollment"
+	"io.yueyang/tom/internal/noderelease"
 )
 
-// checkUpgradePackage 核对同包程序、发布清单和配套文件；大归档在发布到私有目录时流式校验。
-func (installer nodeInstaller) checkUpgradePackage(directory string, program []byte) (string, error) {
+var errMixedNodePackages = errors.New("检测到拆分程序包与旧版完整包混用。请在新建空目录解压节点程序包。首次安装或首次切换时，将独立电脑镜像包也解压到该目录")
+
+// checkUpgradePackage 核对镜像及配套文件；只有提供 legacyProgram 时才可使用包含该程序的旧版完整包。
+func (installer nodeInstaller) checkUpgradePackage(directory string, legacyProgram []byte) (string, error) {
 	sums, err := installer.fs.readInstallationSource(filepath.Join(directory, "SHA256SUMS"), 64<<10, installer.caller)
 	if err != nil {
-		return "", errors.New("请从完整离线节点包执行 upgrade，缺少校验清单")
+		return "", errors.New("无法读取镜像包目录中的 SHA256SUMS，请核对目录并完整解压镜像包")
 	}
 	files, err := noderelease.ParseChecksums(sums)
 	if err != nil {
 		return "", err
 	}
-	if len(files) != 5 || files["tomnode"] == "" || files["computer-image.tar"] == "" || files["node-release.json"] == "" {
+	imageOnly := len(files) == 2 && files["computer-image.tar"] != "" && files["node-release.json"] != ""
+	if !imageOnly && (len(files) != 5 || files["tomnode"] == "" || files["computer-image.tar"] == "" || files["node-release.json"] == "") {
 		return "", errors.New("请解压完整节点离线包后，从包含 computer-image.tar 和 node-release.json 的目录执行 ./tomnode upgrade")
 	}
-	if files["tomnode"] != contentDigest(program) {
-		return "", errors.New("tomnode 与当前节点包的 SHA256SUMS 不匹配，请重新解压同一份完整节点离线包")
+	if !imageOnly && legacyProgram == nil {
+		return "", errMixedNodePackages
 	}
-	for _, name := range []string{"node-release.json", "node-install.example.json", "安装说明.txt"} {
+	if !imageOnly && files["tomnode"] != contentDigest(legacyProgram) {
+		return "", errors.New("tomnode 与当前节点包的 SHA256SUMS 不匹配，请从同一份归档重新解压。拆分程序包使用 PROGRAM-SHA256SUMS，首次切换请在新目录中同时解压程序包和独立电脑镜像包")
+	}
+	names := []string{"node-release.json"}
+	if !imageOnly {
+		names = append(names, "node-install.example.json", "安装说明.txt")
+	}
+	for _, name := range names {
 		content, err := installer.fs.readInstallationSource(filepath.Join(directory, name), 64<<10, installer.caller)
 		if err != nil || files[name] != contentDigest(content) {
 			return "", errors.New("升级包文件缺失或摘要不符：" + name)
 		}
 		if name == "node-release.json" {
 			var release nodeRelease
-			if decodePreparation(content, &release) != nil || release.ArchiveSHA256 == "" || release.ArchiveSHA256 != files["computer-image.tar"] {
+			if decodePreparation(content, &release) != nil || (release.Version == 2) != imageOnly || release.ArchiveSHA256 == "" || release.ArchiveSHA256 != files["computer-image.tar"] {
 				return "", errors.New("升级包镜像摘要与发布清单不一致")
 			}
 		}

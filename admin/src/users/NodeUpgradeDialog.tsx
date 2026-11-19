@@ -42,7 +42,7 @@ function ReleaseFile({
         <input
           type="file"
           className="sr-only"
-          aria-label="完整离线包"
+          aria-label="程序包或电脑镜像包"
           aria-describedby={id + '-name ' + id}
           accept=".tar.gz,.tgz,.gz"
           disabled={disabled}
@@ -52,14 +52,14 @@ function ReleaseFile({
           <Archive size={20} aria-hidden="true" />
         </span>
         <span className="upgrade-file-name">
-          <strong>完整离线包</strong>
+          <strong>程序包或电脑镜像包</strong>
           <span id={id + '-name'} title={file?.name}>
-            {file?.name ?? '例如 tomnode-linux-amd64-offline.tar.gz'}
+            {file?.name ?? '例如 tomnode-linux-amd64-programs.tar.gz'}
           </span>
         </span>
         <span className="upgrade-file-action">{file ? '更换' : '选择文件'}</span>
       </label>
-      <small id={id}>选择与节点架构匹配的离线包，无需解压。上传后可选择多个节点升级。</small>
+      <small id={id}>日常升级上传节点程序包。首次部署或更新桌面环境时，另行上传电脑镜像包。</small>
     </div>
   )
 }
@@ -175,7 +175,10 @@ export function NodeUpgradeDialog({
           <>
             <p className="upgrade-impact">
               <CircleAlert size={16} aria-hidden="true" />
-              <span>节点服务将重启，当前会话可能中断。已有电脑和磁盘会保留。</span>
+              <span>
+                仅更新 bot-agent
+                时，新会话使用新版。更新节点、基础代理或镜像会进入维护，已有电脑磁盘会保留。
+              </span>
             </p>
             <div className="upgrade-version">
               <div className="upgrade-section-heading">
@@ -199,7 +202,15 @@ export function NodeUpgradeDialog({
                 placeholder={value.releases.length ? '选择已上传的发布包' : '暂无已上传的发布包'}
                 options={value.releases.map((r) => ({
                   value: r.id,
-                  label: r.label + ' · ' + r.platform,
+                  label:
+                    r.label +
+                    ' · ' +
+                    r.platform +
+                    (r.kind === 'programs'
+                      ? ' · 节点程序'
+                      : r.kind === 'image'
+                        ? ' · 电脑镜像'
+                        : ''),
                   description: r.id.slice(0, 8),
                 }))}
               />

@@ -64,6 +64,7 @@ type APIConfig struct {
 	MaximumConnections int          `json:"maximum_connections"`
 }
 type RuntimeConfig struct {
+	ProgramCore            string       `json:"program_core,omitempty"`
 	Socket                 string       `json:"docker_socket"`
 	StateDirectory         string       `json:"state_directory"`
 	StorageDirectory       string       `json:"storage_directory"`
@@ -143,7 +144,11 @@ func (configuration EgressConfig) options() egressproxy.Options {
 }
 func (configuration Config) runtimeOptions() dockernode.Options {
 	value := configuration.Runtime
-	return dockernode.Options{NodeID: configuration.NodeID, Socket: value.Socket, StateDirectory: value.StateDirectory, StorageDirectory: value.StorageDirectory, CallTimeout: value.CallTimeout.duration(), MaximumLease: value.MaximumLease.duration(), TemporaryBytes: value.TemporaryBytes, RuntimeBytes: value.RuntimeBytes, SharedMemoryBytes: value.SharedMemoryBytes, Agent: configuration.Agent, AgentStartup: configuration.AgentStartup.options(), Probes: dockernode.ProbeOptions{CallTimeout: configuration.Probe.CallTimeout.duration(), CleanupTimeout: configuration.Probe.CleanupTimeout.duration(), Groups: configuration.Groups.options()}, Browser: dockernode.BrowserOptions{CallTimeout: configuration.Browser.CallTimeout.duration(), CleanupTimeout: configuration.Browser.CleanupTimeout.duration(), ShutdownTimeout: configuration.Browser.ShutdownTimeout.duration(), Groups: configuration.Groups.options()}, Egress: configuration.Egress.options(), MaximumEgressComputers: value.MaximumEgressComputers}
+	target := ""
+	if configuration.Enrollment != nil {
+		target = configuration.Enrollment.Registration.ImageReference
+	}
+	return dockernode.Options{ProgramCore: value.ProgramCore, ProgramImage: target, NodeID: configuration.NodeID, Socket: value.Socket, StateDirectory: value.StateDirectory, StorageDirectory: value.StorageDirectory, CallTimeout: value.CallTimeout.duration(), MaximumLease: value.MaximumLease.duration(), TemporaryBytes: value.TemporaryBytes, RuntimeBytes: value.RuntimeBytes, SharedMemoryBytes: value.SharedMemoryBytes, Agent: configuration.Agent, AgentStartup: configuration.AgentStartup.options(), Probes: dockernode.ProbeOptions{CallTimeout: configuration.Probe.CallTimeout.duration(), CleanupTimeout: configuration.Probe.CleanupTimeout.duration(), Groups: configuration.Groups.options()}, Browser: dockernode.BrowserOptions{CallTimeout: configuration.Browser.CallTimeout.duration(), CleanupTimeout: configuration.Browser.CleanupTimeout.duration(), ShutdownTimeout: configuration.Browser.ShutdownTimeout.duration(), Groups: configuration.Groups.options()}, Egress: configuration.Egress.options(), MaximumEgressComputers: value.MaximumEgressComputers}
 }
 
 // Validate 复用各领域的权威参数校验，并检查组件之间的时限和目录关系。

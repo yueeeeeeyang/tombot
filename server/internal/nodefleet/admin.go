@@ -46,6 +46,24 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 		var result any = struct{}{}
 		var err error
 		path := strings.TrimPrefix(r.URL.Path, AdminPath)
+		if r.Method == "POST" && (path == "uploads" || path == "releases") {
+			select {
+			case verifySlots <- struct{}{}:
+				defer func() { <-verifySlots }()
+			default:
+				fail(w, 429, "UPDATE_BUSY", "正在校验其他升级包，请稍后重试", logger)
+				return
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				fail(w, 500, "UPDATE_FAILED", "升级校验缺少请求时限", logger)
+				return
+			}
+			if err = http.NewResponseController(w).SetWriteDeadline(deadline.Add(time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				fail(w, 500, "UPDATE_FAILED", "设置升级校验时限失败", logger)
+				return
+			}
+		}
 		switch {
 		case r.Method == "GET" && path == "status":
 			result, err = s.status(ctx)
@@ -57,7 +75,7 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 			if httpjson.Decode(r, &input, 1024) != nil {
 				err = ErrInput
 			} else {
-				result, err = s.begin(p.UserID, input.Artifact, input.Size)
+				result, err = s.begin(ctx, p.UserID, input.Artifact, input.Size)
 			}
 		case r.Method == "POST" && path == "releases":
 			var input struct {
@@ -65,21 +83,6 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 			}
 			if httpjson.Decode(r, &input, 1024) != nil {
 				err = ErrInput
-				break
-			}
-			select {
-			case verifySlots <- struct{}{}:
-				defer func() { <-verifySlots }()
-			default:
-				fail(w, 429, "UPDATE_BUSY", "正在校验其他升级包，请稍后重试", logger)
-				return
-			}
-			deadline, ok := ctx.Deadline()
-			if !ok {
-				err = errors.New("升级校验缺少请求时限")
-				break
-			}
-			if err = http.NewResponseController(w).SetWriteDeadline(deadline.Add(time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
 				break
 			}
 			result, err = s.publish(ctx, p.UserID, input.Artifact)
@@ -151,14 +154,14 @@ type dashboard struct {
 func (s Service) status(ctx context.Context) (dashboard, error) {
 	value := dashboard{[]Release{}, []Job{}}
 	err := s.DB.Platform(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id,label,platform FROM tombot.node_releases JOIN tombot.node_release_archives USING(artifact) ORDER BY created_at DESC LIMIT 50`)
+		rows, err := tx.QueryContext(ctx, `SELECT id,label,platform,coalesce(manifest->>'kind','') FROM tombot.node_releases JOIN tombot.node_release_archives USING(artifact) ORDER BY created_at DESC LIMIT 50`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var r Release
-			if err := rows.Scan(&r.ID, &r.Label, &r.Platform); err != nil {
+			if err := rows.Scan(&r.ID, &r.Label, &r.Platform, &r.Kind); err != nil {
 				return err
 			}
 			value.Releases = append(value.Releases, r)

@@ -1,4 +1,4 @@
-.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-time-namespaces test-server-https-browser computer-image test-computer-image build release release-linux-amd64 verify-release node-release verify-node-release
+.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-time-namespaces test-server-https-browser computer-image test-computer-image build release release-linux-amd64 verify-release node-release node-image-release verify-node-release
 
 GO ?= go
 NPM ?= npm
@@ -70,7 +70,10 @@ verify-release:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_bundle.py verify $(RELEASE_VERIFY_ARGS)
 
 node-release:
-	PYTHONDONTWRITEBYTECODE=1 python3 scripts/node_release.py build $(NODE_RELEASE_ARGS)
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/node_release.py programs $(NODE_RELEASE_ARGS)
+
+node-image-release:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/node_release.py image $(NODE_RELEASE_ARGS)
 
 verify-node-release:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/node_release.py verify $(NODE_RELEASE_VERIFY_ARGS)

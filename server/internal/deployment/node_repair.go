@@ -26,6 +26,7 @@ const nodeRepairDirectory = "/etc/tombot/node-repair"
 
 // NodeRepairOptions 允许修正端点和导入完整离线镜像包，不接受新节点身份或凭据。
 type NodeRepairOptions struct {
+	Programs       programVersions               `json:"programs,omitzero"`
 	AwaitComputers bool                          `json:"await_computers,omitempty"`
 	Recovery       nodeenrollment.RecoveryTarget `json:"recovery,omitzero"`
 	PackageSHA256  string                        `json:"package_sha256,omitempty"`
@@ -88,7 +89,6 @@ func RepairNode(ctx context.Context, executable string, caller uint32, options N
 		return nil
 	}
 	if options.Upgrade {
-		options.ImagePackage = filepath.Dir(executable)
 		installer.maintain = installer.maintainNode
 		installer.inspectRecovery = installer.inspectNodeRecovery
 		installer.holdRecovery = installer.holdNodeRecovery
@@ -124,9 +124,43 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 		}
 		return installer.applyNodeRepair(ctx, executable, program, options, checkStopped)
 	}
-	options.PackageSHA256, err = installer.checkUpgradePackage(options.ImagePackage, program)
+	dir := filepath.Dir(executable)
+	programs, err := installer.fs.hasReleaseManifest(dir, "program-release.json", noderelease.ProgramSums)
 	if err != nil {
 		return report, err
+	}
+	if options.ImagePackage == "" {
+		// 只有纯程序包可以省略镜像。两份清单同目录时仍支持首次迁移一次完成。
+		options.ImagePackage = dir
+		if programs {
+			image, err := installer.fs.hasReleaseManifest(dir, "node-release.json", "SHA256SUMS")
+			if err != nil {
+				return report, err
+			}
+			if !image {
+				options.ImagePackage = ""
+			}
+		}
+	}
+	if options.ImagePackage != "" {
+		legacyProgram := program
+		if programs {
+			legacyProgram = nil
+		}
+		options.PackageSHA256, err = installer.checkUpgradePackage(options.ImagePackage, legacyProgram)
+		if err != nil {
+			return report, err
+		}
+	}
+	if programs {
+		imageDigest := options.PackageSHA256
+		options.Programs, options.PackageSHA256, err = installer.stagePrograms(ctx, dir, program)
+		if err != nil {
+			return report, err
+		}
+		if imageDigest != "" {
+			options.PackageSHA256 = contentDigest([]byte(options.PackageSHA256 + imageDigest))
+		}
 	}
 	return installer.upgradeWithRecovery(ctx, executable, program, options, checkStopped)
 }
@@ -216,7 +250,7 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	if currentImage.ArchiveFile != "" {
 		currentRecord.Files[filepath.Base(currentImage.ArchiveFile)] = currentImage.ArchiveSHA256
 	}
-	if _, err := installer.verifyInstallation(ctx, currentRecord); err != nil {
+	if _, err := installer.verifyInstallationConfig(ctx, currentRecord, parseRepairNodeConfig); err != nil {
 		return report, err
 	}
 	// 升级首次准备时仍在线。只有维护授权落定才允许停服务，完成回执丢失后只重发交还。
@@ -234,12 +268,25 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	for _, file := range journal.Files {
 		noChange = noChange && file.Before == file.After
 	}
+	botOnly := options.Upgrade && !recovering && options.ImagePackage == "" && request.Programs.valid()
+	if botOnly {
+		original, _, err := parseNodeInstallRequest(previous.Request)
+		if err != nil {
+			return report, err
+		}
+		botOnly = original.Programs.Core == request.Programs.Core && original.Programs.Bot != request.Programs.Bot && previous.BinarySHA256 == record.BinarySHA256
+		for _, item := range journal.Files {
+			if item.Name != "installation.json" && item.Before != item.After {
+				botOnly = false
+			}
+		}
+	}
 	if request.Server != nil {
 		if err := installer.verifyUpdateUnits(previous.UpdateUnits); err != nil {
 			return report, err
 		}
 	}
-	if (!noChange || recovering) && !resumeFinish {
+	if (!noChange || recovering) && !resumeFinish && !botOnly {
 		if options.Upgrade {
 			var holdErr error
 			if recovering {
@@ -266,7 +313,7 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 		}
 	}
 	if !noChange && !resumeFinish {
-		if options.Upgrade {
+		if options.Upgrade && !botOnly {
 			if err := installer.systemctl(ctx, "stop", nodeServiceName); err != nil {
 				return report, err
 			}
@@ -274,12 +321,15 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 				return report, err
 			}
 		}
-		if installer.checkListen != nil {
+		if installer.checkListen != nil && !botOnly {
 			if err := installer.checkListen(ctx, request.Control.Listen); err != nil {
 				return report, err
 			}
 		}
 		for _, target := range nodeRepairTargets() {
+			if botOnly && target.name != "installation.json" {
+				continue
+			}
 			if err := ctx.Err(); err != nil {
 				return report, err
 			}
@@ -295,10 +345,17 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	if _, err := checkNode(ctx, nodeInstallationPaths(), installer.platform, installer.fs); err != nil {
 		return NodeInstallationReport{}, err
 	}
-	if err := installer.startNodeServices(ctx, request.Server != nil, previous.UpdateUnits); err != nil {
-		return NodeInstallationReport{}, err
+	if request.Programs.valid() {
+		if err := installer.fs.activateBot(request.Programs); err != nil {
+			return report, err
+		}
 	}
-	if options.Upgrade && (!noChange || recovering) {
+	if !botOnly {
+		if err := installer.startNodeServices(ctx, request.Server != nil, previous.UpdateUnits); err != nil {
+			return report, err
+		}
+	}
+	if options.Upgrade && (!noChange || recovering) && !botOnly {
 		if !resumeFinish {
 			if err := writeConfigurationFile(installer.fs.resolve(nodeRepairDirectory+"/started"), []byte(journal.OperationID), 0600); err != nil {
 				return report, err
@@ -345,7 +402,11 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 	if err != nil || digest != record.RequestSHA256 {
 		return errors.New("原节点安装请求已变化，未覆盖")
 	}
-	if _, err := installer.verifyInstallation(ctx, record); err != nil {
+	if _, err := installer.verifyInstallationConfig(ctx, record, parseRepairNodeConfig); err != nil {
+		return err
+	}
+	request.Node, err = migrateBrowserLimits(request.Node, true)
+	if err != nil {
 		return err
 	}
 	oldProgram, err := installer.fs.readConfig(fileRule{path: nodeBinaryPath, maximum: maximumNodeBinaryBytes}, account{})
@@ -377,11 +438,17 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 			return err
 		}
 	}
+	if options.Programs.valid() && options.Recovery.ComputerID == "" {
+		if !request.Programs.valid() && options.ImagePackage == "" {
+			return errors.New("首次拆分升级须同时提供程序包和外置程序版电脑镜像")
+		}
+		request.Programs = options.Programs
+	}
 	if options.ImagePackage != "" {
 		if err := installer.prepareImageUpgrade(ctx, &request, &record, options.ImagePackage); err != nil {
 			return err
 		}
-	} else {
+	} else if !options.Upgrade || options.Recovery.ComputerID != "" {
 		request.Docker, err = json.Marshal(dockerbootstrap.DefaultManifest())
 		if err != nil {
 			return err
@@ -400,7 +467,11 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 	if err != nil {
 		return err
 	}
-	_, record.RequestSHA256, err = parseNodeInstallRequest(record.Request)
+	request, record.RequestSHA256, err = parseNodeInstallRequest(record.Request)
+	if err != nil {
+		return err
+	}
+	record.Request, err = json.Marshal(request)
 	if err != nil {
 		return err
 	}
@@ -482,11 +553,14 @@ func (installer nodeInstaller) prepareImageUpgrade(ctx context.Context, request 
 		return err
 	}
 	var release nodeRelease
-	if decodePreparation(encoded, &release) != nil || release.Version != 1 || release.Platform != installer.platform || computer.ValidateImageReference(release.ImageReference) != nil || len(release.ArchiveSHA256) != 64 || strings.Trim(release.ArchiveSHA256, "0123456789abcdef") != "" {
+	if decodePreparation(encoded, &release) != nil || (release.Version != 1 && release.Version != 2) || release.Platform != installer.platform || computer.ValidateImageReference(release.ImageReference) != nil || len(release.ArchiveSHA256) != 64 || strings.Trim(release.ArchiveSHA256, "0123456789abcdef") != "" {
 		return errors.New("离线升级清单无效")
 	}
 	if _, err := dockerbootstrap.ParseManifest(release.Docker); err != nil {
 		return err
+	}
+	if (release.Version == 2) != request.Programs.valid() {
+		return errors.New("电脑镜像和节点程序安装方式不匹配，请在首次切换时同时解压程序包和新版镜像包")
 	}
 	request.Docker = release.Docker
 	archive := filepath.Join(deploy.NodeDirectory, "computer-image-"+release.ArchiveSHA256+".tar")

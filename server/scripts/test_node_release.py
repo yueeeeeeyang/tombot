@@ -45,6 +45,39 @@ class NodeReleaseTest(unittest.TestCase):
         self.bundle()
         self.assertEqual(node_release.verify(self.archive), self.release)
 
+    def test_programs_are_independent_and_reproducible(self):
+        root = self.archive.parent
+        for name in node_release.PROGRAMS:
+            (root / name).write_bytes(self.contents['tomnode'] + name.encode())
+        node_release.build_programs(root, 'amd64', '1.2.3', self.archive)
+        self.assertEqual(node_release.verify(self.archive), {'version': 2, 'platform': 'linux/amd64', 'label': '1.2.3'})
+        with tarfile.open(self.archive) as archive:
+            self.assertEqual(set(archive.getnames()), node_release.PROGRAM_FILES)
+        duplicate = root / 'repeat.tar.gz'
+        node_release.build_programs(root, 'amd64', '1.2.3', duplicate)
+        self.assertEqual(self.archive.read_bytes(), duplicate.read_bytes())
+        for name in node_release.PROGRAMS:
+            with self.subTest(name=name):
+                binary = root / name
+                original = binary.read_bytes()
+                binary.write_bytes(original[:18] + bytes([183, 0]) + original[20:])
+                with self.assertRaisesRegex(ValueError, '架构'):
+                    node_release.build_programs(root, 'amd64', '1.2.3', root / 'invalid.tar.gz')
+                binary.write_bytes(original)
+                self.assertFalse((root / 'invalid.tar.gz').exists())
+
+    def test_image_accepts_only_its_own_members(self):
+        self.release['version'] = 2
+        self.contents = {'computer-image.tar': self.contents['computer-image.tar']}
+        self.bundle()
+        self.assertEqual(node_release.verify(self.archive), self.release)
+        self.bundle(extra=('tomnode', b'unexpected'))
+        with self.assertRaises(ValueError):
+            node_release.verify(self.archive)
+        self.bundle(missing='computer-image.tar')
+        with self.assertRaises(ValueError):
+            node_release.verify(self.archive)
+
     def test_rejects_archive_structure(self):
         for options in ({'missing': 'tomnode'}, {'extra': ('../escape', b'x')}, {'extra': ('computer-image.tar', b'x')}, {'changed': 'computer-image.tar'}):
             with self.subTest(options=options):

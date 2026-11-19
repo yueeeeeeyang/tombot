@@ -101,6 +101,7 @@ func TestNodeRepairMigratesLegacyManifestAndPreservesIdentity(t *testing.T) {
 func TestNodeRepairRecoversEveryReplacementBoundary(t *testing.T) {
 	for count := 0; count <= len(nodeRepairTargets()); count++ {
 		installer, program, _ := legacyRepairFixture(t)
+		original, request := writeSharedBrowserFixture(t, installer)
 		options := NodeRepairOptions{Listen: "10.0.0.5:9444", URL: "https://node.example.test:9444"}
 		if err := installer.prepareNodeRepair(t.Context(), program, options); err != nil {
 			t.Fatal(err)
@@ -117,6 +118,7 @@ func TestNodeRepairRecoversEveryReplacementBoundary(t *testing.T) {
 		if _, err := installer.repair(t.Context(), "/source/tomnode", options, stoppedNode); err != nil {
 			t.Fatal("未恢复中断点", count, err)
 		}
+		checkSharedBrowserMigration(t, installer, original, request.NodeID)
 	}
 }
 

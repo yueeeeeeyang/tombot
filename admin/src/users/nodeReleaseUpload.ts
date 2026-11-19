@@ -1,7 +1,12 @@
 import { z } from 'zod'
 import { AdminClient, ApiError } from '../api/client'
 
-export const nodeRelease = z.object({ id: z.string(), label: z.string(), platform: z.string() })
+export const nodeRelease = z.object({
+  id: z.string(),
+  label: z.string(),
+  platform: z.string(),
+  kind: z.enum(['programs', 'image']).optional(),
+})
 const chunkSize = 4 * 1024 * 1024
 const maxSize = 17 * 1024 ** 3
 
@@ -18,7 +23,7 @@ export async function uploadNodeRelease(
   onProgress: (percent: number, phase: 'hash' | 'upload' | 'verify') => void,
 ) {
   if (archive.size === 0 || archive.size > maxSize)
-    throw new ApiError('INVALID_PACKAGE', '请选择大小不超过 17 GiB 的非空节点离线包。')
+    throw new ApiError('INVALID_PACKAGE', '请选择大小不超过 17 GiB 的非空发布包。')
   const chunks: string[] = []
   for (let offset = 0; offset < archive.size; offset += chunkSize) {
     signal.throwIfAborted()
@@ -34,6 +39,7 @@ export async function uploadNodeRelease(
       method: 'POST',
       body: { artifact, size: archive.size },
       signal,
+      timeout: 16 * 60_000,
     },
   )
   onProgress(Math.floor((100 * Math.min(next * chunkSize, archive.size)) / archive.size), 'upload')

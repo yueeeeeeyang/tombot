@@ -26,6 +26,7 @@ var ErrInput = errors.New("发布参数或分片摘要无效")
 var ErrConflict = errors.New("发布包尚未上传完成、节点不存在或已有升级任务")
 
 type Release struct {
+	Kind     string `json:"kind,omitempty"`
 	ID       string `json:"id"`
 	Label    string `json:"label"`
 	Platform string `json:"platform"`

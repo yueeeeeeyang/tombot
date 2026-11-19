@@ -55,7 +55,7 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 				if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('tombot.fleet.claim',0))`); err != nil {
 					return err
 				}
-				err := tx.QueryRowContext(ctx, `UPDATE tombot.node_update_jobs j SET state='running',updated_at=clock_timestamp() FROM tombot.node_releases r WHERE j.node_id=$1 AND j.release_id=r.id AND r.platform=$2 AND (j.state='running' OR (j.state='queued' AND (SELECT count(*) FROM tombot.node_update_jobs WHERE state='running' AND updated_at>clock_timestamp()-interval '4 hours')<3)) RETURNING j.id,j.release_id`, c.Node, c.Platform).Scan(&job, &release)
+				err := tx.QueryRowContext(ctx, `UPDATE tombot.node_update_jobs j SET state='running',updated_at=clock_timestamp() FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE (a.manifest->>'version')::int <= $3 AND j.node_id=$1 AND j.release_id=r.id AND r.platform=$2 AND (j.state='running' OR (j.state='queued' AND (SELECT count(*) FROM tombot.node_update_jobs WHERE state='running' AND updated_at>clock_timestamp()-interval '4 hours')<3)) RETURNING j.id,j.release_id`, c.Node, c.Platform, max(1, c.PackageVersion)).Scan(&job, &release)
 				if errors.Is(err, sql.ErrNoRows) {
 					return nil
 				}

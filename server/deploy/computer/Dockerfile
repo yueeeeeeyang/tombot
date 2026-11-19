@@ -42,7 +42,10 @@ RUN apt-get update \
     && dpkg-query -W -f='${Package}\t${Version}\n' > /usr/share/tombot/packages.tsv \
     && rm -rf /var/lib/apt/lists/* /root/.npm /usr/lib/tombot/install_tools.py
 
-COPY bin/computer-agent bin/computer-task bin/computer-probe bin/bot-agent /usr/lib/tombot/
+COPY --chmod=0755 start_program.sh /usr/lib/tombot/computer-agent
+RUN ln /usr/lib/tombot/computer-agent /usr/lib/tombot/computer-task \
+    && ln /usr/lib/tombot/computer-agent /usr/lib/tombot/computer-probe \
+    && ln -s /usr/lib/tombot/programs/bot/bot-agent /usr/lib/tombot/bot-agent
 COPY desktop.py /usr/lib/tombot/desktop.py
 COPY files.py /usr/lib/tombot/files.py
 COPY open_browser.py /usr/lib/tombot/open_browser.py
@@ -61,8 +64,7 @@ COPY seccomp.json seccomp-source.json seccomp.LICENSE /usr/share/tombot/
 COPY xfce4-session.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-session.xml
 COPY xfwm4.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
 COPY xfce4-desktop.xml /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml
-RUN chmod 0755 /usr/lib/tombot/computer-agent /usr/lib/tombot/computer-task /usr/lib/tombot/computer-probe /usr/lib/tombot/bot-agent \
-    && install -d -m 0755 /var/lib/tombot-browser \
+RUN install -d -m 0755 /var/lib/tombot-browser \
     && chmod 0644 /usr/lib/tombot/desktop.py \
     && test "$(. /etc/os-release; printf '%s' "$VERSION_CODENAME")" = trixie \
     && test -x /usr/bin/Xtigervnc \
@@ -70,7 +72,7 @@ RUN chmod 0755 /usr/lib/tombot/computer-agent /usr/lib/tombot/computer-task /usr
     && test -f /usr/share/locale/zh_CN/LC_MESSAGES/xfce4-session.mo \
     && python3 /usr/lib/tombot/verify_tools.py > /usr/share/tombot/tools-versions.json
 
-LABEL io.tombot.computer.storage-layout="2" io.tombot.computer.desktop-browser="1"
+LABEL io.tombot.computer.external-programs="1" io.tombot.computer.storage-layout="2" io.tombot.computer.desktop-browser="1"
 WORKDIR /workspace
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/lib/tombot/computer-agent"]

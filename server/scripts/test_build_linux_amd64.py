@@ -57,34 +57,39 @@ class LinuxAMD64PackagingTest(unittest.TestCase):
                 patch.dict(os.environ, {"DOCKER_CONTEXT": "test-docker-context"}):
             receipt = packaging.build(self.worktree, self.output, self.version)
 
-        self.assertEqual(run.call_count, 2)
+        run.assert_called_once()
         source, artifacts, version = compile_artifacts.call_args.args
         self.assertEqual(compile_artifacts.call_args.kwargs, {"architectures": ("amd64",)})
+        args, directory, environment, _, _ = run.call_args.args
+        self.assertEqual(args[:-1], [sys.executable, "scripts/node_release.py", "programs", "--bin-dir",
+                                     str(artifacts / "linux-amd64/bin"), "--architecture", "amd64",
+                                     "--label", self.version, "--output"])
+        self.assertEqual(directory, source / "server")
         self.assertEqual(version, self.version)
-        image = receipt["image"]
-        self.assertRegex(image, r"^tombot-computer:release-amd64-[0-9a-f]{32}$")
-        (build, build_directory, build_environment, _, _), (package, package_directory, package_environment, _, _) = (
-            call.args for call in run.call_args_list
-        )
-        self.assertEqual(build, ["docker", "buildx", "build", "--load", "--platform", "linux/amd64",
-                                 "--tag", image, str(artifacts / "linux-amd64/computer-image")])
-        self.assertEqual(package[:-1], [sys.executable, "scripts/node_release.py", "build", "--image", image,
-                                       "--architecture", "amd64", "--runtime", "deploy/runtime/linux.json", "--label", self.version, "--output"])
-        candidate = Path(package[-1])
-        self.assertEqual(candidate.name, "tomnode-linux-amd64-offline.tar.gz")
-        self.assertNotEqual(candidate.parent, self.output)
-        self.assertEqual(build_directory, source / "server")
-        self.assertEqual(package_directory, build_directory)
-        self.assertEqual(package_environment, build_environment)
-        self.assertEqual(package_environment["DOCKER_CONTEXT"], "test-docker-context")
-        self.assertEqual(package_environment["GOFLAGS"], "-mod=readonly -buildvcs=false")
-        self.assertEqual(receipt, {"platform": "linux/amd64", "version": self.version, "source_sha256": digest,
-                                   "tomd": str(self.output / "tomd"), "node_package": str(self.output / candidate.name),
-                                   "image": image})
-        self.assertEqual(set(path.name for path in self.output.iterdir()), {"tomd", candidate.name})
+        self.assertEqual(environment["GOFLAGS"], "-mod=readonly -buildvcs=false")
+        self.assertEqual(environment["DOCKER_CONTEXT"], "test-docker-context")
+        self.assertNotEqual(Path(args[-1]).parent, self.output)
+        self.assertEqual(receipt["source_sha256"], digest)
+        self.assertIsNone(receipt["image"])
+        self.assertEqual(receipt["node_package"], str(self.output / packaging.NODE_ARCHIVE))
+        self.assertEqual(set(p.name for p in self.output.iterdir()), {"tomd", packaging.NODE_ARCHIVE})
         self.assertEqual(stat.S_IMODE((self.output / "tomd").stat().st_mode), 0o755)
-        self.assertEqual((self.output / candidate.name).read_bytes(), b"package fixture")
+        self.assertEqual((self.output / packaging.NODE_ARCHIVE).read_bytes(), b"package fixture")
         self.assertEqual(list(self.output_parent.iterdir()), [self.output])
+
+    def test_image_is_a_separate_optional_product_from_the_same_snapshot(self):
+        with patch.object(packaging, "compile_artifacts", side_effect=self.compile_fixture) as compile_artifacts, \
+                patch.object(packaging, "run_command", side_effect=self.command_fixture) as run:
+            receipt = packaging.build(self.worktree, self.output, self.version, with_image=True)
+        source, artifacts, _ = compile_artifacts.call_args.args
+        programs, docker, export = [call.args for call in run.call_args_list]
+        self.assertEqual(programs[0][2], "programs")
+        self.assertEqual(docker[0], ["docker", "buildx", "build", "--load", "--platform", "linux/amd64",
+                                     "--tag", receipt["image"], str(artifacts / "linux-amd64/computer-image")])
+        self.assertEqual(export[0][2:5], ["image", "--image", receipt["image"]])
+        self.assertEqual(export[1], source / "server")
+        self.assertEqual(set(p.name for p in self.output.iterdir()),
+                         {"tomd", packaging.NODE_ARCHIVE, "computer-image-linux-amd64.tar.gz"})
 
     def test_failed_image_or_node_packaging_leaves_no_products(self):
         for failing_program in ("docker", sys.executable):
@@ -97,7 +102,7 @@ class LinuxAMD64PackagingTest(unittest.TestCase):
                 with patch.object(packaging, "compile_artifacts", side_effect=self.compile_fixture), \
                         patch.object(packaging, "run_command", side_effect=command), \
                         self.assertRaisesRegex(ReleaseError, "外部构建失败"):
-                    packaging.build(self.worktree, self.output, self.version)
+                    packaging.build(self.worktree, self.output, self.version, with_image=True)
                 self.assertEqual(list(self.output_parent.iterdir()), [])
 
     def test_existing_output_is_rejected_before_compiling(self):

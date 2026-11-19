@@ -2,16 +2,15 @@ package nodecommand
 
 import (
 	"context"
-	"errors"
-	"io.yueyang/tom/internal/nodeenrollment"
-
 	"encoding/json"
+	"errors"
 	"flag"
 	"io"
 	"log/slog"
 	"path/filepath"
 
 	"io.yueyang/tom/internal/deployment"
+	"io.yueyang/tom/internal/nodeenrollment"
 )
 
 type repairNode func(context.Context, deployment.NodeRepairOptions) (deployment.NodeInstallationReport, error)
@@ -52,8 +51,8 @@ func runRepair(ctx context.Context, args []string, output io.Writer, logger *slo
 }
 
 // runUpgrade 使用程序所在目录的配套包；部署层核验节点身份、发布镜像及控制服务返回的原电脑计划。
-func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode) int {
-	report, err := repair(ctx, deployment.NodeRepairOptions{Upgrade: true})
+func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode, directory string) int {
+	report, err := repair(ctx, deployment.NodeRepairOptions{Upgrade: true, ImagePackage: directory})
 	if err != nil {
 		logger.Error("节点升级未完成，保留原身份；请使用同一发布包重试", "reason", err)
 		if errors.Is(err, nodeenrollment.ErrMaintenanceConflict) {

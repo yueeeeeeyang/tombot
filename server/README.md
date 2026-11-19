@@ -37,7 +37,7 @@ PostgreSQL 集成测试会启动隔离的临时实例，不连接已有业务库
 
 数据库由 `tomd` 在启动时自动初始化和升级，不再构建独立迁移程序。通过 `database.migration_dsn_file` 引用迁移账户的私有连接文件；迁移成功并关闭该连接后，才打开四个用途分离的最小权限业务连接并监听端口。配置、并发与失败语义及升级回滚见[应用组合说明](internal/serverapp/README.md)。
 
-节点完整解压配套离线包后执行 `sudo ./tomnode install`，粘贴接入码并确认节点地址，自动导入镜像、生成配置和证书、安装服务并设置开机启动，见[节点离线镜像安装](deploy/NODE.md)。`tomnode template` 仅用于输出可选差异参数。`tomnode start` 按节点配置检查 → Docker 与磁盘工具准备 → 固定镜像准备 → 节点恢复顺序运行，失败即停止。`tomnode systemd` 输出内置单元；节点启动不依赖 API 文件或系统账户，API 与节点分别启动。完整电脑能力与首次 Ubuntu 安装仍须联合验收。
+节点首次部署时，将节点程序包和电脑镜像包解压到同一私有目录后执行 `sudo ./tomnode install`，粘贴接入码并确认节点地址，自动导入镜像、生成配置和证书、安装服务并设置开机启动，见[节点离线镜像安装](deploy/NODE.md)。日常升级只上传节点程序包，更新桌面环境时才上传电脑镜像，详见[Linux x64 打包](deploy/RELEASE.md#linux-x64-一键打包)。`tomnode template` 仅用于输出可选差异参数。`tomnode start` 按节点配置检查 → Docker 与磁盘工具准备 → 固定镜像准备 → 节点恢复顺序运行，失败即停止。`tomnode systemd` 输出内置单元；节点启动不依赖 API 文件或系统账户，API 与节点分别启动。完整电脑能力与首次 Ubuntu 安装仍须联合验收。
 
 [自动引导](internal/dockerbootstrap/README.md)同时补齐宿主磁盘工具：清单必须提供 `e2fsprogs`、`util-linux`、`mount` 的准确包版本；已有 Docker 也会核验，缺包自动安装，版本或包状态异常明确失败。安装后和每次重启都复查实际包及六个固定工具，不用 Docker 启动成功替代宿主依赖检查。
 

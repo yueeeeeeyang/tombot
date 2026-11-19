@@ -14,13 +14,14 @@ import (
 const AgentPath = "/api/v2/node-update-agent/package"
 
 type Call struct {
-	Node     string `json:"node"`
-	Platform string `json:"platform"`
-	Action   string `json:"action"`
-	Job      string `json:"job,omitempty"`
-	Index    int    `json:"index,omitempty"`
-	State    string `json:"state,omitempty"`
-	Issued   int64  `json:"issued"`
+	PackageVersion int    `json:"package_version,omitempty"`
+	Node           string `json:"node"`
+	Platform       string `json:"platform"`
+	Action         string `json:"action"`
+	Job            string `json:"job,omitempty"`
+	Index          int    `json:"index,omitempty"`
+	State          string `json:"state,omitempty"`
+	Issued         int64  `json:"issued"`
 }
 type SignedCall struct {
 	Call        Call   `json:"call"`

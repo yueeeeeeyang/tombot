@@ -12,6 +12,7 @@ import (
 	computerimage "io.yueyang/tom/deploy/computer"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
+	"io.yueyang/tom/internal/noderelease"
 )
 
 type snapshot struct {
@@ -67,7 +68,7 @@ func (node *Runtime) validateSnapshot(resource Resource, state *record, current 
 	}
 	if current.hasContainer {
 		container := current.container
-		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !matchingComputerLabels(container.Config.Labels, resource) || state.ContainerID != "" && state.ContainerID != container.ID {
+		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !matchingComputerLabels(container.Config.Labels, node.mountContract(resource, container)) || state.ContainerID != "" && state.ContainerID != container.ID {
 			return failure("container_identity_mismatch")
 		}
 		if err := node.validateContainer(resource, container); err != nil {
@@ -89,6 +90,9 @@ func containerLabels(resource Resource) map[string]string {
 	}
 	labels[computer.StorageLayoutLabel] = computer.StorageLayoutVersion
 	labels[computer.DesktopBrowserLabel] = "1"
+	if resource.ExternalPrograms {
+		labels[noderelease.ProgramImageLabel] = "1"
+	}
 	return labels
 }
 
@@ -112,6 +116,9 @@ func (node *Runtime) configuration(resource Resource) createContainer {
 			{Type: "volume", Source: resource.Name, Target: computer.BrowserDirectory, VolumeOptions: &volumeMountOptions{NoCopy: true, Subpath: computer.DesktopProfilesSubdirectory}},
 			{Type: "bind", Source: resource.ControlPath, Target: computeragent.ControlDirectory}},
 		Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,nosuid,nodev,noexec,size=%d,mode=1777", node.options.TemporaryBytes), "/run": fmt.Sprintf("rw,nosuid,nodev,noexec,size=%d,mode=0755", node.options.RuntimeBytes)}}
+	if resource.ExternalPrograms {
+		configuration.HostConfig.Mounts = append(configuration.HostConfig.Mounts, mount{Type: "bind", Source: noderelease.ProgramRoot, Target: noderelease.ProgramRoot, ReadOnly: true})
+	}
 	configuration.HostConfig.RestartPolicy.Name = "no"
 	configuration.HostConfig.LogConfig.Type = "local"
 	configuration.HostConfig.LogConfig.Config = map[string]string{"max-size": "10m", "max-file": "2"}
@@ -128,6 +135,7 @@ func capabilityNames(values []string) []string {
 }
 
 func (node *Runtime) validateContainer(resource Resource, container container) error {
+	resource = node.mountContract(resource, container)
 	expected := node.configuration(resource)
 	if err := validateNetwork(container); err != nil {
 		return err
@@ -152,10 +160,10 @@ func (node *Runtime) validateContainer(resource Resource, container container) e
 	if container.Config.Labels[computer.DesktopBrowserLabel] != "1" {
 		expected.HostConfig.Mounts[1].VolumeOptions.Subpath = computer.BrowserSubdirectory
 	}
-	if len(container.Mounts) != 3 || !sameMountConfiguration(actual.Mounts, expected.HostConfig.Mounts) {
+	if len(container.Mounts) != len(expected.HostConfig.Mounts) || !sameMountConfiguration(actual.Mounts, expected.HostConfig.Mounts) {
 		return failure("container_mount_mismatch")
 	}
-	workspace, browser, control := false, false, false
+	workspace, browser, control, programs := false, false, false, false
 	for _, mounted := range container.Mounts {
 		switch mounted.Destination {
 		case "/workspace":
@@ -168,6 +176,11 @@ func (node *Runtime) validateContainer(resource Resource, container container) e
 				return failure("container_mount_mismatch")
 			}
 			browser = true
+		case noderelease.ProgramRoot:
+			if !resource.ExternalPrograms || programs || mounted.Type != "bind" || mounted.Source != noderelease.ProgramRoot || mounted.RW {
+				return failure("container_mount_mismatch")
+			}
+			programs = true
 		case computeragent.ControlDirectory:
 			if control || mounted.Type != "bind" || mounted.Source != resource.ControlPath || !mounted.RW {
 				return failure("container_mount_mismatch")
@@ -177,7 +190,7 @@ func (node *Runtime) validateContainer(resource Resource, container container) e
 			return failure("container_mount_mismatch")
 		}
 	}
-	if !workspace || !browser || !control {
+	if !workspace || !browser || !control || programs != resource.ExternalPrograms {
 		return failure("container_mount_mismatch")
 	}
 	return nil
@@ -235,6 +248,15 @@ func (node *Runtime) inspect(ctx context.Context, resource Resource, state *reco
 		return observed(resource, "present", current.container.ID, computer.Capabilities{}), nil
 	}
 	if current.hasContainer && current.container.State.Running && state.Phase != "removing" {
+		if resource.ExternalPrograms {
+			core, err := node.selectedComputerPrograms(resource)
+			if err != nil {
+				return computer.Observation{}, err
+			}
+			if core != node.options.ProgramCore {
+				return computer.Observation{}, failure("computer_program_upgrade_pending")
+			}
+		}
 		if err := node.egress.ensure(ctx, resource, current.container); err != nil {
 			return computer.Observation{}, err
 		}
@@ -286,6 +308,9 @@ func (node *Runtime) ensure(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, err
 	}
 	if err := image.validate(resource.Specification.ImageReference, "linux/"+runtime.GOARCH); err != nil {
+		return computer.Observation{}, err
+	}
+	if err := node.verifyProgramImage(image, resource); err != nil {
 		return computer.Observation{}, err
 	}
 	current, err := node.load(ctx, resource, state)
@@ -347,6 +372,9 @@ func (node *Runtime) ensure(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, failure("container_missing_after_creation")
 	}
 	if !current.container.State.Running {
+		if err = node.selectComputerPrograms(resource); err != nil {
+			return computer.Observation{}, err
+		}
 		if err = node.engine.startContainer(ctx, current.container.ID); err != nil {
 			return computer.Observation{}, err
 		}

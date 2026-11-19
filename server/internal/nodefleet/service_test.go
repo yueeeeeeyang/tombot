@@ -28,6 +28,13 @@ import (
 )
 
 func TestSinglePackageFleetDistribution(t *testing.T) {
+	for _, kind := range []string{"", noderelease.Programs, noderelease.Image} {
+		t.Run("发布"+kind, func(t *testing.T) { verifyFleetDistribution(t, kind) })
+	}
+}
+
+func verifyFleetDistribution(t *testing.T, kind string) {
+	t.Helper()
 	ctx := t.Context()
 	cluster := pgtest.Start(t)
 	pool, name := cluster.Database(t)
@@ -41,11 +48,11 @@ func TestSinglePackageFleetDistribution(t *testing.T) {
 	defer db.Close()
 	s := Service{db, t.TempDir()}
 	admin := ids.New()
-	part := standardArchive(t, "test", "")
+	part := packageArchive(t, kind, "test", "")
 	artifact := noderelease.Digest([]byte(noderelease.Digest(part)))
 	upload := func() {
 		t.Helper()
-		if _, err := s.begin(admin, artifact, int64(len(part))); err != nil {
+		if _, err := s.begin(ctx, admin, artifact, int64(len(part))); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.savePart(admin, artifact, "0", noderelease.Digest(part), part); err != nil {
@@ -57,12 +64,24 @@ func TestSinglePackageFleetDistribution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r {
+	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r || r.Kind != kind {
 		t.Fatal("已确认的发布不能重取", again, err)
 	}
-	upload()
-	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r {
+	if progress, err := s.begin(ctx, admin, artifact, int64(len(part))); err != nil || progress.Next != 1 {
+		t.Fatal("已登记的相同归档仍要求上传分片", progress, err)
+	}
+	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r || r.Kind != kind {
 		t.Fatal("重复上传没有复用版本", again, err)
+	}
+	if err := os.WriteFile(s.archivePath(artifact), bytes.Repeat([]byte{1}, len(part)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if progress, err := s.begin(ctx, admin, artifact, int64(len(part))); err != nil || progress.Next != 0 {
+		t.Fatal("同大小损坏归档仍被复用", progress, err)
+	}
+	upload()
+	if repaired, err := s.publish(ctx, admin, artifact); err != nil || repaired != r {
+		t.Fatal("同一份原包未修复受损归档", repaired, err)
 	}
 	n, image := ids.New(), ids.New()
 	secondNode := ids.New()
@@ -127,9 +146,14 @@ func TestSinglePackageFleetDistribution(t *testing.T) {
 	if err = s.dispatch(ctx, r.ID, []string{n}, false, admin, ids.New()); err != nil {
 		t.Fatal(err)
 	}
-	w := call(noderelease.Call{Node: n, Action: "poll"})
+	if kind != "" {
+		if w := call(noderelease.Call{Node: n, Action: "poll"}); w.Code != 204 {
+			t.Fatal("旧更新器领取了拆分包", w.Code)
+		}
+	}
+	w := call(noderelease.Call{Node: n, Action: "poll", PackageVersion: 2})
 	var a noderelease.Assignment
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &a) != nil || a.Release != r.ID || a.Artifact != artifact || a.Manifest.Validate(artifact) != nil || a.Manifest.Label != "test" {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &a) != nil || a.Release != r.ID || a.Artifact != artifact || a.Manifest.Validate(artifact) != nil || a.Manifest.Label != "test" || a.Manifest.Kind != kind {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if err = s.dispatch(ctx, r.ID, []string{n}, false, admin, ids.New()); !errors.Is(err, ErrConflict) {
@@ -147,7 +171,7 @@ func TestSinglePackageFleetDistribution(t *testing.T) {
 		}
 	}
 	status, err := s.status(ctx)
-	if err != nil || len(status.Jobs) != 1 || status.Jobs[0].State != "started" {
+	if err != nil || len(status.Releases) != 1 || status.Releases[0] != r || len(status.Jobs) != 1 || status.Jobs[0].State != "started" {
 		t.Fatal(status, err)
 	}
 	if err = s.dispatch(ctx, r.ID, nil, true, admin, ids.New()); err != nil {
@@ -179,24 +203,41 @@ func TestSinglePackageFleetDistribution(t *testing.T) {
 	})
 }
 
-// standardArchive 使用与标准打包一致的六个成员；可单独改变归档正文以检验接收端是否重算摘要。
-func standardArchive(t *testing.T, label, changed string) []byte {
+// packageArchive 构造各格式的完整成员，允许单独篡改正文检验接收端是否重算摘要。
+func packageArchive(t *testing.T, kind, label, changed string) []byte {
 	t.Helper()
 	image := []byte("节点镜像")
 	header := make([]byte, 64)
 	copy(header, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
 	header[16] = 2
 	header[18] = 62
-	profile, err := json.Marshal(noderelease.Profile{Version: 1, Platform: "linux/amd64", Label: label, ImageReference: "example.test/computer@sha256:" + noderelease.Digest(image), ArchiveSHA256: noderelease.Digest(image), Docker: json.RawMessage(`{"version":2,"timeout_seconds":300,"minimum_free_bytes":1073741824}`)})
+	version := 2
+	if kind == "" {
+		version = 1
+	}
+	profile, err := json.Marshal(noderelease.Profile{Version: version, Platform: "linux/amd64", Label: label, ImageReference: "example.test/computer@sha256:" + noderelease.Digest(image), ArchiveSHA256: noderelease.Digest(image), Docker: json.RawMessage(`{"version":2,"timeout_seconds":300,"minimum_free_bytes":1073741824}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	files := map[string][]byte{"node-release.json": profile, "tomnode": header, "computer-image.tar": image, "安装说明.txt": []byte("说明"), "node-install.example.json": []byte("{}")}
+	switch kind {
+	case noderelease.Image:
+		files = map[string][]byte{"node-release.json": profile, "computer-image.tar": image}
+	case noderelease.Programs:
+		profile, err = json.Marshal(noderelease.ProgramProfile{Version: version, Label: label, Platform: "linux/amd64"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		files = map[string][]byte{"tomnode": header, "program-release.json": profile}
+		for _, name := range noderelease.ComputerPrograms {
+			files[name] = header
+		}
+	}
 	var sums strings.Builder
 	for name, body := range files {
 		sums.WriteString(noderelease.Digest(body) + "  " + name + "\n")
 	}
-	files["SHA256SUMS"] = []byte(sums.String())
+	files[noderelease.SumFile(kind)] = []byte(sums.String())
 	if changed != "" {
 		files[changed] = []byte("内容已改变")
 	}
@@ -224,13 +265,13 @@ func TestUploadValidationAndResume(t *testing.T) {
 	last := []byte{7}
 	hash := noderelease.Digest([]byte(noderelease.Digest(first) + "\n" + noderelease.Digest(last)))
 	size := int64(len(first) + len(last))
-	if _, err := s.begin(owner, "../escape", size); !errors.Is(err, ErrInput) {
+	if _, err := s.begin(t.Context(), owner, "../escape", size); !errors.Is(err, ErrInput) {
 		t.Fatal(err)
 	}
-	if _, err := s.begin(owner, hash, noderelease.MaxSize+1); !errors.Is(err, ErrInput) {
+	if _, err := s.begin(t.Context(), owner, hash, noderelease.MaxSize+1); !errors.Is(err, ErrInput) {
 		t.Fatal(err)
 	}
-	if _, err := s.begin(owner, hash, size); err != nil {
+	if _, err := s.begin(t.Context(), owner, hash, size); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.savePart(owner, hash, "1", noderelease.Digest(last), last); !errors.Is(err, ErrConflict) {
@@ -244,7 +285,7 @@ func TestUploadValidationAndResume(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if next, err := s.begin(owner, hash, size); err != nil || next.Next != 1 {
+	if next, err := s.begin(t.Context(), owner, hash, size); err != nil || next.Next != 1 {
 		t.Fatal(next, err)
 	}
 	if _, err := s.publish(t.Context(), owner, hash); !errors.Is(err, ErrConflict) {
@@ -254,10 +295,10 @@ func TestUploadValidationAndResume(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, changed := range []string{"tomnode", "computer-image.tar", "SHA256SUMS"} {
-		b := standardArchive(t, "v1", changed)
+		b := packageArchive(t, "", "v1", changed)
 		d := noderelease.Digest(b)
 		artifact := noderelease.Digest([]byte(d))
-		if _, err := s.begin(owner, artifact, int64(len(b))); err != nil {
+		if _, err := s.begin(t.Context(), owner, artifact, int64(len(b))); err != nil {
 			t.Fatal(err)
 		}
 		if err := s.savePart(owner, artifact, "0", d, b); err != nil {
@@ -266,7 +307,7 @@ func TestUploadValidationAndResume(t *testing.T) {
 		if _, err := s.publish(t.Context(), owner, artifact); !errors.Is(err, noderelease.ErrPackage) {
 			t.Fatal("错误归档被登记", changed, err)
 		}
-		if next, err := s.begin(owner, artifact, int64(len(b))); err != nil || next.Next != 0 {
+		if next, err := s.begin(t.Context(), owner, artifact, int64(len(b))); err != nil || next.Next != 0 {
 			t.Fatal("损坏暂存不能重传", err)
 		}
 		if _, err := os.Stat(s.archivePath(artifact)); !errors.Is(err, os.ErrNotExist) {

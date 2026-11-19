@@ -57,6 +57,27 @@ func (node *Runtime) resumeComputer(ctx context.Context, resource Resource, stat
 			return err
 		}
 	}
+	if current.container.State.Running && resource.ExternalPrograms {
+		core, err := node.selectedComputerPrograms(resource)
+		if err != nil {
+			return err
+		}
+		if core != node.options.ProgramCore {
+			if err = node.journal.requireClosedSessions(ctx, resource.Specification.UserID); err != nil {
+				return err
+			}
+			if err = node.engine.stopContainer(ctx, state.ContainerID); err != nil {
+				return err
+			}
+			current, err = node.load(ctx, resource, state)
+			if err != nil {
+				return err
+			}
+			if !current.hasContainer || !exitedComputer(current.container) {
+				return failure("program_upgrade_stop_unconfirmed")
+			}
+		}
+	}
 	if !current.container.State.Running {
 		if err := node.agent.prepareRestart(ctx, resource, state); err != nil {
 			return err
@@ -69,6 +90,9 @@ func (node *Runtime) resumeComputer(ctx context.Context, resource Resource, stat
 			if !workspace.Exists || !workspace.Ready || workspace.Path != resource.WorkspacePath || workspace.CapacityBytes != resource.Specification.Resources.DiskBytes {
 				return failure("workspace_not_ready")
 			}
+		}
+		if err := node.selectComputerPrograms(resource); err != nil {
+			return err
 		}
 		if err := node.engine.startContainer(ctx, state.ContainerID); err != nil {
 			return err

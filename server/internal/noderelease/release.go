@@ -10,6 +10,9 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/dockerbootstrap"
 )
 
 const ChunkSize = 4 << 20
@@ -21,13 +24,42 @@ var digestPattern = regexp.MustCompile("^[0-9a-f]{64}$")
 var labelPattern = regexp.MustCompile("^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$")
 var ErrPackage = errors.New("节点离线包格式或校验无效")
 
+const Programs = "programs"
+const Image = "image"
+const ProgramSums = "PROGRAM-SHA256SUMS"
+const ProgramRoot = "/usr/lib/tombot/programs"
+const ProgramImageLabel = "io.tombot.computer.external-programs"
+
+var ComputerPrograms = [...]string{"computer-agent", "computer-task", "computer-probe", "bot-agent"}
+
+type ProgramProfile struct {
+	Label    string `json:"label"`
+	Version  int    `json:"version"`
+	Platform string `json:"platform"`
+}
+
+func (p ProgramProfile) Valid(platform string) bool {
+	return p.Version == 2 && labelPattern.MatchString(p.Label) && p.Platform == platform && (platform == "linux/amd64" || platform == "linux/arm64")
+}
+
+func SumFile(kind string) string {
+	if kind == Programs {
+		return ProgramSums
+	}
+	return "SHA256SUMS"
+}
+
 type Manifest struct {
-	Checksums string   `json:"checksums"`
-	Version   int      `json:"version"`
-	Label     string   `json:"label"`
-	Platform  string   `json:"platform"`
-	Size      int64    `json:"size"`
-	Chunks    []string `json:"chunks"`
+	RuntimeSHA256  string   `json:"runtime_sha256,omitempty"`
+	ImageReference string   `json:"image_reference,omitempty"`
+	ArchiveSHA256  string   `json:"archive_sha256,omitempty"`
+	Kind           string   `json:"kind,omitempty"`
+	Checksums      string   `json:"checksums"`
+	Version        int      `json:"version"`
+	Label          string   `json:"label"`
+	Platform       string   `json:"platform"`
+	Size           int64    `json:"size"`
+	Chunks         []string `json:"chunks"`
 }
 
 func Digest(content []byte) string          { sum := sha256.Sum256(content); return hex.EncodeToString(sum[:]) }
@@ -36,7 +68,26 @@ func (m Manifest) PartSize(index int) int64 { return min(ChunkSize, m.Size-int64
 
 // Validate 将任务绑定到已核验归档的有序分片，限制读盘范围和分配大小。
 func (m Manifest) Validate(artifact string) error {
-	if m.Version != 1 || !ValidDigest(m.Checksums) || !labelPattern.MatchString(m.Label) || (m.Platform != "linux/amd64" && m.Platform != "linux/arm64") || m.Size < 1 || m.Size > MaxSize || int64(len(m.Chunks)) != (m.Size+ChunkSize-1)/ChunkSize {
+	switch m.Kind {
+	case "":
+		if m.Version != 1 {
+			return ErrPackage
+		}
+	case Programs:
+		if m.Version != 2 {
+			return ErrPackage
+		}
+	case Image:
+		if m.Version != 2 || computer.ValidateImageReference(m.ImageReference) != nil || !ValidDigest(m.ArchiveSHA256) || !ValidDigest(m.RuntimeSHA256) {
+			return ErrPackage
+		}
+	default:
+		return ErrPackage
+	}
+	if m.Kind != Image && (m.ImageReference != "" || m.ArchiveSHA256 != "" || m.RuntimeSHA256 != "") {
+		return ErrPackage
+	}
+	if !ValidDigest(m.Checksums) || !labelPattern.MatchString(m.Label) || (m.Platform != "linux/amd64" && m.Platform != "linux/arm64") || m.Size < 1 || m.Size > MaxSize || int64(len(m.Chunks)) != (m.Size+ChunkSize-1)/ChunkSize {
 		return ErrPackage
 	}
 	for _, chunk := range m.Chunks {
@@ -83,4 +134,17 @@ func ParseChecksums(encoded []byte) (map[string]string, error) {
 		files[name] = digest
 	}
 	return files, nil
+}
+
+// RuntimeDigest 规范化镜像附带的宿主安装预算，判断复用镜像是否也能复用本机配置。
+func RuntimeDigest(raw json.RawMessage) (string, error) {
+	manifest, err := dockerbootstrap.ParseManifest(raw)
+	if err != nil {
+		return "", err
+	}
+	content, err := json.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	return Digest(content), nil
 }

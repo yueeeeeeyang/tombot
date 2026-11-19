@@ -43,7 +43,7 @@ type uploadProgress struct {
 	Next int64 `json:"next"`
 }
 
-func (s Service) begin(owner, artifact string, size int64) (progress uploadProgress, err error) {
+func (s Service) begin(ctx context.Context, owner, artifact string, size int64) (progress uploadProgress, err error) {
 	if !noderelease.ValidDigest(artifact) || size <= 0 || size > noderelease.MaxSize {
 		return progress, ErrInput
 	}
@@ -72,6 +72,30 @@ func (s Service) begin(owner, artifact string, size int64) (progress uploadProgr
 				progress.Next = (size + noderelease.ChunkSize - 1) / noderelease.ChunkSize
 			}
 			return nil
+		}
+		// 归档和校验记录都已发布时，浏览器可跳过所有分片，直接取回既有版本。
+		if info, err := os.Lstat(s.archivePath(artifact)); err == nil {
+			if info.Mode().IsRegular() && info.Size() == size {
+				var published bool
+				if err := s.DB.Platform(ctx, func(tx *sql.Tx) error {
+					return tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.node_releases JOIN tombot.node_release_archives USING(artifact) WHERE artifact=$1)`, artifact).Scan(&published)
+				}); err != nil {
+					return err
+				}
+				if published {
+					_, err := verifyUpload(ctx, s.archivePath(artifact), artifact, size)
+					if err == nil {
+						progress.Next = (size + noderelease.ChunkSize - 1) / noderelease.ChunkSize
+						return nil
+					}
+					// 已登记文件发生损坏时允许原包重传；新内容核验通过后才原子替换。
+					if !errors.Is(err, noderelease.ErrPackage) {
+						return err
+					}
+				}
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 		if err != nil {
@@ -192,7 +216,7 @@ func (s Service) publish(ctx context.Context, owner, artifact string) (r Release
 		if errors.Is(err, ErrConflict) {
 			// 最后一次响应丢失时可直接重取已提交的版本。
 			return s.DB.Platform(ctx, func(tx *sql.Tx) error {
-				return tx.QueryRowContext(ctx, `SELECT r.id,r.label,r.platform FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE artifact=$1 ORDER BY created_at DESC,id LIMIT 1`, artifact).Scan(&r.ID, &r.Label, &r.Platform)
+				return tx.QueryRowContext(ctx, `SELECT r.id,r.label,r.platform,coalesce(manifest->>'kind','') FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE artifact=$1 ORDER BY created_at DESC,id LIMIT 1`, artifact).Scan(&r.ID, &r.Label, &r.Platform, &r.Kind)
 			})
 		}
 		if err != nil {
@@ -210,7 +234,7 @@ func (s Service) publish(ctx context.Context, owner, artifact string) (r Release
 			return err
 		}
 		return s.DB.Platform(ctx, func(tx *sql.Tx) error {
-			r = Release{artifact, m.Label, m.Platform}
+			r = Release{ID: artifact, Label: m.Label, Platform: m.Platform, Kind: m.Kind}
 			err := tx.QueryRowContext(ctx, `SELECT id,label,platform FROM tombot.node_releases WHERE artifact=$1 ORDER BY created_at DESC,id LIMIT 1`, artifact).Scan(&r.ID, &r.Label, &r.Platform)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err

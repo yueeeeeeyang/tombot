@@ -70,6 +70,11 @@ func RunProbe() (failure error) {
 		return errors.New("关闭探针资源组入口失败")
 	}
 	groupFile = nil
+	// 降权后不能再访问节点的私有选择记录，工作者原位执行刚才核验的同一份程序。
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err = prepareProcess(computer.ProbeUID, computer.DesktopSharedGID); err != nil {
@@ -85,7 +90,7 @@ func RunProbe() (failure error) {
 		return err
 	}
 	// 探针仅继承固定系统工具环境；授权中没有用户内容、凭据、命令或可执行文件路径。
-	if err = syscall.Exec(ProbeProgram, []string{ProbeProgram, "--worker", string(encoded)}, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=/", "TMPDIR=/tmp"}); err != nil {
+	if err = syscall.Exec(executable, []string{ProbeProgram, "--worker", string(encoded)}, []string{"PATH=/usr/bin:/bin", "LANG=C.UTF-8", "HOME=/", "TMPDIR=/tmp"}); err != nil {
 		return errors.New("启动固定能力探针失败")
 	}
 	return errors.New("能力探针没有原位执行")

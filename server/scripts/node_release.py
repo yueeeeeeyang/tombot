@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""将当前节点程序、固定摘要电脑镜像及运行清单打包为离线安装包。"""
+"""独立构建、核验节点程序包或固定摘要的电脑镜像包。"""
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
-import shutil
 import subprocess
 import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = {'tomnode', 'computer-image.tar', 'node-release.json', 'node-install.example.json', '安装说明.txt', 'SHA256SUMS'}
+PROGRAMS = ('tomnode', 'computer-agent', 'computer-task', 'computer-probe', 'bot-agent')
+PROGRAM_FILES = set(PROGRAMS) | {'program-release.json', 'PROGRAM-SHA256SUMS'}
+IMAGE_FILES = {'computer-image.tar', 'node-release.json', 'SHA256SUMS'}
+# 完整离线包可供已部署节点在首次切换前核验和回滚。
+OFFLINE_FILES = IMAGE_FILES | {'tomnode', 'node-install.example.json', '安装说明.txt'}
 MAX_IMAGE = 16 << 30
 IMAGE_REFERENCE = r'[a-zA-Z0-9][a-zA-Z0-9./:_-]{0,220}@sha256:[0-9a-f]{64}'
 
@@ -56,7 +60,7 @@ def inspect_image(image, architecture):
     description = json.loads(command(['docker', 'image', 'inspect', image]))[0]
     require(description['Os'] == 'linux' and description['Architecture'] == architecture, '电脑镜像架构不匹配')
     configuration = description['Config']
-    require(configuration.get('Entrypoint') == ['/usr/lib/tombot/computer-agent'] and not configuration.get('Cmd') and configuration.get('WorkingDir') == '/workspace' and configuration.get('Labels', {}).get('io.tombot.computer.storage-layout') == '2', '电脑镜像入口或存储约定不匹配')
+    require(configuration.get('Entrypoint') == ['/usr/lib/tombot/computer-agent'] and not configuration.get('Cmd') and configuration.get('WorkingDir') == '/workspace' and configuration.get('Labels', {}).get('io.tombot.computer.storage-layout') == '2' and configuration.get('Labels', {}).get('io.tombot.computer.external-programs') == '1', '电脑镜像入口或存储约定不匹配')
     references = description.get('RepoDigests', [])
     require(references and all(re.fullmatch(IMAGE_REFERENCE, item) for item in references), '镜像缺少可导出固定摘要，请使用支持 OCI 镜像存储的 Docker 构建')
     return description['Id'], sorted(references)[0]
@@ -71,20 +75,20 @@ def validate_runtime(manifest):
 def inspect_archive(archive):
     require(0 < archive.stat().st_size <= 17 << 30, '节点包大小无效')
     hashes, contents = {}, {}
-    executable_header = b''
+    headers = {}
     with tarfile.open(archive, 'r:gz') as bundle:
         for member in bundle:
-            require(member.name in FILES and member.name not in hashes and member.isfile(), '安装包存在未知文件、重复文件或链接')
-            limit = MAX_IMAGE if member.name == 'computer-image.tar' else (256 << 20 if member.name == 'tomnode' else 64 << 10)
-            require(0 < member.size <= limit and member.mode == (0o755 if member.name == 'tomnode' else 0o644), '安装包文件大小或权限无效')
+            require(member.name in PROGRAM_FILES | OFFLINE_FILES and member.name not in hashes and member.isfile(), '安装包存在未知文件、重复文件或链接')
+            limit = MAX_IMAGE if member.name == 'computer-image.tar' else (256 << 20 if member.name in PROGRAMS else 64 << 10)
+            require(0 < member.size <= limit and member.mode == (0o755 if member.name in PROGRAMS else 0o644), '安装包文件大小或权限无效')
             with bundle.extractfile(member) as source:
-                if member.name in {'SHA256SUMS', 'node-release.json'}:
+                if member.name in {'SHA256SUMS', 'PROGRAM-SHA256SUMS', 'program-release.json', 'node-release.json'}:
                     require(member.size <= 65536, '安装元数据过大')
                     content = source.read()
                     contents[member.name] = content
                     hashes[member.name] = hashlib.sha256(content).hexdigest()
-                elif member.name == 'tomnode':
-                    executable_header = source.read(64)
+                elif member.name in PROGRAMS:
+                    executable_header = headers[member.name] = source.read(64)
                     checksum = hashlib.sha256(executable_header)
                     while block := source.read(1 << 20):
                         checksum.update(block)
@@ -94,22 +98,30 @@ def inspect_archive(archive):
         # 读至 gzip 校验尾部，截断或附加的非零 tar 内容不能登记为可信归档。
         tail = bundle.fileobj.read(65536)
         require(len(tail) < 65536 and not any(tail), '节点归档尾部内容无效')
-    require(set(hashes) == FILES, '安装包缺少必要文件')
+    files = set(hashes)
+    require(files in (PROGRAM_FILES, IMAGE_FILES, OFFLINE_FILES), '发布包缺件或混入其他类型的文件')
+    programs = files == PROGRAM_FILES
+    sums = 'PROGRAM-SHA256SUMS' if programs else 'SHA256SUMS'
     checksums = {}
-    for line in contents['SHA256SUMS'].decode().splitlines():
+    for line in contents[sums].decode().splitlines():
         checksum, name = line.split('  ', 1)
-        require(name in FILES - {'SHA256SUMS'} and name not in checksums and re.fullmatch(r'[0-9a-f]{64}', checksum), '校验清单无效')
+        require(name in files - {sums} and name not in checksums and re.fullmatch(r'[0-9a-f]{64}', checksum), '校验清单无效')
         checksums[name] = checksum
-    require(checksums == {name: checksum for name, checksum in hashes.items() if name != 'SHA256SUMS'}, '安装包摘要不匹配')
-    release = parse_json(contents['node-release.json'])
-    require(set(release) - {'label'} == {'version', 'platform', 'image_reference', 'archive_sha256', 'docker'}, '离线发布清单字段无效')
-    if 'label' in release:
-        require(isinstance(release['label'], str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,63}', release['label']), '版本标识无效')
-    require(release['version'] == 1 and release['platform'] in {'linux/amd64', 'linux/arm64'} and release['archive_sha256'] == hashes['computer-image.tar'], '镜像清单与归档不匹配')
-    require(re.fullmatch(IMAGE_REFERENCE, release['image_reference']), '镜像引用必须固定摘要')
+    require(checksums == {name: checksum for name, checksum in hashes.items() if name != sums}, '安装包摘要不匹配')
+    release = parse_json(contents['program-release.json' if programs else 'node-release.json'])
+    require(release.get('platform') in {'linux/amd64', 'linux/arm64'}, '发布架构无效')
+    if programs or files == IMAGE_FILES or 'label' in release:
+        require(isinstance(release.get('label'), str) and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,63}', release['label']), '版本标识无效')
+    if programs:
+        require(set(release) == {'version', 'platform', 'label'} and release['version'] == 2, '节点程序清单无效')
+    else:
+        require(set(release) - {'label'} == {'version', 'platform', 'image_reference', 'archive_sha256', 'docker'}, '离线发布清单字段无效')
+        require(release['version'] == (2 if files == IMAGE_FILES else 1) and release['archive_sha256'] == hashes['computer-image.tar'], '镜像清单与归档不匹配')
+        require(re.fullmatch(IMAGE_REFERENCE, release['image_reference']), '镜像引用必须固定摘要')
+        validate_runtime(release['docker'])
     machine = 62 if release['platform'] == 'linux/amd64' else 183
-    require(len(executable_header) == 64 and executable_header[:7] == b'\x7fELF\x02\x01\x01' and int.from_bytes(executable_header[16:18], 'little') in (2, 3) and int.from_bytes(executable_header[18:20], 'little') == machine, '节点程序架构与发布清单不符')
-    validate_runtime(release['docker'])
+    for header in headers.values():
+        require(len(header) == 64 and header[:7] == bytes.fromhex('7f454c46020101') and int.from_bytes(header[16:18], 'little') in (2, 3) and int.from_bytes(header[18:20], 'little') == machine, '节点程序架构与发布清单不符')
     return release
 
 
@@ -117,76 +129,68 @@ def verify(archive):
     return inspect_archive(archive)
 
 
-def build(image, architecture, runtime, output, label):
-    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,63}', label), '版本标识无效')
-    require(not output.exists(), '输出已存在，不覆盖历史安装包')
+def write_package(inputs, profile, profile_name, sums_name, output):
+    """先在输出目录核验候选归档，再独占发布，失败保留已有产物。"""
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent) as tmp:
+        directory = Path(tmp)
+        manifest = directory / profile_name
+        manifest.write_text(json.dumps(profile, sort_keys=True) + '\n')
+        files = {**inputs, profile_name: manifest}
+        sums = directory / sums_name
+        sums.write_text(''.join(digest(path) + '  ' + name + '\n' for name, path in sorted(files.items())))
+        files[sums_name] = sums
+        candidate = directory / 'release.tar.gz'
+        with candidate.open('xb') as target, gzip.GzipFile(filename='', fileobj=target, mode='wb', compresslevel=1, mtime=0) as compressed, \
+                tarfile.open(fileobj=compressed, mode='w') as bundle:
+            for name, path in sorted(files.items()):
+                header = tarfile.TarInfo(name)
+                header.size = path.stat().st_size
+                header.mode = 0o755 if name in PROGRAMS else 0o644
+                with path.open('rb') as source:
+                    bundle.addfile(header, source)
+        verify(candidate)
+        os.link(candidate, output)
+
+
+def build_programs(directory, architecture, label, output):
+    """程序均来自调用者固定的同一份编译快照，日常打包无需 Docker。"""
+    files = {name: directory / name for name in PROGRAMS}
+    write_package(files, {'version': 2, 'label': label, 'platform': 'linux/' + architecture},
+                  'program-release.json', 'PROGRAM-SHA256SUMS', output)
+
+
+def build_image(image, architecture, runtime, label, output):
     manifest = parse_json(runtime.read_bytes())
     validate_runtime(manifest)
-    image_id, reference = inspect_image(image, architecture)
-    environment = {**os.environ, 'GOOS': 'linux', 'GOARCH': architecture, 'CGO_ENABLED': '0'}
-    with tempfile.TemporaryDirectory(prefix='tombot-node-offline-') as temporary:
-        stage = Path(temporary)
-        payload = stage / 'payload'
-        payload.mkdir()
-        command(['go', 'build', '-trimpath', '-o', str(payload / 'tomnode'), './cmd/tomnode'], cwd=ROOT, env=environment)
-        # 必须核对镜像内代理来自同一工作树，不能把陈旧镜像配给新节点程序。
-        container = command(['docker', 'create', '--network', 'none', image_id]).decode().strip()
-        try:
-            for name in ('computer-agent', 'computer-task', 'computer-probe', 'bot-agent'):
-                command(['go', 'build', '-trimpath', '-o', str(stage / name), './cmd/' + name], cwd=ROOT, env=environment)
-                target = stage / (name + '.image')
-                command(['docker', 'cp', container + ':/usr/lib/tombot/' + name, str(target)])
-                require(digest(target) == digest(stage / name), '电脑镜像代理不是当前源码，请先重新构建镜像')
-        finally:
-            command(['docker', 'rm', container])
-        print('正在导出离线电脑镜像', flush=True)
-        command(['docker', 'image', 'save', '--output', str(payload / 'computer-image.tar'), image], timeout=1200)
-        require((payload / 'computer-image.tar').stat().st_size <= MAX_IMAGE, '电脑镜像超过归档上限')
-        release = {'version': 1, 'label': label, 'platform': 'linux/' + architecture, 'image_reference': reference, 'archive_sha256': digest(payload / 'computer-image.tar'), 'docker': manifest}
-        (payload / 'node-release.json').write_text(json.dumps(release, ensure_ascii=False, indent=2) + '\n')
-        shutil.copyfile(ROOT / 'deploy/node-install.example.json', payload / 'node-install.example.json')
-        (payload / '安装说明.txt').write_text(
-            '完整解压到受保护目录（例如 /root/tombot），执行 sudo ./tomnode install。\n'
-            '按提示粘贴管理平台新生成的接入码，再确认节点访问地址。默认无需填写 JSON。\n'
-            '电脑镜像随包离线导入；Docker 和宿主依赖仍从官方软件源安装，需要联网。\n'
-            '节点将保存身份、凭据与镜像，失败后使用同一程序重试；不要删除已生成身份。\n'
-            '如需覆盖节点名称、容量、地址或监听网卡，填写可选示例并显式传入文件路径。\n'
-            '支持 Debian/Ubuntu 与 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora；需要 systemd、cgroup v2 和 Docker API 1.47。节点默认端口 9444，服务端默认 9443。已有节点在部署配套 tomd 后直接执行 sudo ./tomnode upgrade；程序自动核对隔离电脑并接续可恢复的原计划。在管理平台“电脑节点 → 远程升级”上传本包，校验通过后即可选择节点下发。节点能力以实际验收结果为准。\n'
-        )
-        (payload / 'SHA256SUMS').write_text(''.join(digest(payload / name) + '  ' + name + '\n' for name in sorted(FILES - {'SHA256SUMS'})))
-        candidate = stage / 'package.tar.gz'
-        print('正在压缩并核验安装包', flush=True)
-        with tarfile.open(candidate, 'w:gz', compresslevel=1) as bundle:
-            for name in sorted(FILES):
-                metadata = bundle.gettarinfo(str(payload / name), name)
-                metadata.uid = metadata.gid = 0
-                metadata.uname = metadata.gname = ''
-                metadata.mode = 0o755 if name == 'tomnode' else 0o644
-                with (payload / name).open('rb') as source:
-                    bundle.addfile(metadata, source)
-        verify(candidate)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix='.package-', dir=output.parent) as staging:
-            ready = Path(staging) / 'package.tar.gz'
-            shutil.copyfile(candidate, ready)
-            os.link(ready, output)
-    print(str(output), flush=True)
+    _, reference = inspect_image(image, architecture)
+    with tempfile.TemporaryDirectory() as temporary:
+        archive = Path(temporary) / 'computer-image.tar'
+        command(['docker', 'image', 'save', '--output', str(archive), image], timeout=1200)
+        profile = {'version': 2, 'label': label, 'platform': 'linux/' + architecture, 'image_reference': reference,
+                   'archive_sha256': digest(archive), 'docker': manifest}
+        write_package({'computer-image.tar': archive}, profile, 'node-release.json', 'SHA256SUMS', output)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    subcommands = parser.add_subparsers(dest='action', required=True)
-    builder = subcommands.add_parser('build')
-    builder.add_argument('--label', required=True, help='管理平台显示的版本号')
-    builder.add_argument('--image', required=True)
-    builder.add_argument('--architecture', choices=('amd64', 'arm64'), required=True)
-    builder.add_argument('--runtime', type=Path, required=True)
-    builder.add_argument('--output', type=Path, required=True)
-    checker = subcommands.add_parser('verify')
-    checker.add_argument('archive', type=Path)
-    arguments = parser.parse_args()
-    if arguments.action == 'build':
-        build(arguments.image, arguments.architecture, arguments.runtime, arguments.output, arguments.label)
+    actions = parser.add_subparsers(dest='action', required=True)
+    for action in ('programs', 'image'):
+        command_parser = actions.add_parser(action)
+        command_parser.add_argument('--architecture', choices=('amd64', 'arm64'), required=True)
+        command_parser.add_argument('--label', required=True)
+        command_parser.add_argument('--output', type=Path, required=True)
+        if action == 'programs':
+            command_parser.add_argument('--bin-dir', type=Path, required=True)
+        else:
+            command_parser.add_argument('--image', required=True)
+            command_parser.add_argument('--runtime', type=Path, required=True)
+    actions.add_parser('verify').add_argument('archive', type=Path)
+    args = parser.parse_args()
+    if args.action == 'programs':
+        build_programs(args.bin_dir, args.architecture, args.label, args.output)
+    elif args.action == 'image':
+        build_image(args.image, args.architecture, args.runtime, args.label, args.output)
     else:
-        verify(arguments.archive)
-        print('离线安装包核验通过')
+        verify(args.archive)
+        print('发布包核验通过')

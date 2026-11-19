@@ -22,13 +22,14 @@ from build_computer_image import ENVIRONMENT_FILE, IMAGE_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = ("amd64", "arm64")
-FORMAT_VERSION = 9
+FORMAT_VERSION = 10
 HOST_PROGRAMS = ("tomd", "tomnode")
 COMPUTER_PROGRAMS = ("computer-agent", "computer-task", "computer-probe", "bot-agent")
 DEPLOY_FILES = ("tomd.service", "systemd/tombot-node.service", "systemd/tombot-node-update.service", "systemd/tombot-node-update.timer", "node.example.json", "node-install.example.json",
                 "docker-install.schema.json", "computer-image.schema.json", "CONFIGURE.md", "NODE.md", "SERVER.md")
 VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py", "node_release.py")
 SOURCE_DIRECTORIES = ("server/cmd", "server/internal", "server/web", "server/deploy", "server/scripts", "admin", "ui")
+IMAGE_SOURCE_PATHS = {Path("server/deploy/computer") / name for name in IMAGE_FILES}
 SHARED_ASSETS = ("desktop/src/renderer/src/assets/cats/frames/bombay.png",)
 SOURCE_SUFFIXES = {".go", ".sql", ".html", ".json", ".py", ".xml", ".service", ".timer", ".md",
                    ".ts", ".tsx", ".js", ".mjs", ".css", ".png", ".svg", ".ico", ".woff2"}
@@ -91,7 +92,8 @@ def source_paths(root):
                 if name == ".DS_Store" or name == ".env" or name.startswith(".env."):
                     continue
                 path = Path(directory) / name
-                require(path.suffix in SOURCE_SUFFIXES or name in SOURCE_NAMES, "构建源码出现未声明的文件类型")
+                require(path.suffix in SOURCE_SUFFIXES or name in SOURCE_NAMES or path.relative_to(root) in IMAGE_SOURCE_PATHS,
+                        "构建源码出现未声明的文件类型")
                 paths.append(path)
     return sorted(paths, key=lambda path: path.relative_to(root).as_posix())
 
@@ -147,7 +149,7 @@ def required_paths():
     for architecture in ARCHITECTURES:
         prefix = "linux-" + architecture
         paths.update(prefix + "/bin/" + name for name in HOST_PROGRAMS)
-        paths.update(prefix + "/computer-image/bin/" + name for name in COMPUTER_PROGRAMS)
+        paths.update(prefix + "/bin/" + name for name in COMPUTER_PROGRAMS)
         paths.update(prefix + "/computer-image/" + name for name in IMAGE_FILES)
         paths.add(prefix + "/computer-image/desktop-environment.json")
     return paths
@@ -164,7 +166,7 @@ def binary_paths():
         for name in HOST_PROGRAMS:
             paths[prefix + "/bin/" + name] = architecture
         for name in COMPUTER_PROGRAMS:
-            paths[prefix + "/computer-image/bin/" + name] = architecture
+            paths[prefix + "/bin/" + name] = architecture
     return paths
 
 

@@ -214,6 +214,11 @@ func (installer nodeInstaller) install(ctx context.Context, requestPath, executa
 	if err := installer.fs.installExactFile(ctx, nodeServicePath, service, 0644); err != nil {
 		return NodeInstallationReport{}, err
 	}
+	if request.Programs.valid() {
+		if err := installer.fs.activateBot(request.Programs); err != nil {
+			return report, err
+		}
+	}
 	if err := installer.startNodeServices(ctx, request.Server != nil, nil); err != nil {
 		return NodeInstallationReport{}, err
 	}
@@ -290,6 +295,11 @@ func (installer nodeInstaller) publishInstallation(ctx context.Context, files []
 }
 
 func (installer nodeInstaller) verifyInstallation(ctx context.Context, record nodeInstallation) (NodeInstallationReport, error) {
+	return installer.verifyInstallationConfig(ctx, record, nodeapp.ParseConfig)
+}
+
+// verifyInstallationConfig 先核对原始文件摘要，再按当前安装或旧配置迁移的规则解析节点参数。
+func (installer nodeInstaller) verifyInstallationConfig(ctx context.Context, record nodeInstallation, parseNode func([]byte) (nodeapp.Config, error)) (NodeInstallationReport, error) {
 	names := []string{"node.json", "docker-install.json", "computer-image.json", "certificate.pem", "private.key"}
 	contents := map[string][]byte{}
 	defer func() { clear(contents["private.key"]) }()
@@ -303,7 +313,7 @@ func (installer nodeInstaller) verifyInstallation(ctx context.Context, record no
 			return NodeInstallationReport{}, errors.New("节点配置或证书与安装记录不一致，未重新生成或覆盖")
 		}
 	}
-	node, err := nodeapp.ParseConfig(contents["node.json"])
+	node, err := parseNode(contents["node.json"])
 	if err != nil {
 		return NodeInstallationReport{}, err
 	}
@@ -323,6 +333,17 @@ func (installer nodeInstaller) verifyInstallation(ctx context.Context, record no
 	}
 	if node.Enrollment != nil && len(record.Request) == 0 {
 		return NodeInstallationReport{}, errors.New("缺少安装请求快照")
+	}
+	if len(record.Request) != 0 {
+		req, _, err := parseNodeInstallRequest(record.Request)
+		if err != nil {
+			return NodeInstallationReport{}, err
+		}
+		if req.Programs != (programVersions{}) {
+			if err := installer.fs.verifyPrograms(ctx, req.Programs); err != nil {
+				return NodeInstallationReport{}, err
+			}
+		}
 	}
 	var imageManifest dockernode.ImageManifest
 	imageManifest, err = dockernode.ParseImageManifest(contents["computer-image.json"])

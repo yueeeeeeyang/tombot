@@ -9,7 +9,6 @@ import (
 
 	"io.yueyang/tom/deploy"
 	"io.yueyang/tom/internal/dockernode"
-	"io.yueyang/tom/internal/nodeapp"
 )
 
 // upgradeWithRecovery 先用同一程序和已登记镜像接续旧计划，验收完成后再应用本包目标镜像。
@@ -59,9 +58,15 @@ func (installer nodeInstaller) upgradeWithRecovery(ctx context.Context, executab
 	if err != nil {
 		return report, err
 	}
-	node, err := nodeapp.ParseConfig(body)
-	if err != nil || node.NodeID != current.NodeID {
-		return report, errors.New("本机节点身份和安装快照不符")
+	if contentDigest(body) != record.Files["node.json"] {
+		return report, errors.New("已安装的 node.json 与 installation.json 记录的文件摘要不符")
+	}
+	node, err := parseRepairNodeConfig(body)
+	if err != nil {
+		return report, err
+	}
+	if node.NodeID != current.NodeID {
+		return report, errors.New("已安装的 node.json 中 node_id 与安装请求快照不符")
 	}
 	wait, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
@@ -118,9 +123,12 @@ func (installer nodeInstaller) upgradeWithRecovery(ctx context.Context, executab
 			if err := dockernode.CheckUpgradeSource(installer.fs.resolve(node.Runtime.StateDirectory), installer.fs.owner, *inspection.Source, inspection.Target.ContainerID, inspection.ErrorCode == ""); err != nil {
 				return report, fmt.Errorf("电脑 %s 的原容器或恢复标记未通过核验：%w", inspection.Target.ComputerID, err)
 			}
-			if !checkedArchive {
+			if !checkedArchive && options.ImagePackage != "" {
 				// 先完整核验后续要安装的包；校验通过的归档可在切换时复用。
 				candidate := current
+				if options.Programs.valid() {
+					candidate.Programs = options.Programs
+				}
 				if err := installer.prepareImageUpgrade(ctx, &candidate, &record, options.ImagePackage); err != nil {
 					return report, err
 				}
