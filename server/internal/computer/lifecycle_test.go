@@ -81,9 +81,13 @@ func TestObservationIdentityAndState(t *testing.T) {
 			t.Fatal("部分资源状态未被识别", state)
 		}
 	}
-	for index := range 6 {
+	ready.Capabilities.Browser = false
+	if !ready.Capabilities.Ready() {
+		t.Fatal("桌面尚未打开 Chrome 时整机仍应就绪")
+	}
+	for index := range 5 {
 		capabilities := ready.Capabilities
-		fields := []*bool{&capabilities.Terminal, &capabilities.Browser, &capabilities.Files, &capabilities.ProcessReaping, &capabilities.DiskQuota, &capabilities.NetworkIsolation}
+		fields := []*bool{&capabilities.Terminal, &capabilities.Files, &capabilities.ProcessReaping, &capabilities.DiskQuota, &capabilities.NetworkIsolation}
 		*fields[index] = false
 		if capabilities.Ready() {
 			t.Fatal("缺少必要能力仍判定就绪", index)

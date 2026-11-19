@@ -2,6 +2,8 @@ package computeragent
 
 import (
 	"context"
+	"io.yueyang/tom/internal/processgroup"
+	"io.yueyang/tom/internal/taskprocess"
 	"os"
 	"path/filepath"
 	"testing"
@@ -87,4 +89,10 @@ func TestBrowserFileRecordIntegrity(t *testing.T) {
 	if _, err := store.LoadBrowser(t.Context()); err == nil {
 		t.Fatal("损坏共享浏览器记录被视为空记录")
 	}
+}
+
+func browserGrant(fixture fixture) BrowserGrant {
+	probe := probeGrant(fixture)
+	probe.Request.Group.Kind = processgroup.BrowserService
+	return BrowserGrant{Identity: probe.Identity, Revision: 1, Request: taskprocess.BrowserRequest{Version: 1, Group: probe.Request.Group, Deadline: probe.Request.Deadline}, Limits: BrowserLimits{Width: 960, Height: 640, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 32, MaximumEvents: 128, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}}
 }

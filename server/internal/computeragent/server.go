@@ -17,18 +17,17 @@ import (
 type Server struct {
 	controller *Controller
 	probes     *ProbeController
-	browsers   *BrowserController
 	check      PeerCheck
 	timeout    time.Duration
 	maximum    int
 	logger     *slog.Logger
 }
 
-func NewServer(controller *Controller, probes *ProbeController, browsers *BrowserController, check PeerCheck, timeout time.Duration, maximum int, logger *slog.Logger) (*Server, error) {
-	if controller == nil || probes == nil || browsers == nil || controller.identity != probes.identity || controller.identity != browsers.identity || check == nil || logger == nil || timeout < time.Second || timeout > time.Minute || maximum < 1 || maximum > 128 {
+func NewServer(controller *Controller, probes *ProbeController, check PeerCheck, timeout time.Duration, maximum int, logger *slog.Logger) (*Server, error) {
+	if controller == nil || probes == nil || controller.identity != probes.identity || check == nil || logger == nil || timeout < time.Second || timeout > time.Minute || maximum < 1 || maximum > 128 {
 		return nil, errors.New("电脑代理控制服务配置无效")
 	}
-	return &Server{controller: controller, probes: probes, browsers: browsers, check: check, timeout: timeout, maximum: maximum, logger: logger}, nil
+	return &Server{controller: controller, probes: probes, check: check, timeout: timeout, maximum: maximum, logger: logger}, nil
 }
 
 // Serve 接管已在 root 私有目录中建立的 Unix 顺序包监听器；取消后关闭接入并等待在途请求结束。
@@ -93,17 +92,6 @@ func (server *Server) serveConnection(parent context.Context, connection *net.Un
 	defer func() { failure = errors.Join(failure, agentchannel.CloseFiles(files)) }()
 	if request.Method == "health" {
 		return server.serveHealth(ctx, channel, request, len(files))
-	}
-	if request.Method == "browser_start" {
-		owned := files
-		files = nil
-		// 启动由授权中的绝对期限约束，读写单个报文仍使用通道原有时限。
-		return server.serveBrowser(parent, channel, request, owned)
-	}
-	if request.Method == "browser_status" || request.Method == "browser_close" || request.Method == "browser_probe" {
-		owned := files
-		files = nil
-		return server.serveBrowser(ctx, channel, request, owned)
 	}
 	if request.Method == "probe" {
 		owned := files

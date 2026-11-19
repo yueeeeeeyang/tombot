@@ -92,3 +92,8 @@ func (router *Router) Console(ctx context.Context, input computer.ConsoleRequest
 }
 
 var _ computer.ConsoleRuntime = (*Router)(nil)
+
+func (router *Router) PrepareBrowser(ctx context.Context, input computer.ExecutionSession) error {
+	_, err := routeCall[confirmation](ctx, router, input.NodeID, "browser_prepare", input)
+	return err
+}

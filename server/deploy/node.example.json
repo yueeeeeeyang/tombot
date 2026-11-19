@@ -84,18 +84,7 @@
   "browser": {
     "call_timeout_ms": 10000,
     "cleanup_timeout_ms": 30000,
-    "shutdown_timeout_ms": 60000,
-    "limits": {
-      "width": 1280,
-      "height": 800,
-      "maximum_windows": 32,
-      "maximum_per_session": 4,
-      "maximum_window_records": 128,
-      "maximum_events": 256,
-      "call_timeout_ms": 5000,
-      "dialog_timeout_ms": 300000,
-      "shutdown_timeout_ms": 5000
-    }
+    "shutdown_timeout_ms": 60000
   },
   "agent_startup": {
     "timeout_ms": 5000,

@@ -35,15 +35,7 @@ RUN printf 'path-include /usr/share/locale/zh*\n' > /etc/dpkg/dpkg.cfg.d/zz-tomb
     && rm -rf /var/lib/apt/lists/*
 
 ENV LANG=zh_CN.UTF-8 LC_ALL=zh_CN.UTF-8
-# 原生窗口隔离扩展使用已验证的 Xpra 协议版本；更新必须同时运行窗口越权和双桌面回归。
 COPY tools.lock.json /usr/share/tombot/tools.lock.json
-RUN curl --fail --location --retry 3 --connect-timeout 15 --max-time 60 https://xpra.org/xpra.asc -o /usr/share/keyrings/xpra.asc \
-    && printf '4df3209ea4b759f0b5838b60baedb6893ec62df7abad9046462176a6e6a7ed7d  /usr/share/keyrings/xpra.asc\n' | sha256sum -c - \
-    && printf 'Types: deb\nURIs: https://xpra.org\nSuites: trixie\nComponents: main\nSigned-By: /usr/share/keyrings/xpra.asc\n' > /etc/apt/sources.list.d/xpra.sources \
-    && apt-get update \
-    && xpra_version="$(jq -er --arg arch "$(dpkg --print-architecture)" '.xpra[$arch]' /usr/share/tombot/tools.lock.json)" \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "xpra=$xpra_version" "xpra-x11=$xpra_version" \
-    && rm -rf /var/lib/apt/lists/*
 COPY install_tools.py /usr/lib/tombot/install_tools.py
 RUN apt-get update \
     && python3 /usr/lib/tombot/install_tools.py \
@@ -53,7 +45,15 @@ RUN apt-get update \
 COPY bin/computer-agent bin/computer-task bin/computer-probe bin/bot-agent /usr/lib/tombot/
 COPY desktop.py /usr/lib/tombot/desktop.py
 COPY files.py /usr/lib/tombot/files.py
-COPY native_browser.py native_browser_io.py native_browser_policy.py /usr/lib/tombot/
+COPY open_browser.py /usr/lib/tombot/open_browser.py
+COPY tombot-browser.desktop /usr/local/share/applications/google-chrome.desktop
+RUN install -d /etc/opt/chrome/policies/managed \
+    && printf '%s\n' '{"DownloadDirectory":"/workspace/Downloads","PromptForDownloadLocation":false}' > /etc/opt/chrome/policies/managed/downloads.json \
+    && chmod 0755 /usr/lib/tombot/open_browser.py \
+    && ln -s /usr/lib/tombot/open_browser.py /usr/local/bin/google-chrome \
+    && install -d /usr/local/share/xfce4/helpers /etc/xdg/xfce4 \
+    && printf '%s\n' '[Desktop Entry]' 'Type=X-XFCE-Helper' 'Name=Google Chrome' 'X-XFCE-Category=WebBrowser' 'X-XFCE-Commands=/usr/local/bin/google-chrome' 'X-XFCE-CommandsWithParameter=/usr/local/bin/google-chrome "%s"' > /usr/local/share/xfce4/helpers/tombot-browser.desktop \
+    && printf '%s\n' 'WebBrowser=tombot-browser' >> /etc/xdg/xfce4/helpers.rc
 COPY prepare.py /usr/lib/tombot/prepare.py
 COPY desktop-environment.json /usr/share/tombot/desktop-environment.json
 COPY verify_tools.py /usr/lib/tombot/verify_tools.py
@@ -70,7 +70,7 @@ RUN chmod 0755 /usr/lib/tombot/computer-agent /usr/lib/tombot/computer-task /usr
     && test -f /usr/share/locale/zh_CN/LC_MESSAGES/xfce4-session.mo \
     && python3 /usr/lib/tombot/verify_tools.py > /usr/share/tombot/tools-versions.json
 
-LABEL io.tombot.computer.storage-layout="2"
+LABEL io.tombot.computer.storage-layout="2" io.tombot.computer.desktop-browser="1"
 WORKDIR /workspace
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/lib/tombot/computer-agent"]

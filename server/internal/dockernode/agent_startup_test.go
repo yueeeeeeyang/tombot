@@ -149,7 +149,7 @@ func (browsers *gatedBrowsers) ensure(ctx context.Context, resource Resource, cu
 	return browsers.fakeComputerBrowsers.ensure(ctx, resource, current)
 }
 
-func TestAgentStartupPrecedesBrowserAndNeverResendsStart(t *testing.T) {
+func TestAgentStartupDoesNotStartChrome(t *testing.T) {
 	fixture, startup, _, _ := newAgentStartupFixture(t)
 	fixture.node.agent = startup
 	browsers := &gatedBrowsers{}
@@ -171,7 +171,7 @@ func TestAgentStartupPrecedesBrowserAndNeverResendsStart(t *testing.T) {
 	}
 	injected := errors.New("浏览器启动回包未知")
 	browsers.ensureError = injected
-	if _, err := fixture.node.Inspect(t.Context(), fixture.specification); !errors.Is(err, injected) || checks != 3 || browsers.calls.Load() != 1 {
+	if _, err := fixture.node.Inspect(t.Context(), fixture.specification); err != nil || checks != 3 || browsers.calls.Load() != 0 {
 		t.Fatal("控制检查与浏览器重试边界错误", checks, browsers.calls.Load(), err)
 	}
 }

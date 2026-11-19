@@ -46,7 +46,7 @@ type testRuntime struct {
 func observation(specification computer.Specification, state string) computer.Observation {
 	value := computer.Observation{OperationID: specification.OperationID, UserID: specification.UserID, ComputerID: specification.ComputerID,
 		Generation: specification.Generation, FencingToken: specification.FencingToken, State: state, VolumeReference: specification.VolumeReference,
-		Capabilities: computer.Capabilities{Terminal: true, Browser: true, Files: true, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true}}
+		Capabilities: computer.Capabilities{Terminal: true, Files: true, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true}}
 	if state != "absent" {
 		value.ContainerID = secure.Hash(specification.ComputerID)
 	}
@@ -68,7 +68,7 @@ func (runtime *testRuntime) Inspect(_ context.Context, specification computer.Sp
 		value.UserID = ids.New()
 	}
 	if runtime.missingCapability {
-		value.Capabilities.Browser = false
+		value.Capabilities.Files = false
 	}
 	return value, nil
 }
@@ -102,7 +102,7 @@ func (runtime *testRuntime) Ensure(ctx context.Context, specification computer.S
 	runtime.resources[specification.ComputerID] = state
 	value := observation(specification, state)
 	if runtime.missingCapability {
-		value.Capabilities.Browser = false
+		value.Capabilities.Files = false
 	}
 	return value, runtime.ensureError
 }

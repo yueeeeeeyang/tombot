@@ -4,52 +4,42 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"os"
 	"time"
 
-	"io.yueyang/tom/internal/agentchannel"
-	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/computeragent"
-	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/processgroup"
-	"io.yueyang/tom/internal/taskprocess"
 )
 
-// BrowserOptions 分别限制冷启动、单次调用、原实例回收及整个节点停服。
+// BrowserOptions 只约束升级时旧共享服务的退出与回收。
 type BrowserOptions struct {
-	StartupTimeout  time.Duration
 	CallTimeout     time.Duration
 	CleanupTimeout  time.Duration
 	ShutdownTimeout time.Duration
 	Groups          processgroup.Options
-	Limits          computeragent.BrowserLimits
 }
 
 func (options BrowserOptions) Validate() error {
-	if options.Groups.Validate() != nil || options.Limits.Validate() != nil || options.CallTimeout < time.Second || options.StartupTimeout < options.CallTimeout || options.StartupTimeout > taskprocess.BrowserMaximumStartTime || options.CleanupTimeout <= options.CallTimeout+options.Groups.GracePeriod+options.Groups.PollInterval || options.CleanupTimeout > time.Minute || options.ShutdownTimeout < options.CleanupTimeout || options.ShutdownTimeout > 5*time.Minute {
+	if options.Groups.Validate() != nil || options.CallTimeout < time.Second || options.CleanupTimeout <= options.CallTimeout+options.Groups.GracePeriod+options.Groups.PollInterval || options.CleanupTimeout > time.Minute || options.ShutdownTimeout < options.CleanupTimeout || options.ShutdownTimeout > 5*time.Minute {
 		return errors.New("节点共享浏览器预算无效")
 	}
 	return nil
 }
 
 type computerBrowsers interface {
-	ensure(context.Context, Resource, container) error
-	check(context.Context, Resource, container) error
 	retire(context.Context, Resource) error
 	shutdown(context.Context) error
 }
 
 // nodeBrowsers 运行操作由用户生命周期独占锁串行；恢复和停服逐用户取锁，不恢复未知启动。
 type nodeBrowsers struct {
-	probeInvoke func(context.Context, Resource, computeragent.BrowserGrant, string) (computeragent.BrowserObservation, error)
-	node        *Runtime
-	store       browserStore
-	groups      processgroup.ServiceGroups
-	options     BrowserOptions
-	logger      *slog.Logger
-	locate      func(context.Context, string, int) (processgroup.ContainerReference, error)
-	invoke      func(context.Context, Resource, computeragent.BrowserGrant, string, []*os.File) (computeragent.BrowserObservation, error)
+	node    *Runtime
+	store   browserStore
+	groups  processgroup.ServiceGroups
+	options BrowserOptions
+	logger  *slog.Logger
+	locate  func(context.Context, string, int) (processgroup.ContainerReference, error)
+	invoke  func(context.Context, Resource, computeragent.BrowserGrant, string, []*os.File) (computeragent.BrowserObservation, error)
 }
 
 func newBrowsers(node *Runtime, logger *slog.Logger) (*nodeBrowsers, error) {
@@ -59,50 +49,7 @@ func newBrowsers(node *Runtime, logger *slog.Logger) (*nodeBrowsers, error) {
 	}
 	browsers := &nodeBrowsers{node: node, store: node.journal, groups: groups, options: node.options.Browser, logger: logger, locate: processgroup.LocateContainer}
 	browsers.invoke = browsers.call
-	browsers.probeInvoke = browsers.probeCall
 	return browsers, nil
-}
-
-// check 在实际容器资源组中复验活动授权，只有新挑战的完整回执才可用于本次就绪判断。
-func (browsers *nodeBrowsers) check(ctx context.Context, resource Resource, current container) error {
-	bounded, cancel := context.WithTimeout(ctx, browsers.options.CallTimeout)
-	defer cancel()
-	state, err := browsers.previous(resource)
-	if err != nil {
-		return err
-	}
-	if state == nil || state.Phase != "active" || state.Grant.Identity != browsers.node.agentConfiguration(resource).Identity {
-		return failure("browser_probe_inactive")
-	}
-	parent, err := browsers.node.serviceParent(bounded, resource, current.ID, browsers.locate)
-	if err != nil {
-		return err
-	}
-	if parent != state.Grant.Request.Group.Container {
-		return failure("browser_parent_changed")
-	}
-	challenge := ids.New()
-	observed, err := browsers.probeInvoke(bounded, resource, state.Grant, challenge)
-	var probeFailure *browserprobe.Failure
-	if errors.As(err, &probeFailure) && browserprobe.ValidFailure(probeFailure.Code) {
-		return failure(probeFailure.Code)
-	}
-	if err != nil || observed.Grant != state.Grant || observed.Phase != "active" || observed.Evidence == nil || observed.Evidence.Validate(challenge) != nil {
-		return errors.Join(failure("browser_probe_failed"), err)
-	}
-	actual, err := browsers.node.serviceParent(bounded, resource, current.ID, browsers.locate)
-	if err != nil || actual != parent {
-		return errors.Join(failure("browser_parent_changed"), err)
-	}
-	return bounded.Err()
-}
-
-func (browsers *nodeBrowsers) probeCall(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, challenge string) (computeragent.BrowserObservation, error) {
-	client, err := browsers.node.serviceClient(ctx, resource, grant.Request.Group.Container, browsers.locate, browsers.options.CallTimeout)
-	if err != nil {
-		return computeragent.BrowserObservation{}, err
-	}
-	return client.ProbeBrowser(ctx, grant, challenge)
 }
 
 func (browsers *nodeBrowsers) previous(resource Resource) (*browserRecord, error) {
@@ -117,114 +64,7 @@ func (browsers *nodeBrowsers) previous(resource Resource) (*browserRecord, error
 	return state, nil
 }
 
-// ensure 只有显式对账能够创建新授权；活动服务只查询原授权，查询失败封闭原实例并返回失败。
-func (browsers *nodeBrowsers) ensure(ctx context.Context, resource Resource, current container) (result error) {
-	previous, err := browsers.previous(resource)
-	if err != nil {
-		return err
-	}
-	timeout := browsers.options.StartupTimeout
-	if previous != nil && previous.Phase != "closed" {
-		timeout = browsers.options.CallTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	parent, err := browsers.node.serviceParent(ctx, resource, current.ID, browsers.locate)
-	if err != nil {
-		return err
-	}
-	if previous != nil && previous.Phase != "closed" {
-		if previous.Phase == "active" && previous.Grant.Identity == browsers.node.agentConfiguration(resource).Identity && previous.Grant.Request.Group.Container == parent {
-			observed, err := browsers.invoke(ctx, resource, previous.Grant, "status", nil)
-			if err == nil && observed.Grant == previous.Grant && observed.Phase == "active" {
-				actual, verifyErr := browsers.node.serviceParent(ctx, resource, current.ID, browsers.locate)
-				if verifyErr == nil && actual == parent {
-					return ctx.Err()
-				}
-				err = errors.Join(failure("browser_parent_changed"), verifyErr)
-			}
-			return errors.Join(failure("browser_status_unconfirmed"), err, browsers.close(context.WithoutCancel(ctx), previous))
-		}
-		return errors.Join(failure("browser_previous_unconfirmed"), browsers.close(context.WithoutCancel(ctx), previous))
-	}
-	revision := int64(1)
-	if previous != nil {
-		if previous.Grant.Revision == math.MaxInt64 {
-			return failure("browser_revision_exhausted")
-		}
-		revision = previous.Grant.Revision + 1
-	}
-	deadline, _ := ctx.Deadline()
-	stamp, err := browsers.node.serviceDeadline(ctx, resource, parent, browsers.locate, deadline)
-	if err != nil {
-		return err
-	}
-	grant := computeragent.BrowserGrant{Identity: browsers.node.agentConfiguration(resource).Identity, Revision: revision, Request: taskprocess.BrowserRequest{Version: 1, Group: processgroup.ServiceReference{Container: parent, ID: ids.New(), Kind: processgroup.BrowserService}, Deadline: stamp}, Limits: browsers.options.Limits}
-	state := &browserRecord{Version: 1, Specification: resource.Specification, Grant: grant, Phase: "prepared"}
-	if err := browsers.store.saveBrowser(state); err != nil {
-		return err
-	}
-	// Create、传递入口及回包都可能结果未知；后续失败只关闭原授权，不创建替代实例。
-	defer func() {
-		if result != nil {
-			result = errors.Join(result, browsers.close(context.WithoutCancel(ctx), state))
-		}
-	}()
-	if err := browsers.groups.Create(ctx, grant.Request.Group); err != nil {
-		return err
-	}
-	files, err := browsers.groups.Controls(ctx, grant.Request.Group)
-	if err != nil {
-		return err
-	}
-	defer func() { result = errors.Join(result, agentchannel.CloseFiles(files)) }()
-	state.Phase = "dispatched"
-	if err := browsers.store.saveBrowser(state); err != nil {
-		return err
-	}
-	observed, err := browsers.invoke(ctx, resource, grant, "start", files)
-	if err != nil || observed.Grant != grant || observed.Phase != "active" {
-		var startup *browserprobe.Failure
-		if errors.As(err, &startup) && browserprobe.ValidStartFailure(startup.Code) {
-			return failure(startup.Code)
-		}
-		code, recordErr := browsers.startupFailure(resource, grant)
-		if code != "" {
-			return errors.Join(failure(code), err, recordErr)
-		}
-		return errors.Join(failure("browser_start_unconfirmed"), err, recordErr)
-	}
-	actual, err := browsers.node.serviceParent(ctx, resource, current.ID, browsers.locate)
-	if err != nil || actual != parent {
-		return errors.Join(failure("browser_parent_changed"), err)
-	}
-	state.Phase = "active"
-	if err := browsers.store.saveBrowser(state); err != nil {
-		return err
-	}
-	browsers.logger.InfoContext(ctx, "用户共享浏览器已确认启动", "user_id", grant.Identity.UserID, "computer_id", grant.Identity.ComputerID, "generation", grant.Identity.Generation, "service_id", grant.Request.Group.ID, "revision", grant.Revision)
-	return ctx.Err()
-}
-
-// startupFailure 只读取原容器私有目录中完全匹配本次授权的失败记录；代理提前退出不应抹去诊断。
-// 该记录绝不能代替启动回执、父组复验或原实例回收。
-func (browsers *nodeBrowsers) startupFailure(resource Resource, grant computeragent.BrowserGrant) (code string, result error) {
-	directory, err := browsers.node.agentDirectory(resource, false)
-	if err != nil {
-		return "", err
-	}
-	defer func() { result = errors.Join(result, directory.root.Close()) }()
-	encoded, err := directory.readFile("browser.json")
-	if err != nil || encoded == nil {
-		return "", err
-	}
-	var snapshot computeragent.BrowserSnapshot
-	if agentchannel.Decode(encoded, &snapshot) != nil || snapshot.Validate() != nil || snapshot.Grant != grant {
-		return "", failure("browser_start_record_invalid")
-	}
-	return snapshot.StartupError, nil
-}
-
+// retire 只回收升级前已持久登记的原实例。
 func (browsers *nodeBrowsers) retire(ctx context.Context, resource Resource) error {
 	state, err := browsers.previous(resource)
 	if err != nil || state == nil || state.Phase == "closed" {
@@ -337,22 +177,12 @@ func (browsers *nodeBrowsers) recover(ctx context.Context) error {
 func (browsers *nodeBrowsers) shutdown(ctx context.Context) error { return browsers.recover(ctx) }
 
 func (browsers *nodeBrowsers) call(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-	timeout := browsers.options.CallTimeout
-	if action == "start" {
-		timeout = browsers.options.StartupTimeout
+	if action != "close" || len(files) != 0 {
+		return computeragent.BrowserObservation{}, failure("browser_action_invalid")
 	}
-	client, err := browsers.node.serviceClient(ctx, resource, grant.Request.Group.Container, browsers.locate, timeout)
+	client, err := browsers.node.serviceClient(ctx, resource, grant.Request.Group.Container, browsers.locate, browsers.options.CallTimeout)
 	if err != nil {
 		return computeragent.BrowserObservation{}, err
 	}
-	switch action {
-	case "start":
-		return client.StartBrowser(ctx, grant, files)
-	case "status":
-		return client.BrowserStatus(ctx, grant)
-	case "close":
-		return client.CloseBrowser(ctx, grant)
-	default:
-		return computeragent.BrowserObservation{}, failure("browser_action_invalid")
-	}
+	return client.CloseBrowser(ctx, grant)
 }

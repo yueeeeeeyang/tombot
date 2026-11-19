@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"io.yueyang/tom/internal/computer"
-	"io.yueyang/tom/internal/sharedbrowser"
 )
 
 // Console 保持桌面原执行权，单独确认任务冻结后才允许用户获取画面和输入。
@@ -14,14 +13,12 @@ func (controller *Controller) Console(ctx context.Context, request computer.Cons
 		return receipt, err
 	}
 	if request.Action == "prepare" {
-		windows, err := controller.BrowserWindows(ctx, request.Session)
+		status, err := controller.InspectDesktop(ctx, request.Session)
 		if err != nil {
 			return receipt, err
 		}
-		if len(windows) == 0 {
-			if _, err = controller.OpenBrowserWindow(ctx, sharedbrowser.Address{Session: request.Session, WindowID: request.Session.SessionID}); err != nil {
-				return receipt, err
-			}
+		if status.State != "ready" {
+			return receipt, errors.New("观看桌面尚未就绪")
 		}
 		return computer.ConsoleReceipt{Session: request.Session, Revision: request.Revision, State: "ready"}, nil
 	}

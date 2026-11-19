@@ -13,7 +13,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_FILE = ROOT / "internal/computer/desktop-environment.json"
-IMAGE_FILES = ("Dockerfile", "desktop.py", "files.py", "native_browser.py", "native_browser_io.py", "native_browser_policy.py", "prepare.py", "xfce4-session.xml", "xfwm4.xml", "xfce4-desktop.xml",
+IMAGE_FILES = ("Dockerfile", "desktop.py", "files.py", "open_browser.py", "tombot-browser.desktop", "prepare.py", "xfce4-session.xml", "xfwm4.xml", "xfce4-desktop.xml",
                "install_tools.py", "tools.lock.json", "verify_tools.py",
                "seccomp.json", "seccomp-source.json", "seccomp.LICENSE")
 

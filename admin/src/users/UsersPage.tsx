@@ -237,7 +237,9 @@ function CreateUser({
   }
   return (
     <Dialog title="创建用户与电脑" onClose={onClose} busy={busy || uncertain}>
-      <p className="description">创建成功时，用户的终端、浏览器和文件功能必须已通过健康检查。</p>
+      <p className="description">
+        创建电脑时会检查终端、文件、进程回收、磁盘配额和网络隔离。Chrome 在各桌面首次打开时启动。
+      </p>
       <form
         ref={form}
         onSubmit={(event) => {

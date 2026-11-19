@@ -66,8 +66,8 @@ func TestCapabilityProbeRequiresCurrentClosedEvidence(t *testing.T) {
 				cancel()
 			}
 			capabilities, err := probe.Check(ctx, resource, current.ID, evidence)
-			if scenario == "complete" {
-				if err != nil || !capabilities.Terminal || !capabilities.Files || !capabilities.ProcessReaping || !capabilities.DiskQuota || !capabilities.NetworkIsolation || !capabilities.Browser || !capabilities.Ready() {
+			if scenario == "complete" || scenario == "browser" {
+				if err != nil || !capabilities.Terminal || !capabilities.Files || !capabilities.ProcessReaping || !capabilities.DiskQuota || !capabilities.NetworkIsolation || capabilities.Browser || !capabilities.Ready() {
 					t.Fatal("完整证据没有确认就绪", capabilities, err)
 				}
 			} else if err == nil || capabilities != (computer.Capabilities{}) {

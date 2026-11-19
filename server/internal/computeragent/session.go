@@ -375,6 +375,14 @@ func (guard *desktopGuard) Close(ctx context.Context, command computer.SessionCo
 		}
 		return agentObservation(command, "closed"), nil
 	}
+	// 正常结束在现有租约内刷新站点数据。到期、撤销和意外退出仍立即走原资源组终止路径。
+	if browser, ok := guard.scope.(interface{ FinishDesktopBrowser(context.Context) error }); ok && guard.permit != nil && guard.permit.active(guard.state.Command.Revision) {
+		bounded, cancel := context.WithTimeout(ctx, min(3*time.Second, guard.options.CleanupTimeout))
+		if err := browser.FinishDesktopBrowser(bounded); err != nil {
+			guard.logger.WarnContext(ctx, "桌面浏览器正常退出未确认，继续回收执行组", "desktop_id", guard.desktop.DesktopID)
+		}
+		cancel()
+	}
 	if err = guard.retire(ctx, command); err != nil {
 		return computer.SessionObservation{}, err
 	}

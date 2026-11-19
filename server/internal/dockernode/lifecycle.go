@@ -67,7 +67,7 @@ func (node *Runtime) validateSnapshot(resource Resource, state *record, current 
 	}
 	if current.hasContainer {
 		container := current.container
-		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !sameLabels(container.Config.Labels, containerLabels(resource)) || state.ContainerID != "" && state.ContainerID != container.ID {
+		if !observed(resource, "present", container.ID, computer.Capabilities{}).Matches(resource.Specification) || container.ID == "" || container.Name != "/"+resource.Name || !matchingComputerLabels(container.Config.Labels, resource) || state.ContainerID != "" && state.ContainerID != container.ID {
 			return failure("container_identity_mismatch")
 		}
 		if err := node.validateContainer(resource, container); err != nil {
@@ -88,7 +88,16 @@ func containerLabels(resource Resource) map[string]string {
 		labels[key] = value
 	}
 	labels[computer.StorageLayoutLabel] = computer.StorageLayoutVersion
+	labels[computer.DesktopBrowserLabel] = "1"
 	return labels
+}
+
+func matchingComputerLabels(actual map[string]string, resource Resource) bool {
+	expected := containerLabels(resource)
+	if _, exists := actual[computer.DesktopBrowserLabel]; !exists {
+		delete(expected, computer.DesktopBrowserLabel)
+	}
+	return sameLabels(actual, expected)
 }
 
 func (node *Runtime) configuration(resource Resource) createContainer {
@@ -100,7 +109,7 @@ func (node *Runtime) configuration(resource Resource) createContainer {
 		SecurityOpt: computerimage.SecurityOptions(), NanoCpus: int64(resources.CPUMillis) * 1000000, Memory: resources.MemoryBytes, MemorySwap: resources.MemoryBytes, ShmSize: node.options.SharedMemoryBytes, PidsLimit: int64(resources.ProcessLimit), Init: &init, IpcMode: "private", CgroupnsMode: "private",
 		Mounts: []mount{
 			{Type: "volume", Source: resource.Name, Target: "/workspace", VolumeOptions: &volumeMountOptions{NoCopy: true, Subpath: computer.WorkspaceSubdirectory}},
-			{Type: "volume", Source: resource.Name, Target: computer.BrowserDirectory, VolumeOptions: &volumeMountOptions{NoCopy: true, Subpath: computer.BrowserSubdirectory}},
+			{Type: "volume", Source: resource.Name, Target: computer.BrowserDirectory, VolumeOptions: &volumeMountOptions{NoCopy: true, Subpath: computer.DesktopProfilesSubdirectory}},
 			{Type: "bind", Source: resource.ControlPath, Target: computeragent.ControlDirectory}},
 		Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,nosuid,nodev,noexec,size=%d,mode=1777", node.options.TemporaryBytes), "/run": fmt.Sprintf("rw,nosuid,nodev,noexec,size=%d,mode=0755", node.options.RuntimeBytes)}}
 	configuration.HostConfig.RestartPolicy.Name = "no"
@@ -138,6 +147,10 @@ func (node *Runtime) validateContainer(resource Resource, container container) e
 	}
 	if !reflect.DeepEqual(actual.Tmpfs, expected.HostConfig.Tmpfs) || actual.RestartPolicy.Name != "no" || actual.LogConfig.Type != "local" || !reflect.DeepEqual(actual.LogConfig.Config, expected.HostConfig.LogConfig.Config) {
 		return failure("container_runtime_mismatch")
+	}
+	// 旧镜像只能沿其原始的严格挂载契约完成排空与换代。新镜像必须带独立目录标签。
+	if container.Config.Labels[computer.DesktopBrowserLabel] != "1" {
+		expected.HostConfig.Mounts[1].VolumeOptions.Subpath = computer.BrowserSubdirectory
 	}
 	if len(container.Mounts) != 3 || !sameMountConfiguration(actual.Mounts, expected.HostConfig.Mounts) {
 		return failure("container_mount_mismatch")
@@ -218,14 +231,14 @@ func (node *Runtime) inspect(ctx context.Context, resource Resource, state *reco
 	if state.Phase == "absent" {
 		return observed(resource, "quarantined", current.container.ID, computer.Capabilities{}), nil
 	}
+	if current.hasContainer && current.container.Config.Labels[computer.DesktopBrowserLabel] != "1" && state.Phase != "removing" {
+		return observed(resource, "present", current.container.ID, computer.Capabilities{}), nil
+	}
 	if current.hasContainer && current.container.State.Running && state.Phase != "removing" {
 		if err := node.egress.ensure(ctx, resource, current.container); err != nil {
 			return computer.Observation{}, err
 		}
 		if err := node.agent.wait(ctx, resource, current.container); err != nil {
-			return computer.Observation{}, err
-		}
-		if err := node.browsers.ensure(ctx, resource, current.container); err != nil {
 			return computer.Observation{}, err
 		}
 		evidence, err := node.probes.check(ctx, resource, current.container)

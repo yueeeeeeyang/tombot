@@ -15,7 +15,7 @@ func TestDiskLayoutPreservesSharedAndBrowserContents(t *testing.T) {
 	if _, err := fixture.storage.ensure(ctx, fixture.resource); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{computer.WorkspaceSubdirectory, computer.BrowserSubdirectory} {
+	for _, name := range []string{computer.WorkspaceSubdirectory, computer.BrowserSubdirectory, computer.DesktopProfilesSubdirectory} {
 		path := filepath.Join(fixture.resource.WorkspacePath, name, "retained")
 		if err := os.WriteFile(path, []byte("保留内容"), 0600); err != nil {
 			t.Fatal(err)
@@ -27,7 +27,7 @@ func TestDiskLayoutPreservesSharedAndBrowserContents(t *testing.T) {
 	if _, err := fixture.storage.ensure(ctx, fixture.resource); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{computer.WorkspaceSubdirectory, computer.BrowserSubdirectory} {
+	for _, name := range []string{computer.WorkspaceSubdirectory, computer.BrowserSubdirectory, computer.DesktopProfilesSubdirectory} {
 		contents, err := os.ReadFile(filepath.Join(fixture.resource.WorkspacePath, name, "retained"))
 		if err != nil || string(contents) != "保留内容" {
 			t.Fatal("重新挂载丢失持久内容", err)
@@ -157,5 +157,45 @@ func TestContainerVolumeSubpathsAreValidated(t *testing.T) {
 				requireFailure(t, err, "container_mount_mismatch")
 			}
 		})
+	}
+}
+
+func TestExistingDiskAddsDesktopProfilesOnlyOnce(t *testing.T) {
+	fixture := newStorageFixture(t)
+	ctx := t.Context()
+	if _, err := fixture.storage.ensure(ctx, fixture.resource); err != nil {
+		t.Fatal(err)
+	}
+	root := fixture.resource.WorkspacePath
+	old := filepath.Join(root, computer.BrowserSubdirectory, "retained")
+	if err := os.WriteFile(old, []byte("旧配置"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	profiles := filepath.Join(root, computer.DesktopProfilesSubdirectory)
+	if err := os.Remove(profiles); err != nil {
+		t.Fatal(err)
+	}
+	state, err := fixture.storage.load(fixture.resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.DesktopProfiles = false
+	if err = fixture.storage.save(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.storage.inspect(ctx, fixture.resource); err != nil {
+		t.Fatal(err)
+	}
+	if contents, err := os.ReadFile(old); err != nil || string(contents) != "旧配置" {
+		t.Fatal("升级更改旧配置", err)
+	}
+	if info, err := os.Stat(profiles); err != nil || info.Mode().Perm() != 0711 {
+		t.Fatal("配置根目录不匹配", err)
+	}
+	if err = os.Remove(profiles); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = fixture.storage.inspect(ctx, fixture.resource); err == nil {
+		t.Fatal("已启用的持久配置根丢失后被静默补建")
 	}
 }

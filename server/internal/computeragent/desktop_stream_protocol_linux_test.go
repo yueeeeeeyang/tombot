@@ -40,7 +40,7 @@ func TestKernelDesktopStreamDescriptorProtocol(t *testing.T) {
 	}
 	scope := &recordingStreamScope{fakeScope: f.factory.scopes[0]}
 	f.guard.scope = scope
-	server, err := NewServer(f.controller, newTestProbeController(t, f), newTestBrowserController(t, f), sameTestProcess, time.Second, 2, f.guard.logger)
+	server, err := NewServer(f.controller, newTestProbeController(t, f), sameTestProcess, time.Second, 2, f.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

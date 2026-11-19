@@ -174,7 +174,7 @@ func verifyFailedComputerRecovery(t *testing.T, startError error, probeMissing b
 	simulateComputerShutdown(t, test, resource, resource)
 	engine := &recoveryTestEngine{fakeEngine: test.engine, startError: startError}
 	test.node.engine = engine
-	test.probe.missing = probeMissing
+	test.probe.coreMissing = probeMissing
 	var closedEgress []string
 	test.node.egress = &fakeEgress{stopCall: func(_ context.Context, resource Resource) error {
 		closedEgress = append(closedEgress, resource.Specification.UserID)
@@ -201,7 +201,7 @@ func verifyFailedComputerRecovery(t *testing.T, startError error, probeMissing b
 	}
 
 	engine.startError = nil
-	test.probe.missing = false
+	test.probe.coreMissing = false
 	second := test.sessionController(t, groups, sessionOptions())
 	command := commandFor(recovering)
 	if observation, err := second.Open(ctx, command); err != nil || !observation.Matches(command, "active") {
@@ -231,7 +231,7 @@ func TestNodeRechecksReadyComputerWithPendingRecovery(t *testing.T) {
 	}
 
 	test.engine.events = nil
-	test.probe.missing = true
+	test.probe.coreMissing = true
 	second := test.sessionController(t, groups, sessionOptions())
 	state, err := test.node.journal.read(session.UserID)
 	if err != nil || state == nil || state.Phase != "creating" || state.ContainerID != session.ContainerID || len(test.engine.events) != 0 {
@@ -241,7 +241,7 @@ func TestNodeRechecksReadyComputerWithPendingRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	test.probe.missing = false
+	test.probe.coreMissing = false
 	third := test.sessionController(t, groups, sessionOptions())
 	if _, err := test.node.journal.root.Stat(marker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("复验通过的原容器仍被恢复意图阻挡", err)

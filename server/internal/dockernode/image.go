@@ -47,7 +47,7 @@ func (image imageDescription) validate(reference, platform string) error {
 	if !slices.Equal(image.Config.Entrypoint, []string{"/usr/lib/tombot/computer-agent"}) || len(image.Config.Cmd) != 0 || image.Config.WorkingDir != "/workspace" || image.Config.User != "" && image.Config.User != "0:0" {
 		return failure("image_agent_contract_mismatch")
 	}
-	if image.Config.Labels[computer.StorageLayoutLabel] != computer.StorageLayoutVersion {
+	if image.Config.Labels[computer.DesktopBrowserLabel] != "1" || image.Config.Labels[computer.StorageLayoutLabel] != computer.StorageLayoutVersion {
 		return failure("image_storage_layout_mismatch")
 	}
 	return nil

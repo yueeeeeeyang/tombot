@@ -40,7 +40,7 @@ func validateResult(action string, input, result any) error {
 	case "write":
 		value, ok := result.(computer.TerminalReceipt)
 		valid = ok && value.Validate(input.(computer.TerminalWrite)) == nil
-	case "resize", "agent_start":
+	case "resize", "agent_start", "browser_prepare":
 		value, ok := result.(confirmation)
 		valid = ok && value.Done
 	case "desktop_start", "desktop_status":
@@ -172,3 +172,8 @@ func (client *Client) Console(ctx context.Context, input computer.ConsoleRequest
 }
 
 var _ computer.ConsoleRuntime = (*Client)(nil)
+
+func (client *Client) PrepareBrowser(ctx context.Context, input computer.ExecutionSession) error {
+	_, err := call[confirmation](ctx, client, "browser_prepare", input)
+	return err
+}

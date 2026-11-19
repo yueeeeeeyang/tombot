@@ -19,22 +19,21 @@ import (
 	"testing"
 	"time"
 
-	"io.yueyang/tom/internal/browserprobe"
 	"io.yueyang/tom/internal/infra/ids"
 )
 
-func TestBrowserProbePageStillRequiresAuthenticatedConnection(t *testing.T) {
+func TestRetiredBrowserProbeHasNoSpecialProxyRoute(t *testing.T) {
 	proxy := testProxy(t)
 	proxy.resolver = resolveFunc(func(context.Context, string, string) ([]netip.Addr, error) {
-		t.Fatal("诊断页不应解析外网")
+
 		return nil, ErrAddressDenied
 	})
 	for _, authorized := range []bool{false, true} {
-		request := httptest.NewRequest(http.MethodGet, browserprobe.Origin+"/"+ids.New(), nil)
+		request := httptest.NewRequest(http.MethodGet, "http://tombot-probe.invalid/example", nil)
 		request = request.WithContext(context.WithValue(request.Context(), authorizedKey{}, authorized))
 		response := httptest.NewRecorder()
 		proxy.handle(response, request)
-		if authorized && response.Code != 200 || !authorized && response.Code != 403 {
+		if response.Code == 200 || (!authorized && response.Code != 403) {
 			t.Fatal(authorized, response.Code)
 		}
 	}

@@ -142,8 +142,8 @@ class ComputerImageTest(unittest.TestCase):
 
     def test_tools_are_locked_and_downloads_are_verified(self):
         lock = json.loads((ROOT / "deploy/computer/tools.lock.json").read_text())
-        # 官方为同一 Xpra 版本发布不同架构修订，混用会使 x64 镜像无法安装。
-        self.assertEqual(lock["xpra"], {"version": "6.5.5", "amd64": "6.5.5-r0-1", "arm64": "6.5.5-r6-1"})
+        self.assertNotIn("xpra", lock)
+        self.assertNotIn("xpra", (ROOT / "deploy/computer/Dockerfile").read_text().lower())
         self.assertTrue(lock["node"]["version"].startswith("24."))
         self.assertTrue(lock["go"]["version"].startswith("1.27."))
         for name in installer.HOSTS:

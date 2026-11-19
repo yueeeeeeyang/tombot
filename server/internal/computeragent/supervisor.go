@@ -65,3 +65,24 @@ func supervise(ctx context.Context, timeout time.Duration, serve, watchdog func(
 		return errors.Join(cause, errors.New("电脑代理控制记录关闭超时，必须退出容器"))
 	}
 }
+
+type controllerShutdown interface {
+	Shutdown(context.Context) error
+}
+
+// shutdownControllers 先回收桌面页面与探针，再关闭共享 Chrome，防止账号服务先退出造成页面回收未知。
+func shutdownControllers(ctx context.Context, desktops, probes controllerShutdown) error {
+	results := make(chan error, 2)
+	go func() { results <- desktops.Shutdown(ctx) }()
+	go func() { results <- probes.Shutdown(ctx) }()
+	var failure error
+	for range 2 {
+		select {
+		case err := <-results:
+			failure = errors.Join(failure, err)
+		case <-ctx.Done():
+			return errors.Join(failure, ctx.Err())
+		}
+	}
+	return failure
+}

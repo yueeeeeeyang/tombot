@@ -48,7 +48,7 @@ func sameTestProcess(peer agentchannel.Peer) error {
 
 func TestKernelSessionControlProtocol(t *testing.T) {
 	fixture := newFixture(t)
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestKernelHostPeerRequirement(t *testing.T) {
 
 func TestKernelControlServerCancellationBoundsPendingConnections(t *testing.T) {
 	fixture := newFixture(t)
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

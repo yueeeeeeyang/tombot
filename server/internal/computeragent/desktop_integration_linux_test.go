@@ -171,7 +171,7 @@ func TestKernelDesktopRejectsFakeMembership(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	scope := &kernelScope{directory: directory, membershipUsed: true}
+	scope := &kernelScope{logger: fixture.guard.logger, directory: directory, membershipUsed: true}
 	failures := make(chan string, 2)
 	status, err := scope.StartDesktop(context.Background(), fixture.reference, fixture.command.Session, membership, reader, func(code string) { failures <- code })
 	if err != nil || status.Validate() != nil {

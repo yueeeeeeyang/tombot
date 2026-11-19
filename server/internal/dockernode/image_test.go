@@ -23,7 +23,7 @@ func testImage(reference, platform string) imageDescription {
 	image := imageDescription{ID: "sha256:" + strings.Repeat("b", 64), RepoDigests: []string{reference}, OS: "linux", Architecture: strings.TrimPrefix(platform, "linux/")}
 	image.Config.Entrypoint = []string{"/usr/lib/tombot/computer-agent"}
 	image.Config.WorkingDir = "/workspace"
-	image.Config.Labels = map[string]string{computer.StorageLayoutLabel: computer.StorageLayoutVersion}
+	image.Config.Labels = map[string]string{computer.StorageLayoutLabel: computer.StorageLayoutVersion, computer.DesktopBrowserLabel: "1"}
 	return image
 }
 
@@ -64,7 +64,9 @@ func TestImageMetadataBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, mutate := range []func(*imageDescription){
-		func(i *imageDescription) { i.Config.Labels = nil }, func(i *imageDescription) { i.Config.Labels = map[string]string{computer.StorageLayoutLabel: "1"} },
+		func(i *imageDescription) {
+			i.Config.Labels = map[string]string{computer.StorageLayoutLabel: computer.StorageLayoutVersion}
+		}, func(i *imageDescription) { i.Config.Labels = nil }, func(i *imageDescription) { i.Config.Labels = map[string]string{computer.StorageLayoutLabel: "1"} },
 		func(i *imageDescription) { i.ID = "sha256:" + strings.Repeat("x", 64) }, func(i *imageDescription) { i.RepoDigests = nil }, func(i *imageDescription) { i.RepoDigests = []string{"other@sha256:" + strings.Repeat("a", 64)} }, func(i *imageDescription) { i.OS = "windows" }, func(i *imageDescription) { i.Architecture = "386" }, func(i *imageDescription) { i.Variant = "v7" }, func(i *imageDescription) { i.Config.Entrypoint = []string{"/bin/sh"} }, func(i *imageDescription) { i.Config.Cmd = []string{"unexpected"} }, func(i *imageDescription) { i.Config.WorkingDir = "/" }, func(i *imageDescription) { i.Config.User = "1000" },
 	} {
 		changed := image

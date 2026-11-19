@@ -17,8 +17,8 @@ import (
 )
 
 type upgradeNode struct {
-	requests     []computer.ImageUpgrade
-	browserReady bool
+	requests   []computer.ImageUpgrade
+	filesReady bool
 }
 
 func (node *upgradeNode) UpgradeComputer(_ context.Context, upgrade computer.ImageUpgrade) (computer.Observation, error) {
@@ -28,7 +28,7 @@ func (node *upgradeNode) UpgradeComputer(_ context.Context, upgrade computer.Ima
 		OperationID: target.OperationID, UserID: target.UserID, ComputerID: target.ComputerID,
 		Generation: target.Generation, FencingToken: target.FencingToken, VolumeReference: target.VolumeReference,
 		State: "ready", ContainerID: secure.Hash(target.ImageReference),
-		Capabilities: computer.Capabilities{Terminal: true, Browser: node.browserReady, Files: true, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true},
+		Capabilities: computer.Capabilities{Terminal: true, Files: node.filesReady, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true},
 	}, nil
 }
 
@@ -172,7 +172,7 @@ func TestUpgradeExistingComputer(t *testing.T) {
 	}
 	process(false)
 	allowNext()
-	node.browserReady = true
+	node.filesReady = true
 	process(true)
 	checkPlan(t, pool, userID, "succeeded")
 	if len(node.requests) != 2 {

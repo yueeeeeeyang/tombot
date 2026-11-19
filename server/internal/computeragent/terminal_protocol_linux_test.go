@@ -13,7 +13,7 @@ import (
 
 func TestKernelTerminalProtocol(t *testing.T) {
 	fixture, scope, request := terminalFixture(t)
-	server, err := NewServer(fixture.controller, newTestProbeController(t, *fixture), newTestBrowserController(t, *fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, *fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

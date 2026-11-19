@@ -20,7 +20,6 @@ import (
 
 type kernelScopes struct {
 	interval time.Duration
-	windows  WindowFactory
 	logger   *slog.Logger
 }
 type kernelScope struct {
@@ -36,7 +35,6 @@ type kernelScope struct {
 	terminals       map[string]*terminalAttempt
 	desktop         *managedDesktop
 	agent           *agentAttempt
-	windows         WindowSession
 	transfers       fileTransfers
 	streams         map[string]*desktopstream.Relay
 	consoleViewer   string
@@ -48,17 +46,14 @@ type kernelScope struct {
 }
 
 // NewKernelScopes 要求受信 Linux root 代理和完整的窗口工厂；具体资源身份在每次接收描述符时复验。
-func NewKernelScopes(interval time.Duration, windows WindowFactory, logger *slog.Logger) (ScopeFactory, error) {
-	if os.Geteuid() != 0 || interval < time.Millisecond || interval > 100*time.Millisecond || windows == nil || logger == nil {
+func NewKernelScopes(interval time.Duration, logger *slog.Logger) (ScopeFactory, error) {
+	if os.Geteuid() != 0 || interval < time.Millisecond || interval > 100*time.Millisecond || logger == nil {
 		return nil, errors.New("电脑代理资源组后端配置无效")
 	}
-	return &kernelScopes{interval: interval, windows: windows, logger: logger}, nil
+	return &kernelScopes{interval: interval, logger: logger}, nil
 }
 
 func (factory *kernelScopes) Open(reference processgroup.Reference, files []*os.File) (Scope, error) {
-	if factory.windows == nil {
-		return nil, errors.New("电脑代理没有配置会话窗口入口")
-	}
 	if err := processgroup.ValidateControls(reference, files); err != nil {
 		return nil, err
 	}
@@ -75,19 +70,6 @@ func (factory *kernelScopes) Open(reference processgroup.Reference, files []*os.
 		return nil, err
 	}
 	scope.directory = directory
-	scope.windows, err = factory.windows(reference)
-	if err != nil || scope.windows == nil {
-		if scope.windows != nil {
-			scope.windows.Revoke()
-			ctx, cancel := context.WithTimeout(context.Background(), terminalCloseTimeout)
-			closeError := scope.windows.Close(ctx)
-			cancel()
-			if closeError != nil {
-				return nil, errors.Join(err, closeError)
-			}
-		}
-		return nil, errors.Join(errors.New("电脑代理会话窗口入口未完成接管"), err, directory.Close())
-	}
 	return scope, nil
 }
 
@@ -124,9 +106,6 @@ func (scope *kernelScope) Revoke() error {
 	scope.revoked = true
 	if scope.desktop != nil {
 		scope.desktop.stoppingNow()
-	}
-	if scope.windows != nil {
-		scope.windows.Revoke()
 	}
 	var failure error
 	for _, stream := range scope.streams {
@@ -178,11 +157,6 @@ func (scope *kernelScope) Terminate(ctx context.Context) error {
 		}
 		if !busy {
 			scope.mu.Unlock()
-			if scope.windows != nil {
-				if err := scope.windows.Close(ctx); err != nil {
-					return err
-				}
-			}
 			scope.mu.Lock()
 			scope.drained = true
 			scope.mu.Unlock()
@@ -206,11 +180,6 @@ func (scope *kernelScope) Close() error {
 	if !scope.closed {
 		ctx, cancel := context.WithTimeout(context.Background(), terminalCloseTimeout)
 		defer cancel()
-		if scope.windows != nil {
-			if err := scope.windows.Close(ctx); err != nil {
-				return err
-			}
-		}
 		if scope.agent != nil && scope.agent.agent != nil {
 			if err := scope.agent.agent.closeAfterDrain(ctx); err != nil {
 				return err

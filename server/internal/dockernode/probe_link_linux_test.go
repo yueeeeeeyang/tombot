@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
-	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/computerprobe"
 	"io.yueyang/tom/internal/processgroup"
@@ -94,7 +93,7 @@ func TestKernelNodeProbeBinding(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			server, err := computeragent.NewServer(guard, agentProbes, newLinkBrowserController(t, identity), func(peer agentchannel.Peer) error {
+			server, err := computeragent.NewServer(guard, agentProbes, func(peer agentchannel.Peer) error {
 				if peer.PID != int32(os.Getpid()) || peer.UID != 0 || peer.GID != 0 {
 					return errors.New("测试协议对端不符")
 				}
@@ -169,34 +168,4 @@ func TestKernelNodeProbeBinding(t *testing.T) {
 			}
 		})
 	}
-}
-
-// 此夹具不调用浏览器动作；意外调用必须失败，不能伪造浏览器已经就绪。
-type unusedLinkBrowser struct{}
-
-func (unusedLinkBrowser) LoadBrowser(ctx context.Context) (*computeragent.BrowserSnapshot, error) {
-	return nil, ctx.Err()
-}
-func (unusedLinkBrowser) SaveBrowser(context.Context, computeragent.BrowserSnapshot) error {
-	return errors.New("节点协议夹具没有浏览器持久操作")
-}
-func (unusedLinkBrowser) OpenBrowser(taskprocess.BrowserRequest, []*os.File, time.Duration) (computeragent.BrowserScope, error) {
-	return nil, errors.New("节点协议夹具没有浏览器执行")
-}
-func newLinkBrowserController(t *testing.T, identity computeragent.Identity) *computeragent.BrowserController {
-	t.Helper()
-	controller, err := computeragent.NewBrowserController(t.Context(), identity, unusedLinkBrowser{}, unusedLinkBrowser{}, computeragent.Options{CallTimeout: time.Second, CleanupTimeout: time.Second, RetryDelay: 10 * time.Millisecond, CleanupAttempts: 2}, func(context.Context, computer.ExecutionSession) error {
-		return errors.New("节点协议夹具没有浏览器授权")
-	}, sessionLogger(), func() { t.Error("测试浏览器失控") })
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := controller.Shutdown(ctx); err != nil {
-			t.Error(err)
-		}
-	})
-	return controller
 }

@@ -212,8 +212,15 @@ func (storage *FileStorage) inspect(ctx context.Context, resource Resource) (Wor
 	}
 	ready := mounted && state.Phase == "ready"
 	if ready {
-		if err = storage.layout.prepare(resource.WorkspacePath, false); err != nil {
+		if err = storage.layout.prepare(resource.WorkspacePath, false, !state.DesktopProfiles); err != nil {
 			return Workspace{}, err
+		}
+		// 旧盘只进行一次增量创建。完成标记刷盘后，目录丢失必须报告故障。
+		if !state.DesktopProfiles {
+			state.DesktopProfiles = true
+			if err = storage.save(state); err != nil {
+				return Workspace{}, err
+			}
 		}
 	}
 	return storage.workspace(resource, ready), nil

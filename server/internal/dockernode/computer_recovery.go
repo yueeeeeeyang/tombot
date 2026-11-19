@@ -26,7 +26,7 @@ func (state *record) recoveryFile() string { return ".recover-" + state.Specific
 
 // restoreComputer 在用户独占锁内恢复原实例。单台电脑恢复失败时先确认出网已封闭，再继续下一台。
 func (node *Runtime) restoreComputer(ctx context.Context, logger *slog.Logger, resource Resource, state *record, current snapshot) error {
-	budget := node.options.CallTimeout + node.options.AgentStartup.Timeout + node.options.Browser.StartupTimeout + node.options.Browser.CallTimeout + node.options.Probes.CallTimeout
+	budget := node.options.CallTimeout + node.options.AgentStartup.Timeout + node.options.Probes.CallTimeout
 	attempt, cancel := context.WithTimeout(ctx, budget)
 	err := node.resumeComputer(attempt, resource, state, current)
 	cancel()

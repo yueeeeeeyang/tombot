@@ -14,7 +14,7 @@ import (
 func TestKernelProbeProtocol(t *testing.T) {
 	fixture := newFixture(t)
 	probes, store, factory := newProbeFixture(t, fixture)
-	server, err := NewServer(fixture.controller, probes, newTestBrowserController(t, fixture), sameTestProcess, 3*time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, probes, sameTestProcess, 3*time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

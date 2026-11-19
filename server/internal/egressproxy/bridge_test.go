@@ -1,6 +1,7 @@
 package egressproxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -163,5 +165,44 @@ func TestBridgeRequiresLoopbackAndBounds(t *testing.T) {
 	}
 	if RequireHostConnection(nil) == nil {
 		t.Fatal("缺少宿主连接仍验证通过")
+	}
+}
+
+func TestBridgeWaitsForRequestBeforeBadGateway(t *testing.T) {
+	attempted := make(chan struct{})
+	address, _, _ := startBridge(t, func(context.Context) (net.Conn, error) {
+		close(attempted)
+		return nil, errors.New("测试上游不可用")
+	})
+	client, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	select {
+	case <-attempted:
+	case <-time.After(time.Second):
+		t.Fatal("未尝试上游")
+	}
+	if err = client.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var first [1]byte
+	if n, err := client.Read(first[:]); n != 0 || !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("空闲连接收到提前响应", n, err)
+	}
+	if err = client.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.WriteString(client, "GET / HTTP/1.1\r\nHost: proxy.test\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readResponse(t, response)
+	if response.StatusCode != http.StatusBadGateway {
+		t.Fatal("上游故障未返回 502", response.StatusCode)
 	}
 }

@@ -187,7 +187,7 @@ func validateOptions(options Options) error {
 	if err := options.Browser.Validate(); err != nil {
 		return err
 	}
-	if options.Browser.Limits.CallTimeoutMS > options.Agent.CallTimeoutMS || options.Browser.Limits.ShutdownTimeoutMS > options.Agent.CleanupTimeoutMS || options.Browser.CleanupTimeout <= options.Browser.CallTimeout+time.Duration(options.Agent.CleanupTimeoutMS)*time.Millisecond+options.Browser.Groups.GracePeriod+options.Browser.Groups.PollInterval {
+	if options.Browser.CleanupTimeout <= options.Browser.CallTimeout+time.Duration(options.Agent.CleanupTimeoutMS)*time.Millisecond+options.Browser.Groups.GracePeriod+options.Browser.Groups.PollInterval {
 		return errors.New("共享浏览器与代理回收预算不匹配")
 	}
 	if err := options.Egress.Validate(); err != nil {

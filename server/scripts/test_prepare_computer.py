@@ -55,7 +55,8 @@ class PrepareComputerTest(unittest.TestCase):
 
     def test_browser_profile_identity_and_contents(self):
         browser = self.root / "browser"
-        browser.mkdir(mode=0o700)
+        browser.mkdir(mode=0o711)
+        browser.chmod(0o711)
         contents = browser / "saved-state"
         contents.write_text("保留浏览器状态")
         preparation.verify_browser_directory(browser, self.workspace, os.getuid(), os.getgid())
@@ -64,7 +65,7 @@ class PrepareComputerTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "身份或权限"):
             preparation.verify_browser_directory(browser, self.workspace, os.getuid(), os.getgid())
         self.assertEqual(browser.stat().st_mode & 0o7777, 0o770)
-        browser.chmod(0o700)
+        browser.chmod(0o711)
         linked = self.root / "linked-browser"
         linked.symlink_to(browser, target_is_directory=True)
         with self.assertRaises(OSError):

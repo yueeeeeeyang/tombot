@@ -16,18 +16,19 @@ import (
 )
 
 type storageRecord struct {
-	Version       int    `json:"version"`
-	Name          string `json:"name"`
-	UserID        string `json:"user_id"`
-	ComputerID    string `json:"computer_id"`
-	NodeID        string `json:"node_id"`
-	OperationID   string `json:"operation_id"`
-	Generation    int64  `json:"generation"`
-	CapacityBytes int64  `json:"capacity_bytes"`
-	UUID          string `json:"uuid"`
-	ImageDevice   uint64 `json:"image_device"`
-	ImageInode    uint64 `json:"image_inode"`
-	Phase         string `json:"phase"`
+	DesktopProfiles bool   `json:"desktop_profiles,omitempty"`
+	Version         int    `json:"version"`
+	Name            string `json:"name"`
+	UserID          string `json:"user_id"`
+	ComputerID      string `json:"computer_id"`
+	NodeID          string `json:"node_id"`
+	OperationID     string `json:"operation_id"`
+	Generation      int64  `json:"generation"`
+	CapacityBytes   int64  `json:"capacity_bytes"`
+	UUID            string `json:"uuid"`
+	ImageDevice     uint64 `json:"image_device"`
+	ImageInode      uint64 `json:"image_inode"`
+	Phase           string `json:"phase"`
 }
 
 func initialStorageRecord(resource Resource) *storageRecord {
@@ -59,6 +60,7 @@ func (storage *FileStorage) load(resource Resource) (*storageRecord, error) {
 		return nil, failure("storage_record_identity_mismatch")
 	}
 	expected := initialStorageRecord(previous)
+	expected.DesktopProfiles = state.DesktopProfiles
 	expected.Phase = state.Phase
 	expected.ImageDevice = state.ImageDevice
 	expected.ImageInode = state.ImageInode

@@ -23,8 +23,5 @@ func run(arguments []string) error {
 	if len(arguments) == 0 {
 		return taskprocess.Run()
 	}
-	if len(arguments) == 1 && arguments[0] == "--browser" {
-		return taskprocess.RunBrowser()
-	}
 	return errors.New("任务引导不接收外部执行配置")
 }

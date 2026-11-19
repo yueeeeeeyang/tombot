@@ -16,7 +16,7 @@ type diskLayoutIdentity struct {
 
 // prepare 仅在首次格式化后创建固定子目录；已就绪磁盘缺失目录时拒绝补建，避免掩盖数据丢失。
 // 根目录不暴露给业务进程，目录描述符和固定名称阻止链接替换；不遍历业务或浏览器内容。
-func (identity diskLayoutIdentity) prepare(path string, create bool) (result error) {
+func (identity diskLayoutIdentity) prepare(path string, create, initializeProfiles bool) (result error) {
 	root, err := openLayoutDirectory(unix.AT_FDCWD, path)
 	if err != nil {
 		return err
@@ -25,13 +25,13 @@ func (identity diskLayoutIdentity) prepare(path string, create bool) (result err
 	if !layoutDirectoryMatches(root, identity.rootUID, identity.rootGID, 0755) {
 		return failure("storage_layout_root_invalid")
 	}
-	names, err := root.Readdirnames(4)
+	names, err := root.Readdirnames(5)
 	if err != nil && !errors.Is(err, io.EOF) {
 		return failure("storage_layout_read_failed")
 	}
 	for _, name := range names {
 		switch name {
-		case computer.WorkspaceSubdirectory, computer.BrowserSubdirectory:
+		case computer.WorkspaceSubdirectory, computer.BrowserSubdirectory, computer.DesktopProfilesSubdirectory:
 		case "lost+found":
 			if err = identity.child(root, name, identity.rootUID, identity.rootGID, 0700, false); err != nil {
 				return err
@@ -46,7 +46,11 @@ func (identity diskLayoutIdentity) prepare(path string, create bool) (result err
 	if err = identity.child(root, computer.BrowserSubdirectory, identity.browserUID, identity.sharedGID, 0700, create); err != nil {
 		return err
 	}
-	if create {
+	// 旧盘的 browser 私有目录原样保留。新增独立根只接受首次创建或原已核实的身份。
+	if err = identity.child(root, computer.DesktopProfilesSubdirectory, identity.rootUID, identity.rootGID, 0711, initializeProfiles); err != nil {
+		return err
+	}
+	if initializeProfiles {
 		if err = root.Sync(); err != nil {
 			return failure("storage_layout_sync_failed")
 		}

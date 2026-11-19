@@ -77,7 +77,7 @@ func newRecoveryAgentFixture(t *testing.T) (fixture, Resource, string, recoveryA
 	deadline := agentchannel.Deadline{ExpiresNS: 1, TimeNamespace: 2}
 	browserGroup := processgroup.ServiceReference{Container: parent, ID: ids.New(), Kind: processgroup.BrowserService}
 	probeGroup := processgroup.ServiceReference{Container: parent, ID: ids.New(), Kind: processgroup.ProbeService}
-	browserGrant := computeragent.BrowserGrant{Identity: identity, Revision: 1, Request: taskprocess.BrowserRequest{Version: 1, Group: browserGroup, Deadline: deadline}, Limits: testBrowserOptions().Limits}
+	browserGrant := computeragent.BrowserGrant{Identity: identity, Revision: 1, Request: taskprocess.BrowserRequest{Version: 1, Group: browserGroup, Deadline: deadline}, Limits: retiredBrowserLimits()}
 	probeGrant := computeragent.ProbeGrant{Identity: identity, Revision: 1, Request: taskprocess.ProbeRequest{Version: 1, Group: probeGroup, Deadline: deadline}}
 	store := recoveryAgentStore{
 		desktop: computeragent.Snapshot{Version: 2, Command: commandFor(session), Group: &group, Phase: "active"},

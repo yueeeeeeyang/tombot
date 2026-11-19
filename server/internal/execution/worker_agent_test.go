@@ -15,13 +15,14 @@ import (
 
 // workerAgents 只验证 Worker 的远端协议与 PostgreSQL 事务，真实二进制和入组另由容器验收。
 type workerAgents struct {
-	mu        sync.Mutex
-	processes map[computer.ExecutionSession]*workerAgent
-	t         *testing.T
-	starts    int
-	failStart bool
-	local     botagent.LocalExecutor
-	files     computer.FileRuntime
+	mu           sync.Mutex
+	processes    map[computer.ExecutionSession]*workerAgent
+	t            *testing.T
+	starts       int
+	failStart    bool
+	browserError error
+	local        botagent.LocalExecutor
+	files        computer.FileRuntime
 }
 type workerAgent struct {
 	connection              net.Conn
@@ -146,4 +147,11 @@ func (runtime *workerAgents) ReadAgent(ctx context.Context, request computer.Age
 		return output, nil
 	}
 	return output, err
+}
+
+func (runtime *workerAgents) PrepareBrowser(ctx context.Context, s computer.ExecutionSession) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	return errors.Join(ctx.Err(), runtime.browserError)
 }

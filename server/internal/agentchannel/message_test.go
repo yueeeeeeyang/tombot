@@ -12,18 +12,17 @@ func testMessage() Message {
 	return Message{Version: 1, ID: ids.New(), Method: "open", Files: 0, Body: json.RawMessage(`{"value":1}`)}
 }
 
-func TestSharedBrowserControlMethods(t *testing.T) {
-	for _, method := range []string{"browser_start", "browser_status", "browser_close", "browser_probe"} {
-		message := testMessage()
-		message.Method = method
-		if err := message.validate(); err != nil {
-			t.Fatal("共享浏览器固定控制动作被拒绝", method, err)
-		}
-	}
+func TestSharedBrowserRetirementOnly(t *testing.T) {
 	message := testMessage()
-	message.Method = "browser_execute"
-	if message.validate() == nil {
-		t.Fatal("通道接受任意浏览器执行动作")
+	message.Method = "browser_close"
+	if err := message.validate(); err != nil {
+		t.Fatal("旧实例关闭通道被拒绝", err)
+	}
+	for _, method := range []string{"browser_start", "browser_status", "browser_probe", "browser_execute"} {
+		message.Method = method
+		if message.validate() == nil {
+			t.Fatal("接受已移除的共享浏览器动作", method)
+		}
 	}
 }
 

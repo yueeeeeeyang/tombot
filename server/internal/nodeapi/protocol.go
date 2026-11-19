@@ -121,7 +121,7 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 			err = value.Validate()
 		}
 		input, node = value, value.Session.NodeID
-	case "desktop_start", "desktop_status", "agent_start":
+	case "desktop_start", "desktop_status", "agent_start", "browser_prepare":
 		var value computer.ExecutionSession
 		err = agentchannel.Decode(encoded, &value)
 		if err == nil {
@@ -196,6 +196,13 @@ func (operations Operations) invoke(ctx context.Context, action string, input an
 		return operations.Computers.Ensure(ctx, input.(computer.Specification))
 	case "remove":
 		return operations.Computers.Remove(ctx, input.(computer.Specification))
+	case "browser_prepare":
+		manager, ok := operations.Sessions.(computer.BrowserPreparer)
+		if !ok {
+			return nil, &computer.Failure{Code: "browser_unavailable"}
+		}
+		err := manager.PrepareBrowser(ctx, input.(computer.ExecutionSession))
+		return confirmation{Done: err == nil}, err
 	case "computer_upgrade":
 		upgrader, ok := operations.Computers.(computer.ImageUpgrader)
 		if !ok {

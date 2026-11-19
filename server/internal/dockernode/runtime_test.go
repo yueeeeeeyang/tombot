@@ -204,10 +204,10 @@ func (storage *fakeStorage) Remove(_ context.Context, resource Resource) error {
 	return nil
 }
 
-type fakeProbe struct{ missing bool }
+type fakeProbe struct{ missing, coreMissing bool }
 
 func (probe *fakeProbe) Check(context.Context, Resource, string, computerprobe.Evidence) (computer.Capabilities, error) {
-	return computer.Capabilities{Terminal: true, Browser: !probe.missing, Files: true, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true}, nil
+	return computer.Capabilities{Terminal: !probe.coreMissing, Browser: !probe.missing, Files: true, ProcessReaping: true, DiskQuota: true, NetworkIsolation: true}, nil
 }
 
 type fixture struct {
@@ -390,12 +390,12 @@ func TestUnknownResponsesAndQuarantine(t *testing.T) {
 	})
 	t.Run("真实能力缺失不得标为就绪", func(t *testing.T) {
 		fixture := newFixture(t)
-		fixture.probe.missing = true
+		fixture.probe.coreMissing = true
 		_, err := fixture.node.Ensure(ctx, fixture.specification)
 		requireFailure(t, err, "computer_probe_failed")
 		observation, err := fixture.node.Inspect(ctx, fixture.specification)
 		if err != nil || observation.State == "ready" {
-			t.Fatal("缺少浏览器仍就绪", err)
+			t.Fatal("缺少终端仍就绪", err)
 		}
 	})
 }

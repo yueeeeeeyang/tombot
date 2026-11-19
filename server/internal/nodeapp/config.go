@@ -107,10 +107,9 @@ func (configuration AgentStartupConfig) options() dockernode.AgentStartupOptions
 }
 
 type BrowserConfig struct {
-	CallTimeout     Milliseconds                `json:"call_timeout_ms"`
-	CleanupTimeout  Milliseconds                `json:"cleanup_timeout_ms"`
-	ShutdownTimeout Milliseconds                `json:"shutdown_timeout_ms"`
-	Limits          computeragent.BrowserLimits `json:"limits"`
+	CallTimeout     Milliseconds `json:"call_timeout_ms"`
+	CleanupTimeout  Milliseconds `json:"cleanup_timeout_ms"`
+	ShutdownTimeout Milliseconds `json:"shutdown_timeout_ms"`
 }
 type EgressConfig struct {
 	Ports                []uint16       `json:"ports"`
@@ -144,10 +143,7 @@ func (configuration EgressConfig) options() egressproxy.Options {
 }
 func (configuration Config) runtimeOptions() dockernode.Options {
 	value := configuration.Runtime
-	// 同一次能力检查还要准备代理、执行基础探针和浏览器探针。调用总预算较短时，冷启动仍有普通调用的下限。
-	browserCall := configuration.Browser.CallTimeout.duration()
-	browserStartup := max(browserCall, configuration.API.CallTimeout.duration()-configuration.AgentStartup.Timeout.duration()-configuration.Probe.CallTimeout.duration()-browserCall)
-	return dockernode.Options{NodeID: configuration.NodeID, Socket: value.Socket, StateDirectory: value.StateDirectory, StorageDirectory: value.StorageDirectory, CallTimeout: value.CallTimeout.duration(), MaximumLease: value.MaximumLease.duration(), TemporaryBytes: value.TemporaryBytes, RuntimeBytes: value.RuntimeBytes, SharedMemoryBytes: value.SharedMemoryBytes, Agent: configuration.Agent, AgentStartup: configuration.AgentStartup.options(), Probes: dockernode.ProbeOptions{CallTimeout: configuration.Probe.CallTimeout.duration(), CleanupTimeout: configuration.Probe.CleanupTimeout.duration(), Groups: configuration.Groups.options()}, Browser: dockernode.BrowserOptions{StartupTimeout: browserStartup, CallTimeout: configuration.Browser.CallTimeout.duration(), CleanupTimeout: configuration.Browser.CleanupTimeout.duration(), ShutdownTimeout: configuration.Browser.ShutdownTimeout.duration(), Groups: configuration.Groups.options(), Limits: configuration.Browser.Limits}, Egress: configuration.Egress.options(), MaximumEgressComputers: value.MaximumEgressComputers}
+	return dockernode.Options{NodeID: configuration.NodeID, Socket: value.Socket, StateDirectory: value.StateDirectory, StorageDirectory: value.StorageDirectory, CallTimeout: value.CallTimeout.duration(), MaximumLease: value.MaximumLease.duration(), TemporaryBytes: value.TemporaryBytes, RuntimeBytes: value.RuntimeBytes, SharedMemoryBytes: value.SharedMemoryBytes, Agent: configuration.Agent, AgentStartup: configuration.AgentStartup.options(), Probes: dockernode.ProbeOptions{CallTimeout: configuration.Probe.CallTimeout.duration(), CleanupTimeout: configuration.Probe.CleanupTimeout.duration(), Groups: configuration.Groups.options()}, Browser: dockernode.BrowserOptions{CallTimeout: configuration.Browser.CallTimeout.duration(), CleanupTimeout: configuration.Browser.CleanupTimeout.duration(), ShutdownTimeout: configuration.Browser.ShutdownTimeout.duration(), Groups: configuration.Groups.options()}, Egress: configuration.Egress.options(), MaximumEgressComputers: value.MaximumEgressComputers}
 }
 
 // Validate 复用各领域的权威参数校验，并检查组件之间的时限和目录关系。
@@ -177,8 +173,8 @@ func (configuration Config) Validate() error {
 	if configuration.API.CallTimeout < configuration.Browser.CallTimeout || configuration.API.ShutdownTimeout.duration() < configuration.Browser.CleanupTimeout.duration()+configuration.Egress.ShutdownTimeout.duration() {
 		return errors.New("节点共享浏览器调用或退出预算不足")
 	}
-	if configuration.API.CallTimeout.duration() < configuration.AgentStartup.Timeout.duration()+configuration.Browser.CallTimeout.duration()+configuration.Probe.CallTimeout.duration() {
-		return errors.New("节点调用预算不足以确认代理、浏览器与基础探针")
+	if configuration.API.CallTimeout.duration() < configuration.AgentStartup.Timeout.duration()+configuration.Probe.CallTimeout.duration() {
+		return errors.New("节点调用预算不足以确认代理与基础探针")
 	}
 	if !validListen(configuration.Listen) || strings.ContainsAny(configuration.Runtime.Socket, "\x00\r\n") {
 		return errors.New("节点控制监听地址或 Docker 入口无效")

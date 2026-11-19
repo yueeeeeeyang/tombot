@@ -62,6 +62,9 @@ func Run() (failure error) {
 		return errors.New("关闭任务资源组描述符失败")
 	}
 	groupFile = nil
+	if request.Role == "desktop_chrome" {
+		return runDesktopChrome(request.Group.Session, revocation)
+	}
 	return execute(request, revocation)
 }
 
@@ -127,8 +130,12 @@ func readKernelFile(name string, maximum int64) (encoded []byte, failure error) 
 }
 
 func joinGroup(request Request, file *os.File) error {
-	expected := "/" + request.Group.ParentPath + "/" + request.Group.Name() + "/" + request.Role + "/cgroup.procs"
-	return joinGroupFile(file, expected, "/"+request.Group.Name()+"/"+request.Role)
+	role := request.Role
+	if role == "desktop_chrome" {
+		role = "browser"
+	}
+	expected := "/" + request.Group.ParentPath + "/" + request.Group.Name() + "/" + role + "/cgroup.procs"
+	return joinGroupFile(file, expected, "/"+request.Group.Name()+"/"+role)
 }
 
 func joinGroupFile(file *os.File, expected, privatePath string) error {

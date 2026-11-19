@@ -501,3 +501,46 @@ func TestUnknownCloseCommitKeepsHighestFence(t *testing.T) {
 		t.Fatal("关闭屏障无法幂等确认", err)
 	}
 }
+
+type finishingDesktopScope struct {
+	*fakeScope
+	finish func(context.Context) error
+}
+
+func (scope finishingDesktopScope) FinishDesktopBrowser(ctx context.Context) error {
+	return scope.finish(ctx)
+}
+
+func TestCloseGivesOnlyActiveDesktopTimeToSave(t *testing.T) {
+	for _, mode := range []string{"正常", "浏览器退出失败", "已撤销"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newFixture(t)
+			f.open(t)
+			scope := f.factory.scopes[0]
+			flushes := 0
+			f.guard.scope = finishingDesktopScope{scope, func(ctx context.Context) error {
+				flushes++
+				if _, ok := ctx.Deadline(); !ok || scope.revoked.Load() {
+					t.Fatal("浏览器退出未限定在原租约内")
+				}
+				if mode == "浏览器退出失败" {
+					return context.DeadlineExceeded
+				}
+				return nil
+			}}
+			if mode == "已撤销" {
+				if err := f.guard.permit.revoke(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.command.Revision++
+			receipt, err := f.guard.Close(t.Context(), f.command)
+			if err != nil || !receipt.Matches(f.command, "closed") || !scope.closed || scope.terminations != 1 {
+				t.Fatal("桌面未完成定向回收", receipt, err)
+			}
+			if (mode == "已撤销" && flushes != 0) || (mode != "已撤销" && flushes != 1) {
+				t.Fatal("主动关闭和强制撤销未区分", flushes)
+			}
+		})
+	}
+}

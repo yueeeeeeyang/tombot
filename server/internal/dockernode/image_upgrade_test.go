@@ -130,7 +130,7 @@ func TestImageUpgradeResumesOldRetirementAndUnknownCreation(t *testing.T) {
 	request.Target.FencingToken++
 	request.Target.LeaseExpiresAt = time.Now().Add(time.Minute)
 	f.engine.lostCreate = false
-	f.probe.missing = true
+	f.probe.coreMissing = true
 	_, err = restarted.UpgradeComputer(ctx, request)
 	requireFailure(t, err, "computer_probe_failed")
 	if f.engine.creates != 2 {
@@ -138,7 +138,7 @@ func TestImageUpgradeResumesOldRetirementAndUnknownCreation(t *testing.T) {
 	}
 	_, err = restarted.UpgradeComputer(ctx, oldRequest)
 	requireFailure(t, err, "computer_image_upgrade_stale")
-	f.probe.missing = false
+	f.probe.coreMissing = false
 	current, err := restarted.UpgradeComputer(ctx, request)
 	if err != nil || current.State != "ready" || !current.Capabilities.Ready() {
 		t.Fatalf("同一个计划无法在能力就绪后收尾：%+v，%v", current, err)

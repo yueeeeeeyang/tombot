@@ -3,114 +3,19 @@ package dockernode
 import (
 	"context"
 	"errors"
-	"math"
+	"io.yueyang/tom/internal/taskprocess"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
-	"io.yueyang/tom/internal/browserprobe"
-	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computeragent"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/processgroup"
 )
 
 type fakeComputerBrowsers struct{ ensureError, retireError, checkError error }
-
-func TestNodeBrowserStartupKeepsSpecificFailureAndClosesOriginalGrant(t *testing.T) {
-	for _, code := range []string{"browser_start_membership_failed", "browser_start_sandbox_failed", "unknown"} {
-		t.Run(code, func(t *testing.T) {
-			_, browsers, groups, resource, current, actions := newBrowserFixture(t)
-			invoke := browsers.invoke
-			browsers.invoke = func(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-				observed, err := invoke(ctx, resource, grant, action, files)
-				if action == "start" {
-					return computeragent.BrowserObservation{}, &browserprobe.Failure{Code: code}
-				}
-				return observed, err
-			}
-			err := browsers.ensure(t.Context(), resource, current)
-			want := code
-			if code == "unknown" {
-				want = "browser_start_unconfirmed"
-			}
-			var failed *computer.Failure
-			if !errors.As(err, &failed) || failed.Code != want {
-				t.Fatal("启动分类丢失", err)
-			}
-			if len(groups.created) != 1 || len(groups.drained) != 1 || groups.created[0] != groups.drained[0] || len(*actions) != 2 || (*actions)[1] != "close" {
-				t.Fatal("未回收原授权或重放启动", actions)
-			}
-		})
-	}
-}
-
-func TestNodeBrowserReadsStartupDiagnosticAfterAgentExit(t *testing.T) {
-	for _, scenario := range []string{"当前失败", "关闭后失败", "不同授权", "未知分类", "活动记录", "无记录", "符号链接", "权限漂移"} {
-		t.Run(scenario, func(t *testing.T) {
-			f, browsers, groups, resource, current, actions := newBrowserFixture(t)
-			if err := f.node.configureAgent(resource, true); err != nil {
-				t.Fatal(err)
-			}
-			invoke := browsers.invoke
-			browsers.invoke = func(ctx context.Context, resource Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-				observed, err := invoke(ctx, resource, grant, action, files)
-				if action != "start" {
-					return observed, err
-				}
-				snapshot := computeragent.BrowserSnapshot{Version: 1, Grant: grant, Phase: "consumed", StartupError: "browser_start_membership_failed"}
-				switch scenario {
-				case "关闭后失败":
-					snapshot.Phase = "closed"
-				case "不同授权":
-					snapshot.Grant.Request.Group.ID = ids.New()
-				case "未知分类":
-					snapshot.StartupError = "不应返回的诊断内容"
-				case "活动记录":
-					snapshot.Phase = "active"
-				}
-				if scenario != "无记录" {
-					encoded, err := agentchannel.Encode(snapshot)
-					if err != nil {
-						t.Fatal(err)
-					}
-					path := filepath.Join(resource.ControlPath, "browser.json")
-					if err := os.WriteFile(path, encoded, 0600); err != nil {
-						t.Fatal(err)
-					}
-					if scenario == "符号链接" {
-						if err := os.Rename(path, path+".original"); err != nil {
-							t.Fatal(err)
-						}
-						if err := os.Symlink(path+".original", path); err != nil {
-							t.Fatal(err)
-						}
-					} else if scenario == "权限漂移" {
-						if err := os.Chmod(path, 0644); err != nil {
-							t.Fatal(err)
-						}
-					}
-				}
-				return computeragent.BrowserObservation{}, errors.New("代理已退出，启动回执丢失")
-			}
-			err := browsers.ensure(t.Context(), resource, current)
-			want := "browser_start_unconfirmed"
-			if scenario == "当前失败" || scenario == "关闭后失败" {
-				want = "browser_start_membership_failed"
-			}
-			var failed *computer.Failure
-			if !errors.As(err, &failed) || failed.Code != want {
-				t.Fatal("未按原授权读取可信启动诊断", err)
-			}
-			if len(groups.created) != 1 || len(groups.drained) != 1 || groups.created[0] != groups.drained[0] || len(*actions) != 2 || (*actions)[1] != "close" {
-				t.Fatal("读取诊断改变了原实例清理或重放启动", actions)
-			}
-		})
-	}
-}
 
 func (b *fakeComputerBrowsers) ensure(context.Context, Resource, container) error {
 	return b.ensureError
@@ -119,7 +24,11 @@ func (b *fakeComputerBrowsers) retire(context.Context, Resource) error { return 
 func (*fakeComputerBrowsers) shutdown(context.Context) error           { return nil }
 
 func testBrowserOptions() BrowserOptions {
-	return BrowserOptions{StartupTimeout: 2 * time.Second, CallTimeout: time.Second, CleanupTimeout: 3 * time.Second, ShutdownTimeout: 5 * time.Second, Groups: testProbeOptions().Groups, Limits: computeragent.BrowserLimits{Width: 1280, Height: 800, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 16, MaximumEvents: 32, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}}
+	return BrowserOptions{CallTimeout: time.Second, CleanupTimeout: 3 * time.Second, ShutdownTimeout: 5 * time.Second, Groups: testProbeOptions().Groups}
+}
+
+func retiredBrowserLimits() computeragent.BrowserLimits {
+	return computeragent.BrowserLimits{Width: 1280, Height: 800, MaximumWindows: 8, MaximumPerSession: 4, MaximumWindowRecords: 16, MaximumEvents: 32, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}
 }
 
 func newBrowserFixture(t *testing.T) (fixture, *nodeBrowsers, *probeGroups, Resource, container, *[]string) {
@@ -162,138 +71,9 @@ func newBrowserFixture(t *testing.T) (fixture, *nodeBrowsers, *probeGroups, Reso
 	return f, browsers, groups, resource, current, &actions
 }
 
-func TestNodeBrowserLifecycleAndMonotonicVersions(t *testing.T) {
-	f, b, g, r, current, actions := newBrowserFixture(t)
-	g.beforeCreate = func(ref processgroup.ServiceReference) {
-		state, err := f.node.journal.readBrowser(r.Specification.UserID)
-		if err != nil || state == nil || state.Phase != "prepared" || state.Grant.Request.Group != ref {
-			t.Fatal("先创建后保存意图", state, err)
-		}
-	}
-	for revision := int64(1); revision <= 2; revision++ {
-		if err := b.ensure(t.Context(), r, current); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.ensure(t.Context(), r, current); err != nil {
-			t.Fatal(err)
-		}
-		state, err := f.node.journal.readBrowser(r.Specification.UserID)
-		if err != nil || state.Phase != "active" || state.Grant.Revision != revision {
-			t.Fatal(state, err)
-		}
-		for _, file := range g.files {
-			if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) {
-				t.Fatal("宿主入口泄漏", err)
-			}
-		}
-		if err := b.retire(t.Context(), r); err != nil {
-			t.Fatal(err)
-		}
-		if err := b.retire(t.Context(), r); err != nil {
-			t.Fatal(err)
-		}
-		state, err = f.node.journal.readBrowser(r.Specification.UserID)
-		if err != nil || state.Phase != "closed" || state.Closure != "agent" {
-			t.Fatal(state, err)
-		}
-	}
-	if len(g.created) != 2 || len(g.drained) != 2 || g.created[0].ID == g.created[1].ID || len(*actions) != 6 {
-		t.Fatal("启动重放或未回收", *actions)
-	}
-}
-
-type faultyBrowserStore struct {
-	browserStore
-	phase string
-}
-
-func (s *faultyBrowserStore) saveBrowser(state *browserRecord) error {
-	if state.Phase == s.phase {
-		return errors.New("测试浏览器刷盘失败")
-	}
-	return s.browserStore.saveBrowser(state)
-}
-
-func TestNodeBrowserFailuresCloseOriginalGrant(t *testing.T) {
-	for _, stage := range []string{"prepared", "create", "controls", "dispatched", "start", "response", "active", "closing", "drain", "closed", "cancelled"} {
-		t.Run(stage, func(t *testing.T) {
-			f, b, g, r, current, actions := newBrowserFixture(t)
-			fault := errors.New("测试故障")
-			b.store = &faultyBrowserStore{browserStore: b.store, phase: stage}
-			if stage == "create" {
-				g.createError = fault
-			}
-			if stage == "controls" {
-				g.controlsError = fault
-			}
-			if stage == "drain" {
-				g.drainError = fault
-			}
-			invoke := b.invoke
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			b.invoke = func(ctx context.Context, r Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-				observed, err := invoke(ctx, r, grant, action, files)
-				if action == "start" {
-					if stage == "start" {
-						return computeragent.BrowserObservation{}, fault
-					}
-					if stage == "response" {
-						observed.Grant.Revision++
-					}
-					if stage == "cancelled" {
-						cancel()
-					}
-					if stage == "closing" || stage == "drain" || stage == "closed" {
-						return computeragent.BrowserObservation{}, fault
-					}
-				}
-				return observed, err
-			}
-			g.beforeDrain = func(ctx context.Context, _ processgroup.ServiceReference) {
-				if ctx.Err() != nil {
-					t.Fatal("取消影响独立回收")
-				}
-				if _, ok := ctx.Deadline(); !ok {
-					t.Fatal("回收无时限")
-				}
-			}
-			if err := b.ensure(ctx, r, current); err == nil {
-				t.Fatal("失败仍确认活动")
-			}
-			if stage == "prepared" {
-				if len(g.created)+len(g.drained)+len(*actions) != 0 {
-					t.Fatal("准备失败仍访问资源")
-				}
-				return
-			}
-			if len(g.created) != 1 || len(g.drained) != 1 || g.created[0] != g.drained[0] {
-				t.Fatal("没有回收原资源组")
-			}
-			state, err := f.node.journal.readBrowser(r.Specification.UserID)
-			if err != nil || state == nil {
-				t.Fatal(state, err)
-			}
-			uncertain := stage == "closing" || stage == "drain" || stage == "closed"
-			if (state.Phase != "closed") != uncertain {
-				t.Fatal("错误关闭屏障", state)
-			}
-			starts := 0
-			for _, action := range *actions {
-				if action == "start" {
-					starts++
-				}
-			}
-			if starts > 1 {
-				t.Fatal("重放未知启动")
-			}
-		})
-	}
-}
-
 func TestNodeBrowserUnknownCloseIsolatesBeforeDraining(t *testing.T) {
 	f, b, g, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
+	if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 		t.Fatal(err)
 	}
 	invoke := b.invoke
@@ -325,7 +105,7 @@ func TestNodeBrowserRecoveryNeverStarts(t *testing.T) {
 	for _, phase := range []string{"prepared", "dispatched", "active", "closing", "closed"} {
 		t.Run(phase, func(t *testing.T) {
 			f, b, g, r, current, _ := newBrowserFixture(t)
-			if err := b.ensure(t.Context(), r, current); err != nil {
+			if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 				t.Fatal(err)
 			}
 			state, err := f.node.journal.readBrowser(r.Specification.UserID)
@@ -364,105 +144,12 @@ func TestNodeBrowserRecoveryNeverStarts(t *testing.T) {
 	}
 }
 
-func TestNodeBrowserStatusFailureDoesNotRestart(t *testing.T) {
-	_, b, g, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
-		t.Fatal(err)
-	}
-	invoke := b.invoke
-	b.invoke = func(ctx context.Context, r Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-		if action == "status" {
-			return computeragent.BrowserObservation{}, errors.New("查询失败")
-		}
-		return invoke(ctx, r, grant, action, files)
-	}
-	if err := b.ensure(t.Context(), r, current); err == nil || len(g.created) != 1 || len(g.drained) != 1 {
-		t.Fatal("查询失败仍重启", err)
-	}
-}
-
-func TestNodeBrowserStatusRechecksParentAfterResponse(t *testing.T) {
-	f, b, g, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
-		t.Fatal(err)
-	}
-	invoke := b.invoke
-	b.invoke = func(ctx context.Context, r Resource, grant computeragent.BrowserGrant, action string, files []*os.File) (computeragent.BrowserObservation, error) {
-		observed, err := invoke(ctx, r, grant, action, files)
-		if action == "status" {
-			locate := b.locate
-			b.locate = func(ctx context.Context, id string, pid int) (processgroup.ContainerReference, error) {
-				ref, err := locate(ctx, id, pid)
-				ref.Inode++
-				return ref, err
-			}
-		}
-		return observed, err
-	}
-	if err := b.ensure(t.Context(), r, current); err == nil {
-		t.Fatal("回包后父组漂移仍确认活动")
-	}
-	state, err := f.node.journal.readBrowser(r.Specification.UserID)
-	if err != nil || state.Phase != "closing" || len(g.created) != 1 || len(g.drained) != 0 {
-		t.Fatal("漂移后重启或回收了错误组", state, err)
-	}
-}
-
-func TestNodeBrowserRejectsInvalidRecordsAndExhaustion(t *testing.T) {
-	for _, change := range []string{"future", "owner", "exhausted", "damaged", "symlink"} {
-		t.Run(change, func(t *testing.T) {
-			f, b, g, r, current, _ := newBrowserFixture(t)
-			if err := b.ensure(t.Context(), r, current); err != nil {
-				t.Fatal(err)
-			}
-			if err := b.retire(t.Context(), r); err != nil {
-				t.Fatal(err)
-			}
-			state, err := f.node.journal.readBrowser(r.Specification.UserID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			switch change {
-			case "future":
-				state.Specification.Generation++
-				state.Grant.Identity.Generation++
-			case "owner":
-				state.Grant.Identity.ComputerID = ids.New()
-			case "exhausted":
-				state.Grant.Revision = math.MaxInt64
-			}
-			encoded, err := agentchannel.Encode(state)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if change == "damaged" {
-				encoded = []byte("{}")
-			}
-			path := filepath.Join(r.ControlPath, "..", r.Specification.UserID+".browser.json")
-			if err := os.WriteFile(path, encoded, 0600); err != nil {
-				t.Fatal(err)
-			}
-			if change == "symlink" {
-				if err := os.Rename(path, path+".saved"); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(path+".saved", path); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if err := b.ensure(t.Context(), r, current); err == nil || len(g.created) != 1 {
-				t.Fatal("无效记录未拒绝", err)
-			}
-		})
-	}
-}
-
 func TestNodeBrowserBlocksRuntimeAdmissionAndRemoval(t *testing.T) {
 	f := newFixture(t)
 	b := f.node.browsers.(*fakeComputerBrowsers)
 	b.ensureError = errors.New("浏览器未启动")
-	if _, err := f.node.Ensure(t.Context(), f.specification); err == nil {
-		t.Fatal("浏览器失败仍开户")
+	if _, err := f.node.Ensure(t.Context(), f.specification); err != nil {
+		t.Fatal("浏览器未启动不应阻塞开户", err)
 	}
 	b.ensureError = nil
 	if _, err := f.node.Ensure(t.Context(), f.specification); err != nil {
@@ -478,42 +165,9 @@ func TestNodeBrowserBlocksRuntimeAdmissionAndRemoval(t *testing.T) {
 	}
 }
 
-func TestNodeBrowserConcurrentReconciliationStartsOnce(t *testing.T) {
-	f, b, g, _, _, actions := newBrowserFixture(t)
-	f.node.browsers = b
-	var pending sync.WaitGroup
-	results := make(chan error, 12)
-	for range 12 {
-		pending.Add(1)
-		go func() { defer pending.Done(); _, err := f.node.Inspect(t.Context(), f.specification); results <- err }()
-	}
-	pending.Wait()
-	close(results)
-	for err := range results {
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-	starts := 0
-	for _, action := range *actions {
-		if action == "start" {
-			starts++
-		}
-	}
-	if starts != 1 || len(g.created) != 1 {
-		t.Fatal("并发对账重复启动", starts, len(g.created))
-	}
-	if _, err := f.node.Remove(t.Context(), f.specification); err != nil {
-		t.Fatal(err)
-	}
-	if len(g.drained) != 1 {
-		t.Fatal("删除容器未回收浏览器")
-	}
-}
-
 func TestNodeBrowserRetirementRetainsHighestRevision(t *testing.T) {
 	f, b, _, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
+	if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 		t.Fatal(err)
 	}
 	state, err := f.node.journal.readBrowser(r.Specification.UserID)
@@ -547,24 +201,21 @@ func TestNodeBrowserRetirementRetainsHighestRevision(t *testing.T) {
 	if err != nil || string(before) != string(after) {
 		t.Fatal("最高浏览器版本被删除或修改", err)
 	}
-	// 生命周期替身不创建真实 PID，先按既有夹具建立下一代，再测试浏览器的跨代版本。
+	// 新镜像不会为新用户或新一代电脑重新签发共享 Chrome 授权。
 	f.node.browsers = &fakeComputerBrowsers{}
 	f.prepareComputer(t, next)
-	f.node.browsers = b
-	if _, err := f.node.Inspect(t.Context(), next); err != nil {
-		t.Fatal(err)
-	}
 	state, err = f.node.journal.readBrowser(r.Specification.UserID)
-	if err != nil || state.Grant.Revision != 2 || state.Grant.Identity.Generation != next.Generation {
-		t.Fatal("换代重置版本", state, err)
+	if err != nil || state.Grant.Revision != 1 || state.Phase != "closed" {
+		t.Fatal("换代不应启动共享浏览器", state, err)
 	}
+
 }
 
 func TestNodeBrowserRetirementRejectsUnconfirmedAgentRecord(t *testing.T) {
 	for _, scenario := range []string{"missing", "revision", "grant", "identity", "corrupt"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, b, _, r, current, _ := newBrowserFixture(t)
-			if err := b.ensure(t.Context(), r, current); err != nil {
+			if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 				t.Fatal(err)
 			}
 			if err := b.retire(t.Context(), r); err != nil {
@@ -615,7 +266,7 @@ func TestNodeBrowserIsolationFailureAndContainerDriftPreserveBarrier(t *testing.
 	for _, scenario := range []string{"stop", "parent", "container"} {
 		t.Run(scenario, func(t *testing.T) {
 			f, b, g, r, current, _ := newBrowserFixture(t)
-			if err := b.ensure(t.Context(), r, current); err != nil {
+			if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 				t.Fatal(err)
 			}
 			b.invoke = func(context.Context, Resource, computeragent.BrowserGrant, string, []*os.File) (computeragent.BrowserObservation, error) {
@@ -650,3 +301,21 @@ func TestNodeBrowserIsolationFailureAndContainerDriftPreserveBarrier(t *testing.
 }
 
 func (b *fakeComputerBrowsers) check(context.Context, Resource, container) error { return b.checkError }
+
+// seedRetiredBrowser 建立旧部署留下的活动记录，供新节点验证升级排空，不启动 Chrome。
+func seedRetiredBrowser(ctx context.Context, b *nodeBrowsers, r Resource, current container) error {
+	parent, err := b.locate(ctx, current.ID, current.State.Pid)
+	if err != nil {
+		return err
+	}
+	group := processgroup.ServiceReference{Container: parent, ID: ids.New(), Kind: processgroup.BrowserService}
+	grant := computeragent.BrowserGrant{Identity: b.node.agentConfiguration(r).Identity, Revision: 1, Request: taskprocess.BrowserRequest{Version: 1, Group: group, Deadline: agentchannel.Deadline{ExpiresNS: 1, TimeNamespace: 2}}, Limits: retiredBrowserLimits()}
+	record := &browserRecord{Version: 1, Specification: r.Specification, Grant: grant}
+	for _, phase := range []string{"prepared", "dispatched", "active"} {
+		record.Phase = phase
+		if err := b.store.saveBrowser(record); err != nil {
+			return err
+		}
+	}
+	return b.groups.Create(ctx, group)
+}

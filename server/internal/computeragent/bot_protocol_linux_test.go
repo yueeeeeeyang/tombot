@@ -20,7 +20,7 @@ func TestKernelBotAgentProtocol(t *testing.T) {
 	}
 	scope := &recordingBotScope{fakeScope: fixture.factory.scopes[0]}
 	fixture.guard.scope = scope
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

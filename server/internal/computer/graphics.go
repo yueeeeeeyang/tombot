@@ -49,3 +49,8 @@ type DesktopRuntime interface {
 	StartDesktop(context.Context, ExecutionSession) (DesktopStatus, error)
 	InspectDesktop(context.Context, ExecutionSession) (DesktopStatus, error)
 }
+
+// BrowserPreparer 在打开 Chrome 前确认执行会话所属的桌面已就绪。
+type BrowserPreparer interface {
+	PrepareBrowser(context.Context, ExecutionSession) error
+}

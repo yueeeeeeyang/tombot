@@ -22,7 +22,7 @@ func testConfig() Config {
 		Storage:      StorageConfig{StateDirectory: "/var/lib/tombot-node/storage", CommandTimeout: 10000, MinimumFreeBytes: 1 << 30},
 		Groups:       GroupConfig{GracePeriod: 20, PollInterval: 5, MaximumProcesses: 64},
 		Sessions:     SessionConfig{MaximumActive: 8, CallTimeout: 10000, PollInterval: 10, RetryDelay: 100, CleanupAttempts: 2},
-		Browser:      BrowserConfig{CallTimeout: 1000, CleanupTimeout: 10000, ShutdownTimeout: 10000, Limits: computeragent.BrowserLimits{Width: 1280, Height: 800, MaximumWindows: 32, MaximumPerSession: 4, MaximumWindowRecords: 128, MaximumEvents: 256, CallTimeoutMS: 1000, DialogTimeoutMS: 10000, ShutdownTimeoutMS: 1000}},
+		Browser:      BrowserConfig{CallTimeout: 1000, CleanupTimeout: 10000, ShutdownTimeout: 10000},
 		Probe:        ProbeConfig{CallTimeout: 10000, CleanupTimeout: 10000},
 		AgentStartup: AgentStartupConfig{Timeout: 1000, CallTimeout: 1000, RetryDelay: 10, MaximumAttempts: 4},
 		Agent:        computeragent.RuntimeOptions{CallTimeoutMS: 1000, CleanupTimeoutMS: 1000, RetryDelayMS: 100, CleanupAttempts: 2, PollIntervalMS: 10, ShutdownTimeoutMS: 5000, MaximumActive: 8, MaximumConnections: 16, EgressConnectTimeoutMS: 1000, EgressIdleTimeoutMS: 1000, EgressLifetimeMS: 10000, EgressMaximumConnections: 8, EgressMaximumTransferBytes: 1 << 20},
@@ -41,10 +41,8 @@ func TestConfigValidation(t *testing.T) {
 		"agent_startup_delay":      func(c *Config) { c.AgentStartup.RetryDelay = 0 },
 		"agent_startup_call":       func(c *Config) { c.AgentStartup.CallTimeout = 2000 },
 		"agent_startup_overflow":   func(c *Config) { c.AgentStartup.Timeout = Milliseconds(math.MaxInt64) },
-		"agent_startup_api_budget": func(c *Config) { c.AgentStartup.Timeout = 20000 },
+		"agent_startup_api_budget": func(c *Config) { c.AgentStartup.Timeout = c.API.CallTimeout },
 		"browser_missing":          func(c *Config) { c.Browser = BrowserConfig{} },
-		"browser_agent_budget":     func(c *Config) { c.Browser.Limits.CallTimeoutMS = 2000 },
-		"browser_agent_cleanup":    func(c *Config) { c.Browser.Limits.ShutdownTimeoutMS = 2000 },
 		"browser_cleanup":          func(c *Config) { c.Browser.CleanupTimeout = 2000 },
 		"browser_shutdown":         func(c *Config) { c.Browser.ShutdownTimeout = 1000 },
 		"browser_api_budget": func(c *Config) {
@@ -129,11 +127,11 @@ func TestDeploymentExample(t *testing.T) {
 	if err := configuration.Validate(); err != nil {
 		t.Fatal("部署示例与正式配置契约不符", err)
 	}
-	if browser := configuration.runtimeOptions().Browser; browser.StartupTimeout != 35*time.Second || browser.CallTimeout != 10*time.Second || browser.Limits.CallTimeoutMS != 5000 {
-		t.Fatal("浏览器冷启动与普通调用预算不符", browser)
+	if browser := configuration.runtimeOptions().Browser; browser.CallTimeout != 10*time.Second || browser.CleanupTimeout != 30*time.Second {
+		t.Fatal("历史浏览器回收预算不符", browser)
 	}
 	configuration.API.CallTimeout = 30000
-	if err := configuration.Validate(); err != nil || configuration.runtimeOptions().Browser.StartupTimeout != 10*time.Second {
+	if err := configuration.Validate(); err != nil {
 		t.Fatal("旧安装记录的调用预算无法正常核验", err)
 	}
 }

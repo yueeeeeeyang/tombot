@@ -20,20 +20,20 @@ func TestLinuxStorageLayout(t *testing.T) {
 		t.Fatal(err)
 	}
 	layout := diskLayoutIdentity{rootUID: 0, rootGID: 0, sharedGID: computer.DesktopSharedGID, browserUID: computer.BrowserUID}
-	if err := layout.prepare(root, true); err != nil {
+	if err := layout.prepare(root, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := layout.prepare(root, false); err != nil {
+	if err := layout.prepare(root, false, false); err != nil {
 		t.Fatal(err)
 	}
 	browser := filepath.Join(root, computer.BrowserSubdirectory)
 	if err := os.Chown(browser, computer.DesktopUIDBase+1, computer.DesktopSharedGID); err != nil {
 		t.Fatal(err)
 	}
-	if err := layout.prepare(root, false); err == nil {
+	if err := layout.prepare(root, false, false); err == nil {
 		t.Fatal("真实 Bot 身份替换浏览器服务身份未被拒绝")
 	}
-	if err := layout.prepare(root, true); err == nil {
+	if err := layout.prepare(root, true, true); err == nil {
 		t.Fatal("异常所属身份被自动修复")
 	}
 }

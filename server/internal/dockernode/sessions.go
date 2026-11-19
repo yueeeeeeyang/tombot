@@ -194,6 +194,9 @@ func (controller *SessionController) Open(ctx context.Context, command computer.
 		if !current.hasContainer || !current.container.State.Running || current.container.State.Dead || current.container.State.Pid <= 1 {
 			return computer.SessionObservation{}, failure("session_computer_stopped")
 		}
+		if current.container.Config.Labels[computer.DesktopBrowserLabel] != "1" {
+			return computer.SessionObservation{}, failure("session_computer_image_upgrade_required")
+		}
 		state = &sessionRecord{Version: 2, Command: command, Epoch: controller.epoch, Phase: "opening", Deadline: deadline.UTC()}
 		if err = controller.reserve(sessionKeyOf(command.Session), sessionLease{deadline: deadline}); err != nil {
 			return computer.SessionObservation{}, err

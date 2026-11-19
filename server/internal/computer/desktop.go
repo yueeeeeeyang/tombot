@@ -13,6 +13,7 @@ const (
 	BrowserUID            = 30000
 	ProbeUID              = 30001
 	DesktopUIDBase        = 100000
+	DesktopBrowserUIDBase = 200000
 	MaxDesktops           = 4095
 	MaxConcurrentDesktops = 64
 )

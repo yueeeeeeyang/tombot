@@ -18,8 +18,7 @@ COMMANDS = {
     "wget": ["wget", "--version"], "jq": ["jq", "--version"], "ripgrep": ["rg", "--version"],
     "tmux": ["tmux", "-V"], "ssh": ["ssh", "-V"], "openssl": ["openssl", "version"],
     "ffmpeg": ["ffmpeg", "-version"], "pdftotext": ["pdftotext", "-v"], "psql": ["psql", "--version"],
-    "chrome": ["google-chrome", "--version"], "libreoffice": ["libreoffice", "--headless", "--version"],
-    "xpra": ["dpkg-query", "-W", "-f=${Version}", "xpra"],
+    "chrome": ["/usr/bin/google-chrome", "--version"], "libreoffice": ["libreoffice", "--headless", "--version"],
 }
 GUI_COMMANDS = {"xfce": "xfce4-session", "xfwm4": "xfwm4", "terminal": "xfce4-terminal", "thunar": "thunar"}
 

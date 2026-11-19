@@ -16,7 +16,7 @@ import (
 func TestKernelControlHealthIsReadOnlyAndStopsWithAgent(t *testing.T) {
 	fixture := newFixture(t)
 	desktopCount := len(fixture.controller.desktops)
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, time.Second, 4, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, time.Second, 4, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -174,9 +174,9 @@ func TestNodeVerificationLifecycle(t *testing.T) {
 			t.Fatal("能力过期仍显示就绪", catalog, err)
 		}
 	})
-	t.Run("缺少浏览器能力时清理并失败", func(t *testing.T) {
+	t.Run("缺少文件能力时清理并失败", func(t *testing.T) {
 		verifier, node := verifierFixture(t, control)
-		node.capabilities.Browser = false
+		node.capabilities.Files = false
 		processVerification(t, verifier)
 		processVerification(t, verifier)
 		if verificationState(t, pool, verifier) != "failed" || node.present || node.removeCalls != 1 {

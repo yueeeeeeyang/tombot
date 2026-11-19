@@ -39,7 +39,7 @@ func TestKernelNodeAgentStartup(t *testing.T) {
 				}
 			})
 			probes, _ := newLinkProbeController(t, identity)
-			server, err := computeragent.NewServer(guard, probes, newLinkBrowserController(t, identity), func(peer agentchannel.Peer) error {
+			server, err := computeragent.NewServer(guard, probes, func(peer agentchannel.Peer) error {
 				if peer.PID != int32(os.Getpid()) || peer.UID != 0 || peer.GID != 0 {
 					return errors.New("测试协议对端不符")
 				}

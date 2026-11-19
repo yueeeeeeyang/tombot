@@ -3,17 +3,7 @@ package computeragent
 import (
 	"context"
 	"errors"
-	"log/slog"
-	"os"
-	"sync"
-	"sync/atomic"
-	"time"
 
-	"github.com/oklog/ulid/v2"
-	"io.yueyang/tom/internal/agentchannel"
-	"io.yueyang/tom/internal/browserprobe"
-	"io.yueyang/tom/internal/computer"
-	"io.yueyang/tom/internal/sharedbrowser"
 	"io.yueyang/tom/internal/taskprocess"
 )
 
@@ -30,16 +20,15 @@ type BrowserLimits struct {
 	ShutdownTimeoutMS    int `json:"shutdown_timeout_ms"`
 }
 
-func (limits BrowserLimits) options() sharedbrowser.Options {
-	return sharedbrowser.Options{Width: limits.Width, Height: limits.Height, MaximumWindows: limits.MaximumWindows, MaximumPerSession: limits.MaximumPerSession, MaximumWindowRecords: limits.MaximumWindowRecords, MaximumEvents: limits.MaximumEvents, CallTimeout: time.Duration(limits.CallTimeoutMS) * time.Millisecond, DialogTimeout: time.Duration(limits.DialogTimeoutMS) * time.Millisecond, ShutdownTimeout: time.Duration(limits.ShutdownTimeoutMS) * time.Millisecond}
-}
-
 // Validate 在时长换算前拒绝溢出，再复用共享浏览器的容量规则。
 func (limits BrowserLimits) Validate() error {
 	if limits.CallTimeoutMS < 100 || limits.CallTimeoutMS > 30000 || limits.DialogTimeoutMS < 1000 || limits.DialogTimeoutMS > 600000 || limits.ShutdownTimeoutMS < 1000 || limits.ShutdownTimeoutMS > 30000 {
 		return errors.New("共享浏览器服务时限无效")
 	}
-	return limits.options().ValidateLimits()
+	if limits.Width < 320 || limits.Width > 1280 || limits.Height < 240 || limits.Height > 800 || limits.MaximumWindows < 1 || limits.MaximumWindows > 128 || limits.MaximumPerSession < 1 || limits.MaximumPerSession > 32 || limits.MaximumPerSession > limits.MaximumWindows || limits.MaximumWindowRecords < limits.MaximumWindows || limits.MaximumWindowRecords > 4096 || limits.MaximumEvents < 16 || limits.MaximumEvents > 4096 {
+		return errors.New("退役浏览器授权限制无效")
+	}
+	return nil
 }
 
 // BrowserGrant 的版本跨容器代次递增；服务实例、启动期限与预算共同组成不可改绑的授权。
@@ -71,7 +60,7 @@ func (snapshot BrowserSnapshot) Validate() error {
 	if snapshot.Version != 1 || snapshot.Grant.Validate() != nil || snapshot.Phase != "consumed" && snapshot.Phase != "active" && snapshot.Phase != "closed" {
 		return errors.New("共享浏览器持久服务记录无效")
 	}
-	if snapshot.StartupError != "" && (!browserprobe.ValidStartFailure(snapshot.StartupError) || snapshot.Phase == "active") {
+	if snapshot.StartupError != "" && (!validRetiredBrowserFailure(snapshot.StartupError) || snapshot.Phase == "active") {
 		return errors.New("共享浏览器启动失败记录无效")
 	}
 	return nil
@@ -85,462 +74,20 @@ type BrowserStore interface {
 
 // BrowserObservation 仅确认该实例的代理状态；active 不代表完整电脑或窗口客户端已验收。
 type BrowserObservation struct {
-	Grant    BrowserGrant           `json:"grant"`
-	Phase    string                 `json:"phase"`
-	Evidence *browserprobe.Evidence `json:"evidence,omitempty"`
+	Grant BrowserGrant `json:"grant"`
+	Phase string       `json:"phase"`
 }
 
-type browserInstance struct {
-	grant    BrowserGrant
-	scope    BrowserScope
-	service  BrowserService
-	stopping atomic.Bool
-	watching bool
-	watched  chan struct{}
-}
-
-// BrowserController 串行管理一个用户级 Chrome；耗时操作不持有 Bot 桌面锁，失控时退出整个容器。
-type BrowserController struct {
-	identity      Identity
-	store         BrowserStore
-	factory       BrowserFactory
-	options       Options
-	authorize     sharedbrowser.Authorizer
-	logger        *slog.Logger
-	onFatal       func()
-	gate          chan struct{}
-	mu            sync.Mutex
-	stopped       bool
-	pending       sync.WaitGroup
-	state         *BrowserSnapshot
-	current       *browserInstance
-	available     atomic.Pointer[browserInstance]
-	lifetime      context.Context
-	stop          context.CancelFunc
-	fatal         chan struct{}
-	fatalOnce     sync.Once
-	shutdownOnce  sync.Once
-	shutdownDone  chan struct{}
-	shutdownError error
-}
-
-// NewBrowserController 在监听前核验持久身份；同代次未闭合记录阻止启动，更高代次必须由节点先隔离旧容器。
-func NewBrowserController(ctx context.Context, identity Identity, store BrowserStore, factory BrowserFactory, options Options, authorize sharedbrowser.Authorizer, logger *slog.Logger, onFatal func()) (*BrowserController, error) {
-	if ctx == nil || identity.validate() != nil || store == nil || factory == nil || options.validate() != nil || authorize == nil || logger == nil || onFatal == nil {
-		return nil, errors.New("共享浏览器监督配置无效")
+// validRetiredBrowserFailure 验证旧版磁盘记录中允许的启动故障分类。
+func validRetiredBrowserFailure(code string) bool {
+	switch code {
+	case "browser_start_identity_failed", "browser_start_request_failed", "browser_start_directory_failed",
+		"browser_start_pipe_failed", "browser_start_membership_failed", "browser_start_privileges_failed",
+		"browser_start_launch_failed", "browser_start_group_failed", "browser_start_upload_failed",
+		"browser_start_protocol_failed", "browser_start_sandbox_failed", "browser_start_profile_failed",
+		"browser_start_process_exited", "browser_start_timeout", "browser_start_deadline_failed",
+		"browser_start_budget_failed", "browser_start_state_failed":
+		return true
 	}
-	bounded, cancel := context.WithTimeout(ctx, options.CallTimeout)
-	defer cancel()
-	state, err := store.LoadBrowser(bounded)
-	if err != nil {
-		return nil, err
-	}
-	if state != nil {
-		previous := state.Grant.Identity
-		if state.Validate() != nil || previous.UserID != identity.UserID || previous.ComputerID != identity.ComputerID || previous.NodeID != identity.NodeID || previous.Generation > identity.Generation {
-			return nil, errors.New("共享浏览器持久身份不符")
-		}
-		if state.Phase != "closed" {
-			if previous.Generation == identity.Generation {
-				return nil, errors.New("共享浏览器旧实例未确认关闭，需要隔离当前容器")
-			}
-			closed := *state
-			closed.Phase = "closed"
-			if err := store.SaveBrowser(bounded, closed); err != nil {
-				return nil, err
-			}
-			state = &closed
-		}
-	}
-	if bounded.Err() != nil {
-		return nil, bounded.Err()
-	}
-	lifetime, stop := context.WithCancel(context.Background())
-	return &BrowserController{identity: identity, store: store, factory: factory, options: options, authorize: authorize, logger: logger, onFatal: onFatal, gate: make(chan struct{}, 1), state: state, lifetime: lifetime, stop: stop, fatal: make(chan struct{}), shutdownDone: make(chan struct{})}, nil
-}
-
-func (controller *BrowserController) fail() {
-	controller.fatalOnce.Do(func() {
-		controller.available.Store(nil)
-		close(controller.fatal)
-		controller.stop()
-		controller.logger.Error("共享浏览器失去可靠控制，必须退出容器", "user_id", controller.identity.UserID, "computer_id", controller.identity.ComputerID, "generation", controller.identity.Generation)
-		controller.onFatal()
-	})
-}
-
-type browserOperation struct {
-	challenge string
-	kind      string
-	grant     BrowserGrant
-	files     []*os.File
-}
-
-// reject 只为启动前拒绝附加固定分类，查询和关闭仍保持原有错误边界。
-func (operation browserOperation) reject(code, message string) error {
-	cause := errors.New(message)
-	if operation.kind == "start" {
-		return browserprobe.StartFailure(code, cause)
-	}
-	return cause
-}
-
-// Start 接管三个传入入口，已消费请求不重放；回包未知时只允许查询或关闭同一授权。
-func (controller *BrowserController) Start(ctx context.Context, grant BrowserGrant, files []*os.File) (BrowserObservation, error) {
-	deadline, err := grant.Request.Deadline.Local(taskprocess.BrowserMaximumStartTime)
-	if err != nil {
-		return BrowserObservation{}, errors.Join(browserprobe.StartFailure("browser_start_deadline_failed", err), agentchannel.CloseFiles(files))
-	}
-	return controller.startAt(ctx, grant, files, deadline)
-}
-
-func (controller *BrowserController) startAt(ctx context.Context, grant BrowserGrant, files []*os.File, deadline time.Time) (BrowserObservation, error) {
-	return controller.execute(ctx, browserOperation{kind: "start", grant: grant, files: files}, deadline)
-}
-
-// Status 只查询完全相同授权的已知状态，不启动、重试或延长服务。
-func (controller *BrowserController) Status(ctx context.Context, grant BrowserGrant) (BrowserObservation, error) {
-	return controller.execute(ctx, browserOperation{kind: "status", grant: grant}, time.Now().Add(controller.options.CallTimeout))
-}
-
-// Probe 仅检查当前活动授权；每次挑战均实际执行，不读取缓存或恢复旧浏览器。
-func (controller *BrowserController) Probe(ctx context.Context, grant BrowserGrant, challenge string) (BrowserObservation, error) {
-	if _, err := ulid.ParseStrict(challenge); err != nil {
-		return BrowserObservation{}, errors.New("浏览器探针挑战无效")
-	}
-	return controller.execute(ctx, browserOperation{kind: "probe", grant: grant, challenge: challenge}, time.Now().Add(controller.options.CallTimeout))
-}
-
-// Close 可在启动请求抵达前持久关闭同一授权，阻止迟到启动；旧授权不能影响新实例。
-func (controller *BrowserController) Close(ctx context.Context, grant BrowserGrant) (BrowserObservation, error) {
-	return controller.execute(ctx, browserOperation{kind: "close", grant: grant}, time.Now().Add(controller.options.CallTimeout))
-}
-
-func (controller *BrowserController) execute(ctx context.Context, operation browserOperation, deadline time.Time) (observation BrowserObservation, failure error) {
-	defer func() {
-		failure = errors.Join(failure, agentchannel.CloseFiles(operation.files))
-		if failure != nil {
-			observation = BrowserObservation{}
-		}
-	}()
-	grant := operation.grant
-	if ctx == nil || grant.Validate() != nil {
-		return observation, operation.reject("browser_start_request_failed", "共享浏览器控制请求格式或授权无效")
-	}
-	if grant.Identity != controller.identity {
-		return observation, operation.reject("browser_start_identity_failed", "共享浏览器控制请求不属于当前电脑实例")
-	}
-	if operation.kind == "start" && len(operation.files) != 3 {
-		return observation, operation.reject("browser_start_pipe_failed", "共享浏览器启动缺少受限入口")
-	}
-	if !time.Now().Before(deadline) {
-		return observation, operation.reject("browser_start_deadline_failed", "共享浏览器控制请求已超过执行期限")
-	}
-	limits := grant.Limits.options()
-	if limits.CallTimeout > controller.options.CallTimeout || limits.ShutdownTimeout > controller.options.CleanupTimeout {
-		return observation, operation.reject("browser_start_budget_failed", "共享浏览器服务预算超过代理部署限制")
-	}
-	controller.mu.Lock()
-	if controller.stopped {
-		controller.mu.Unlock()
-		return observation, operation.reject("browser_start_state_failed", "共享浏览器已停止接单")
-	}
-	controller.pending.Add(1)
-	controller.mu.Unlock()
-	transferred := false
-	defer func() {
-		if !transferred {
-			controller.pending.Done()
-		}
-	}()
-	bounded, cancel := context.WithDeadline(ctx, deadline)
-	stopShutdown := context.AfterFunc(controller.lifetime, cancel)
-	defer stopShutdown()
-	defer cancel()
-	select {
-	case controller.gate <- struct{}{}:
-	case <-bounded.Done():
-		return observation, bounded.Err()
-	case <-controller.fatal:
-		return observation, operation.reject("browser_start_state_failed", "共享浏览器已失去可靠控制")
-	}
-	select {
-	case <-controller.fatal:
-		<-controller.gate
-		return observation, operation.reject("browser_start_state_failed", "共享浏览器已失去可靠控制")
-	default:
-	}
-	owned := operation
-	operation.files = nil
-	transferred = true
-	type result struct {
-		observation BrowserObservation
-		err         error
-	}
-	completed := make(chan result, 1)
-	go func() {
-		defer controller.pending.Done()
-		defer func() { <-controller.gate }()
-		observed, err := controller.perform(bounded, owned)
-		completed <- result{observed, err}
-	}()
-	select {
-	case result := <-completed:
-		return result.observation, errors.Join(result.err, bounded.Err())
-	case <-bounded.Done():
-	}
-	timer := time.NewTimer(controller.options.CleanupTimeout)
-	defer timer.Stop()
-	select {
-	case result := <-completed:
-		return observation, errors.Join(bounded.Err(), result.err)
-	case <-timer.C:
-		controller.fail()
-		return observation, errors.New("共享浏览器启动、关闭或持久记录阻塞")
-	}
-}
-
-func (controller *BrowserController) save(ctx context.Context, grant BrowserGrant, phase string) error {
-	state := BrowserSnapshot{Version: 1, Grant: grant, Phase: phase}
-	if phase == "closed" && controller.state != nil && controller.state.Grant == grant {
-		state.StartupError = controller.state.StartupError
-	}
-	controller.state = &state
-	if err := controller.store.SaveBrowser(ctx, state); err != nil {
-		controller.fail()
-		return err
-	}
-	return nil
-}
-
-func (controller *BrowserController) perform(ctx context.Context, operation browserOperation) (observation BrowserObservation, failure error) {
-	defer func() {
-		failure = errors.Join(failure, agentchannel.CloseFiles(operation.files))
-		if failure != nil {
-			observation = BrowserObservation{}
-		}
-	}()
-	if ctx.Err() != nil {
-		return observation, ctx.Err()
-	}
-	grant, state := operation.grant, controller.state
-	if operation.kind == "probe" {
-		if state == nil || state.Grant != grant || state.Phase != "active" || controller.current == nil {
-			return observation, errors.New("浏览器探针授权不是活动实例")
-		}
-		select {
-		case <-controller.current.scope.Done():
-			return observation, errors.New("浏览器探针实例已经退出")
-		default:
-		}
-		evidence, err := controller.current.service.Probe(ctx, operation.challenge)
-		if err != nil {
-			return observation, err
-		}
-		if err = evidence.Validate(operation.challenge); err != nil {
-			return observation, err
-		}
-		select {
-		case <-controller.current.scope.Done():
-			return observation, errors.New("浏览器探针实例已改变")
-		default:
-		}
-		return BrowserObservation{Grant: grant, Phase: "active", Evidence: &evidence}, nil
-	}
-	if operation.kind == "status" {
-		if state == nil || state.Grant != grant {
-			return observation, errors.New("共享浏览器状态不属于该授权")
-		}
-		if state.Phase == "active" {
-			select {
-			case <-controller.current.scope.Done():
-				controller.fail()
-				return observation, errors.New("共享浏览器活动实例已经失效")
-			default:
-			}
-		}
-		return BrowserObservation{Grant: grant, Phase: state.Phase}, nil
-	}
-	if operation.kind == "close" {
-		if state != nil && state.Grant == grant {
-			if state.Phase != "closed" {
-				if err := controller.drain(ctx); err != nil {
-					return observation, err
-				}
-			}
-			return BrowserObservation{Grant: grant, Phase: "closed"}, nil
-		}
-		if state != nil && (state.Phase != "closed" || grant.Revision <= state.Grant.Revision || grant.Request.Group.ID == state.Grant.Request.Group.ID) {
-			return observation, errors.New("共享浏览器关闭请求过期或实例不符")
-		}
-		if err := controller.save(ctx, grant, "closed"); err != nil {
-			return observation, err
-		}
-		return BrowserObservation{Grant: grant, Phase: "closed"}, nil
-	}
-	if state != nil && (state.Phase != "closed" || grant.Revision <= state.Grant.Revision || grant.Request.Group.ID == state.Grant.Request.Group.ID) {
-		return observation, operation.reject("browser_start_state_failed", "共享浏览器启动授权已消费或实例复用")
-	}
-	scope, err := controller.factory.OpenBrowser(grant.Request, operation.files, grant.Limits.options().ShutdownTimeout)
-	if err != nil || scope == nil {
-		return observation, errors.Join(errors.New("共享浏览器服务组未完成接管"), err)
-	}
-	operation.files = nil
-	instance := &browserInstance{grant: grant, scope: scope, watched: make(chan struct{})}
-	controller.current = instance
-	stopCancellation := controller.cancelScope(ctx, instance)
-	defer func() {
-		failure = errors.Join(failure, stopCancellation(), ctx.Err())
-		if failure != nil {
-			failure = errors.Join(failure, controller.recordStartupFailure(context.WithoutCancel(ctx), instance, failure))
-			failure = errors.Join(failure, controller.drain(context.WithoutCancel(ctx)))
-		}
-	}()
-	if err := controller.save(ctx, grant, "consumed"); err != nil {
-		return observation, err
-	}
-	options := grant.Limits.options()
-	options.UserID, options.ComputerID, options.Generation = grant.Identity.UserID, grant.Identity.ComputerID, grant.Identity.Generation
-	options.Logger = controller.logger
-	options.Authorize = func(ctx context.Context, session computer.ExecutionSession) error {
-		if instance.stopping.Load() || !grant.Identity.matches(session) || session.ContainerID != grant.Request.Group.Container.ContainerID {
-			return sharedbrowser.ErrDenied
-		}
-		return controller.authorize(ctx, session)
-	}
-	instance.service, err = scope.Start(ctx, grant.Request, options)
-	if err != nil || instance.service == nil {
-		return observation, errors.Join(errors.New("共享浏览器服务未完成启动"), err)
-	}
-	select {
-	case <-scope.Done():
-		return observation, errors.New("共享浏览器启动期间退出")
-	default:
-	}
-	if err := controller.save(ctx, grant, "active"); err != nil {
-		return observation, err
-	}
-	controller.available.Store(instance)
-	instance.watching = true
-	go controller.watch(instance)
-	controller.logger.InfoContext(ctx, "共享浏览器服务已启动", "user_id", grant.Identity.UserID, "computer_id", grant.Identity.ComputerID, "service_id", grant.Request.Group.ID, "revision", grant.Revision)
-	return BrowserObservation{Grant: grant, Phase: "active"}, nil
-}
-
-// recordStartupFailure 在致命清理可能退出代理前保存固定分类。先撤销执行权，记录只用于诊断，不证明清理成功。
-func (controller *BrowserController) recordStartupFailure(ctx context.Context, instance *browserInstance, cause error) error {
-	var startup *browserprobe.Failure
-	if !errors.As(cause, &startup) || !browserprobe.ValidStartFailure(startup.Code) || controller.state == nil || controller.state.Grant != instance.grant || controller.state.Phase != "consumed" {
-		return nil
-	}
-	instance.stopping.Store(true)
-	revokeErr := instance.scope.Revoke()
-	controller.logger.WarnContext(ctx, "共享浏览器启动失败，准备回收原实例", "user_id", instance.grant.Identity.UserID, "computer_id", instance.grant.Identity.ComputerID, "service_id", instance.grant.Request.Group.ID, "error_code", startup.Code)
-	state := *controller.state
-	state.StartupError = startup.Code
-	bounded, cancel := context.WithTimeout(ctx, controller.options.CallTimeout)
-	defer cancel()
-	if err := controller.store.SaveBrowser(bounded, state); err != nil {
-		controller.fail()
-		return errors.Join(revokeErr, err)
-	}
-	controller.state = &state
-	return revokeErr
-}
-
-// cancelScope 不等待业务门禁；返回函数必须在关闭描述符前汇合撤销回调。
-func (controller *BrowserController) cancelScope(ctx context.Context, instance *browserInstance) func() error {
-	completed := make(chan error, 1)
-	stop := context.AfterFunc(ctx, func() { instance.stopping.Store(true); completed <- instance.scope.Revoke() })
-	return func() error {
-		if stop() {
-			// Done 可能已关闭而取消通知尚未执行，完成路径不能抢先取消必需的撤销。
-			if ctx.Err() != nil {
-				instance.stopping.Store(true)
-				return instance.scope.Revoke()
-			}
-			return nil
-		}
-		return <-completed
-	}
-}
-
-func (controller *BrowserController) watch(instance *browserInstance) {
-	defer close(instance.watched)
-	select {
-	case <-controller.lifetime.Done():
-		return
-	case <-instance.scope.Done():
-		if !instance.stopping.Load() {
-			controller.fail()
-		}
-	}
-}
-
-// drain 只有实际服务组、直接进程及目录均确认结束后才保存关闭屏障；失败不释放控制目录锁。
-func (controller *BrowserController) drain(ctx context.Context) error {
-	instance := controller.current
-	if instance == nil {
-		return errors.New("共享浏览器未关闭记录缺少受管实例")
-	}
-	instance.stopping.Store(true)
-	controller.available.CompareAndSwap(instance, nil)
-	bounded, cancel := context.WithTimeout(ctx, controller.options.CleanupTimeout)
-	defer cancel()
-	stopCancellation := controller.cancelScope(bounded, instance)
-	failure := instance.scope.Drain(bounded)
-	failure = errors.Join(failure, stopCancellation())
-	if failure == nil {
-		failure = instance.scope.Close()
-	}
-	if failure == nil && instance.watching {
-		select {
-		case <-instance.watched:
-		case <-bounded.Done():
-			failure = bounded.Err()
-		}
-	}
-	if failure == nil {
-		failure = controller.save(bounded, instance.grant, "closed")
-	}
-	if failure != nil {
-		controller.fail()
-		return failure
-	}
-	controller.current = nil
-	controller.logger.InfoContext(ctx, "共享浏览器服务已关闭并持久确认", "user_id", instance.grant.Identity.UserID, "computer_id", instance.grant.Identity.ComputerID, "service_id", instance.grant.Request.Group.ID, "revision", instance.grant.Revision)
-	return nil
-}
-
-// Shutdown 先停止接单与在途启动，串行关闭共享服务；不以超时或进程退出代替持久关闭成功。
-func (controller *BrowserController) Shutdown(ctx context.Context) error {
-	controller.shutdownOnce.Do(func() {
-		controller.mu.Lock()
-		controller.stopped = true
-		controller.available.Store(nil)
-		controller.stop()
-		controller.mu.Unlock()
-		go func() {
-			defer close(controller.shutdownDone)
-			controller.pending.Wait()
-			select {
-			case <-controller.fatal:
-				controller.shutdownError = errors.New("共享浏览器没有可靠关闭")
-				return
-			default:
-			}
-			if controller.current != nil {
-				controller.shutdownError = controller.drain(context.Background())
-			}
-		}()
-	})
-	select {
-	case <-ctx.Done():
-		controller.fail()
-		return ctx.Err()
-	case <-controller.fatal:
-		return errors.New("共享浏览器没有可靠关闭")
-	case <-controller.shutdownDone:
-		return controller.shutdownError
-	}
+	return false
 }

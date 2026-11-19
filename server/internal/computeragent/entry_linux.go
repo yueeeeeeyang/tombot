@@ -14,8 +14,6 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/agentchannel"
-	"io.yueyang/tom/internal/computer"
-	"io.yueyang/tom/internal/processgroup"
 	"io.yueyang/tom/internal/taskprocess"
 )
 
@@ -36,47 +34,21 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return errors.Join(err, store.Close())
 	}
+	oldBrowser, err := store.LoadBrowser(ctx)
+	if err != nil || oldBrowser != nil && oldBrowser.Phase != "closed" {
+		logger.Error("旧浏览器实例未确认关闭", "computer_id", configuration.Identity.ComputerID)
+		return errors.Join(err, errors.New("旧浏览器实例未确认关闭"), store.Close())
+	}
 	options := configuration.Options
 	if err = prepareFilesystem(ctx, time.Duration(options.CallTimeoutMS)*time.Millisecond); err != nil {
 		logger.ErrorContext(ctx, "电脑代理运行空间准备失败", "user_id", configuration.Identity.UserID, "computer_id", configuration.Identity.ComputerID, "generation", configuration.Identity.Generation, "reason", err.Error())
 		return errors.Join(err, store.Close())
 	}
-	var controller *Controller
-	var browsers *BrowserController
-	authorize := func(ctx context.Context, session computer.ExecutionSession) error {
-		if controller == nil {
-			return errors.New("电脑代理尚未完成桌面授权组合")
-		}
-		status, err := controller.StartDesktop(ctx, session)
-		for err == nil && status.State == "starting" {
-			timer := time.NewTimer(50 * time.Millisecond)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-			status, err = controller.InspectDesktop(ctx, session)
-		}
-		if err != nil {
-			return err
-		}
-		if status.State != "ready" {
-			return errors.New("原生浏览器需要已就绪的 Bot 桌面")
-		}
-		return nil
-	}
-	// 工厂只在全部监督器构造完成并开始接单后使用，窗口不能在恢复阶段发放执行权。
-	factory, err := NewKernelScopes(time.Duration(options.PollIntervalMS)*time.Millisecond, func(reference processgroup.Reference) (WindowSession, error) {
-		if controller == nil || browsers == nil {
-			return nil, errors.New("电脑代理尚未完成窗口服务组合")
-		}
-		return openWindowSession(reference, browsers, authorize, options.guardOptions(), logger, controller.fail)
-	}, logger)
+	factory, err := NewKernelScopes(time.Duration(options.PollIntervalMS)*time.Millisecond, logger)
 	if err != nil {
 		return errors.Join(err, store.Close())
 	}
-	controller, err = NewController(ctx, configuration.Identity, store, factory, options.guardOptions(), options.MaximumActive, logger)
+	controller, err := NewController(ctx, configuration.Identity, store, factory, options.guardOptions(), options.MaximumActive, logger)
 	if err != nil {
 		return errors.Join(err, store.Close())
 	}
@@ -89,16 +61,7 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 		logger.ErrorContext(ctx, "电脑代理探针状态恢复失败", "user_id", configuration.Identity.UserID, "computer_id", configuration.Identity.ComputerID, "generation", configuration.Identity.Generation, "reason", err.Error())
 		return errors.Join(err, store.Close())
 	}
-	browserFactory, ok := factory.(BrowserFactory)
-	if !ok {
-		return errors.Join(errors.New("电脑代理缺少共享浏览器后端"), store.Close())
-	}
-	browsers, err = NewBrowserController(ctx, configuration.Identity, store, browserFactory, options.guardOptions(), authorize, logger, controller.fail)
-	if err != nil {
-		logger.ErrorContext(ctx, "电脑代理共享浏览器状态恢复失败", "user_id", configuration.Identity.UserID, "computer_id", configuration.Identity.ComputerID, "generation", configuration.Identity.Generation, "reason", err.Error())
-		return errors.Join(err, store.Close())
-	}
-	server, err := NewServer(controller, probes, browsers, RequireHostPeer, time.Duration(options.CallTimeoutMS)*time.Millisecond, options.MaximumConnections, logger)
+	server, err := NewServer(controller, probes, RequireHostPeer, time.Duration(options.CallTimeoutMS)*time.Millisecond, options.MaximumConnections, logger)
 	if err != nil {
 		return errors.Join(err, store.Close())
 	}
@@ -115,7 +78,7 @@ func Run(ctx context.Context, logger *slog.Logger) error {
 		func(ctx context.Context) error {
 			return serveWithEgress(ctx, func(ctx context.Context) error { return server.Serve(ctx, listener) }, func(ctx context.Context) error { return bridge.Serve(ctx, egressListener) })
 		}, controller.Serve, func(ctx context.Context) error {
-			return shutdownControllers(ctx, controller, probes, browsers)
+			return shutdownControllers(ctx, controller, probes)
 		}, store.Close)
 }
 

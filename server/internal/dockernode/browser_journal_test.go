@@ -11,7 +11,7 @@ import (
 
 func TestNodeBrowserJournalRejectsRebindingAndRegression(t *testing.T) {
 	f, b, _, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
+	if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 		t.Fatal(err)
 	}
 	active, err := f.node.journal.readBrowser(r.Specification.UserID)
@@ -86,7 +86,7 @@ func TestPreBrowserLifecycleVersionCannotOperate(t *testing.T) {
 }
 
 func TestNodeBrowserOptionsRejectUnboundedBudgets(t *testing.T) {
-	for _, change := range []func(*BrowserOptions){func(o *BrowserOptions) { o.CallTimeout = 0 }, func(o *BrowserOptions) { o.CleanupTimeout = o.CallTimeout }, func(o *BrowserOptions) { o.ShutdownTimeout = o.CleanupTimeout - 1 }, func(o *BrowserOptions) { o.Limits.MaximumWindows = 0 }, func(o *BrowserOptions) { o.Groups.MaximumProcesses = 0 }} {
+	for _, change := range []func(*BrowserOptions){func(o *BrowserOptions) { o.CallTimeout = 0 }, func(o *BrowserOptions) { o.CleanupTimeout = o.CallTimeout }, func(o *BrowserOptions) { o.ShutdownTimeout = o.CleanupTimeout - 1 }, func(o *BrowserOptions) { o.Groups.MaximumProcesses = 0 }} {
 		options := testBrowserOptions()
 		change(&options)
 		if options.Validate() == nil {
@@ -97,7 +97,7 @@ func TestNodeBrowserOptionsRejectUnboundedBudgets(t *testing.T) {
 
 func TestNodeBrowserRecordParticipatesInStartupRecovery(t *testing.T) {
 	f, b, _, r, current, _ := newBrowserFixture(t)
-	if err := b.ensure(t.Context(), r, current); err != nil {
+	if err := seedRetiredBrowser(t.Context(), b, r, current); err != nil {
 		t.Fatal(err)
 	}
 	if err := b.recover(t.Context()); err != nil {

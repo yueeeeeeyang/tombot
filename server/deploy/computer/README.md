@@ -104,9 +104,9 @@ Python 项目通过 venv 或 uv 在共享工作目录建立环境；不覆盖 De
 
 上述路径与图形环境定义在[共享环境模板](../../internal/computer/desktop-environment.json)，同一文件嵌入 Go 任务引导并打包给 Python 桌面启动器，避免终端与 XFCE 的工具路径、UID、显示编号或会话总线不一致。任务请求使用版本 2，UID/GID 取自已授权桌面，降权后才进入业务工作目录；普通新文件使用 `umask 0007`。控制层准备 setgid 共享目录时必须保留公共组身份并复验权限；不能假设 root 在缺少 FSETID capability 时仍能保留任意组的 setgid 位。
 
-共享环境同时声明 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`，固定指向电脑内的 `http://127.0.0.1:3128`；`NO_PROXY`/`no_proxy` 只包含环回目标。正式容器采用无路由网络，由版本 3 代理转接到 root 私有宿主端点；不遵循代理的程序不能直接联网。Chrome 共享浏览器服务必须显式设置代理，SSH 等工具需要其自身支持的代理方式；不启用通用直连旁路。具体边界见[出网模块](../../internal/egressproxy/README.md)。
+共享环境同时声明 `http_proxy`、`https_proxy`、`HTTP_PROXY` 和 `HTTPS_PROXY`，固定指向电脑内的 `http://127.0.0.1:3128`；`NO_PROXY`/`no_proxy` 只包含环回目标。正式容器采用无路由网络，由版本 3 代理转接到 root 私有宿主端点；不遵循代理的程序不能直接联网。各桌面的 Chrome 使用固定出网代理，SSH 等工具需要其自身支持的代理方式；不启用通用直连旁路。具体边界见[出网模块](../../internal/egressproxy/README.md)。
 
-镜像布局标识为 `io.tombot.computer.storage-layout=2`。节点预先在同一块 ext4 磁盘创建 `workspace` 与 `browser` 子目录，通过同一 Docker 卷的两个子路径分别挂载到 `/workspace` 和 `/var/lib/tombot-browser`。前者为 root:20000、2770，全部 Bot 共享；后者为 30000:20000、0700，只供用户级 Chrome 服务访问，Bot 通过窗口服务共享登录状态。磁盘根目录及 `lost+found` 不进入容器；业务进程不能通过共享父目录替换 profile。
+镜像使用同一用户卷的两个挂载。共享的 `workspace` 挂至 `/workspace`，独立配置根 `desktops` 挂至 `/var/lib/tombot-browser`。旧 `browser` 保留在卷内。桌面及 Chrome 使用不同的普通 UID。
 
 正式代理入口在接单前调用镜像内 `prepare.py`，以独立 root UID/公共 GID 子进程核验两处挂载、所属身份、权限及同一文件系统的不同目录，再准备工具目录、`/run/bot-desktops` 以及 root:root、1777 的 X11/ICE socket 目录。缺少浏览器挂载、旧布局或权限漂移明确失败，既不递归改权限也不转换旧目录。业务工具目录创建中断遗留的空目录允许继续授权，随后复验 setgid 与实际所有权。新布局需与存储记录版本 3 的节点成套部署，详见[存储与回滚说明](../../internal/dockernode/storage.md)。共享 Chrome 监督已接入节点和代理，完整浏览器工具与联合能力探针已接通；目录验证本身不授予完整浏览器能力。
 
@@ -116,21 +116,9 @@ Python 项目通过 venv 或 uv 在共享工作目录建立环境；不覆盖 De
 
 会话不接管容器总入口，不自行创建 UID 或扩大权限；重复启动会被锁和已存在的状态拒绝。重启时由控制层确认旧桌面 cgroup 清空，再为下一代次创建空白运行目录；不能复用未清理的认证与就绪文件。图形核心进程异常时返回失败并撤销就绪标记。停止会话会关闭受监督的进程组；用户进程可能自行创建新组，因此完整任务后代回收仍必须使用节点的桌面 cgroup，不能以本镜像的进程组清理替代。XFCE 不自动启动 GPG/SSH 凭据代理，避免争用共享 HOME 中的单例；SSH/scp 客户端保留。
 
-## 浏览器与接入边界
+## 浏览器与部署
 
-Google Chrome 已列为必装桌面软件。远程电脑的目标是让用户直接操作真实 XFCE 桌面中的原生 Chrome、终端和 Thunar，不再开发浏览器窗口客户端。用户级共享 Chrome 服务与持久配置目前用于自动化；登录、退出和账号切换影响同一用户所有 Bot。原生 Chrome 同时满足独立桌面和完整共享账号状态的方案尚待单独设计验证，不能让多个 Chrome 实例共写 `user-data-dir`，也不能把独立配置目录当作共享登录态。镜像安装原生软件不代表远程画面、人工接管或原生 Chrome 的多桌面展示已经实现，详细边界见[改造方案](../../docs/multi-user-refactor.md#共享登录态与独立浏览器窗口)。
-
-Chrome 保留原生沙箱，不添加 `--no-sandbox`。容器必须使用本目录的 [seccomp.json](seccomp.json)，即 `--security-opt seccomp=/绝对路径/seccomp.json`，同时保留 `no-new-privileges` 及现有六项 capability。配置沿用固定提交的 Docker 默认拒绝策略，仅额外允许 `clone`、`setns`、`unshare`、`chroot`，使非 root Chrome 能在自身用户命名空间中完成沙箱初始化；内核仍检查命名空间内的权限，普通 Bot 不能创建外层挂载命名空间。不授予 `SYS_ADMIN` 或 `SYS_CHROOT` capability，不使用 privileged。单元测试校验除此之外的规则与上游基础策略一致；来源摘要记录在 [seccomp-source.json](seccomp-source.json)，附带 [Apache-2.0 许可](seccomp.LICENSE)。
-
-使用原始 Docker 默认 profile 时，实际 Chrome 启动会因命名空间调用被拒绝而失败；镜像内放置 JSON 文件不会自动让 Docker 应用它。因此节点必须与镜像一起发布运行配置。节点现已直接嵌入同一份 JSON 并交给 Docker API，无需现场再选择策略文件。浏览器验收通过私有 CDP 管道执行页面脚本，并断言 `chrome://sandbox` 中 PID、网络命名空间及 Seccomp-BPF 均已启用。联合探针同时检查共享登录态、代理链路和窗口交互，不能用单浏览器沙箱报告代替这些行为。[Playwright 官方 Docker 文档](https://playwright.dev/docs/docker)说明了非 root 浏览器的命名空间 seccomp 配置需求；这里另外允许 `chroot`，以适配本项目去除 `SYS_CHROOT` capability 后的受限容器。
-
-## 升级、部署与回滚
-
-工具版本升级先更新锁定清单，重新构建并执行验收，再发布新镜像摘要。已运行容器的系统根目录只读，系统包更新通过更换镜像完成；用户文件和自行安装的工具保留在持久卷中。
-
-切换镜像前停止新任务、排空所有桌面及共享浏览器、备份用户卷，再停止旧容器并启动新实例；同一卷一次只允许一个电脑实例写入。回滚使用上一份经过验收的镜像摘要，必要时恢复与其匹配的卷快照。不迁移旧单用户数据库，不删除或改写历史迁移脚本，不在本轮构建中改动其他 Docker 工作负载。
-
-官方依据：[Debian Trixie](https://www.debian.org/releases/trixie/)、[TigerVNC Xvnc 参数](https://tigervnc.org/doc/Xvnc.html)、[Go 发布](https://go.dev/dl/)、[Node.js 24 下载](https://nodejs.org/download/release/latest-v24.x/)、[uv 安装](https://docs.astral.sh/uv/getting-started/installation/)、[bun 安装](https://bun.com/docs/installation)、[Google Chrome 安装](https://support.google.com/chrome/answer/95346?co=GENIE.Platform%3DDesktop&hl=en)。
+镜像保留 Xtigervnc、XFCE 和 Chrome 原生沙箱。各桌面使用独立的持久浏览器配置，复用现有观看通道。升级、磁盘布局、资源限制、回滚与双桌面验证见[桌面 Chrome 与电脑就绪](../../docs/browser-readiness.md)。
 
 ## Bot Agent 运行位置
 

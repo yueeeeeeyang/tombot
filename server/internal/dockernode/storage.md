@@ -6,7 +6,7 @@
 
 ## 容量与身份
 
-ext4 根目录为 root:root、0755，不直接映射进容器。固定 `workspace` 子目录为 root:20000、2770，挂载到 `/workspace`，所有 Bot 共享业务文件和工具；固定 `browser` 子目录为 30000:20000、0700，挂载到 `/var/lib/tombot-browser`，供同一用户的共享 Chrome 服务持有账号状态。两个子目录使用同一个 Docker 卷及同一块配额磁盘，不按 Bot 划分文件空间。`lost+found` 留在磁盘根目录。
+ext4 根目录为 root:root、0755，不直接映射进容器。固定 `workspace` 子目录为 root:20000、2770，挂载到 `/workspace`，所有 Bot 共享业务文件和工具；固定 `desktops` 子目录为 root:root、0711，挂载到 `/var/lib/tombot-browser`。每个桌面的 Chrome 专属 UID 持有与桌面 ID 同名的 0700 配置目录。旧 `browser` 私有目录保留用于回滚。所有目录使用同一块配额磁盘。`lost+found` 留在磁盘根目录。
 
 节点在启动容器前创建子目录，使用固定 `VolumeOptions.Subpath` 和 `NoCopy` 挂载并在对账时核对；缺失、交换子目录或扩大为整卷均失败。Docker 子目录挂载要求目录预先存在；固定 Engine API v1.47 包含该能力。[Docker 卷子目录说明](https://docs.docker.com/engine/storage/volumes/)、[Engine API 版本记录](https://docs.docker.com/reference/api/engine/version-history/)。镜像必须携带 `io.tombot.computer.storage-layout=2`，旧镜像在分配磁盘之前拒绝。
 

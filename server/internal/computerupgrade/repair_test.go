@@ -106,7 +106,7 @@ func TestRetryQuarantinedUpgrade(t *testing.T) {
 	}
 	process()
 	checkStatus("switching")
-	node.browserReady = true
+	node.filesReady = true
 	process()
 	checkPlan(t, pool, userID, "succeeded")
 	checkStatus("ready")

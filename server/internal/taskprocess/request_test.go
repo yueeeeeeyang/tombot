@@ -153,3 +153,26 @@ func TestCanonicalEnvironmentOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDesktopChromeFixedAuthorization(t *testing.T) {
+	request := validRequest()
+	request.Role = "desktop_chrome"
+	request.OperationID = request.Group.Session.SessionID
+	request.ProcessCommand = computer.ProcessCommand{Program: "/usr/bin/python3", WorkingDirectory: "/workspace"}
+	if _, err := encode(request); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*Request){
+		func(r *Request) { r.OperationID = ids.New() },
+		func(r *Request) { r.Program = "/bin/sh" },
+		func(r *Request) { r.WorkingDirectory = "/tmp" },
+		func(r *Request) { r.Arguments = []string{"-c", "pass"} },
+		func(r *Request) { r.Environment = map[string]string{"LANG": "C"} },
+	} {
+		modified := request
+		change(&modified)
+		if _, err := encode(modified); err == nil {
+			t.Fatal("接受了覆盖浏览器身份或执行内容的授权")
+		}
+	}
+}

@@ -119,7 +119,7 @@ func TestKernelManagedAgentDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	fixture.guard.scope = &connectedAgentScope{fakeScope: fixture.factory.scopes[0], runtime: first}
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, time.Second, 8, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, time.Second, 8, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

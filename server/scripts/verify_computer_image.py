@@ -67,10 +67,11 @@ def remote_desktop(path):
 
 
 class BotDesktop:
-    def __init__(self, number):
+    def __init__(self, number, session=None):
         self.number = number
         self.uid, self.gid = 100000 + number, 20000
-        self.runtime = Path(f"/run/bot-desktops/{number}")
+        self.runtime = Path("/run/bot-desktops") / f"{session or number:026d}"
+        self.desktop_id = f"{100 + number:026d}"
         self.runtime.mkdir(mode=0o700)
         os.chown(self.runtime, self.uid, self.gid)
         # 镜像验收夹具模拟代理已准备的会话；Go 资源组集成测试另行验证正式目录创建与回收。
@@ -151,8 +152,9 @@ def verify_shared_files(first, second):
     second.command(["bash", "-c", "printf 'shared-b' > /workspace/shared.txt"])
     require(first.command(["cat", "/workspace/shared.txt"]).stdout == "shared-b", "共享文件不可互相修改")
     profile = "/var/lib/tombot-browser"
-    subprocess.run(["python3", "-c", "from pathlib import Path; Path('/var/lib/tombot-browser/retained').write_text('shared-profile')"],
-                   user=30000, group=20000, extra_groups=[], check=True, timeout=5)
+    marker = Path(profile) / "retained"
+    marker.write_text("private-layout")
+    marker.chmod(0o600)
     for bot in (first, second):
         for command in (["cat", profile + "/retained"], ["ls", profile], ["touch", profile + "/foreign"],
                         ["mv", profile, profile + "-replaced"]):
@@ -163,7 +165,7 @@ def verify_browser(bot):
     """只通过私有管道控制测试浏览器，验证真实渲染和命名空间沙箱。"""
     with (bot.runtime / "chrome.log").open("wb") as log:
         browser = subprocess.Popen([
-            "/bin/sh", "-c", 'exec 3<&0 4>&1; exec "$@"', "chrome-pipe", "google-chrome", "--headless",
+            "/bin/sh", "-c", 'exec 3<&0 4>&1; exec "$@"', "chrome-pipe", "/usr/bin/google-chrome", "--headless",
             "--no-first-run", "--no-default-browser-check", "--disable-background-networking",
             "--disable-component-update", "--disable-gpu", "--remote-debugging-pipe",
             "--user-data-dir=" + str(bot.runtime / "chrome-check"), "about:blank",
@@ -289,7 +291,147 @@ def verify_desktops(first, second):
         shutil.copyfile(screenshot, f"/verification-output/bot-{own.number}.png")
 
 
-def inside():
+@contextmanager
+def browser_launcher(bot):
+    """按正式目录身份启动镜像内的固定程序；只为本次验收准备独立目录。"""
+    runtime = Path("/run/tombot-browser") / bot.runtime.name
+    profile = Path("/var/lib/tombot-browser") / bot.desktop_id
+    uid = 200000 + bot.number
+    for directory, mode in ((runtime, 0o711), (profile, 0o700)):
+        directory.mkdir(mode=mode, exist_ok=directory == profile)
+        os.chown(directory, uid, bot.gid)
+        directory.chmod(mode)
+    process = subprocess.Popen(["/usr/bin/python3", "-I", "-B", "/usr/lib/tombot/open_browser.py",
+                                "serve", bot.runtime.name, bot.desktop_id, str(bot.number)],
+                               user=uid, group=bot.gid, extra_groups=[], start_new_session=True)
+    try:
+        wait_for(lambda: (runtime / "open.sock").is_socket(), "浏览器启动入口未就绪")
+        yield profile
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        require(process.wait(timeout=10) == 0, "桌面浏览器入口未正常退出")
+
+
+def verify_desktop_browsers(first, second, restored=False):
+    """同一测试站点使用持久 Cookie 表示登录，实际键鼠经各自 RFB 连接进入原生窗口。"""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    class Site(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if not self.path.startswith("http://desktop-check.test/"):
+                self.send_error(404)
+                return
+            content = b"""<!doctype html><style>input{position:fixed;inset:0;width:100%;height:100%}</style>
+<input autofocus oninput="document.cookie='desk='+this.value+'; Max-Age=3600; Path=/'; document.title='typed-'+this.value; this.style.background=this.value.includes('1')?'#2456ab':'#b74828'">
+<script>document.title='stored-'+(document.cookie.split('desk=')[1]||'empty')</script>"""
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
+        def do_CONNECT(self):
+            # 只接收本地验收站的 HTTP。拒绝后台 HTTPS 时只发响应头，客户端可能已经退出。
+            self.send_response_only(403)
+            self.end_headers()
+
+        def log_message(self, *_):
+            return
+
+    def run_both(action):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            pending = [pool.submit(action, bot) for bot in (first, second)]
+            for future in pending:
+                future.result()
+
+    def visible(bot):
+        return bot.command(["xdotool", "search", "--onlyvisible", "--class", "google-chrome"], check=False)
+
+    def title(bot, prefix):
+        def active_title():
+            return bot.command(["xdotool", "getactivewindow", "getwindowname"], check=False).stdout
+        try:
+            wait_for(lambda: active_title().startswith(prefix), f"桌面 {bot.number} 未观察到预期网页状态 {prefix}", 15)
+        except TimeoutError as err:
+            actual = active_title()
+            # 仅输出本地测试页生成的已知状态，窗口标题可能包含其他应用的内容。
+            state = next((s for s in ("empty", "bot1", "bot2okok", "bot2ok", "bot2")
+                          if actual.startswith("stored-" + s + " ")), "其他窗口")
+            raise RuntimeError(f"桌面 {bot.number} 预期 {prefix}，观察到 {state}") from err
+
+
+    def open_page(bot, stored):
+        bot.command(["google-chrome"])
+        bot.command(["xdotool", "key", "ctrl+l"])
+        bot.command(["xdotool", "type", "http://desktop-check.test/"])
+        bot.command(["xdotool", "key", "Return"])
+        title(bot, "stored-" + stored)
+
+    def type_remote(bot, text):
+        with remote_desktop(bot.runtime / "desktop.sock") as connection:
+            connection.sendall(struct.pack("!BBHH", 5, 1, 360, 340) + struct.pack("!BBHH", 5, 0, 360, 340))
+            connection.sendall(struct.pack("!BBHI", 4, 1, 0, 0xff57) + struct.pack("!BBHI", 4, 0, 0, 0xff57))
+            for character in text:
+                key = ord(character)
+                connection.sendall(struct.pack("!BBHI", 4, 1, 0, key) + struct.pack("!BBHI", 4, 0, 0, key))
+
+    def screen_color(bot):
+        """请求指定观看连接上的一个原始像素；从两个桌面读回的颜色必须与各自输入一致。"""
+        with remote_desktop(bot.runtime / "desktop.sock") as stream:
+            pixel_format = struct.pack("!BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
+            stream.sendall(bytes(4) + pixel_format + struct.pack("!BBHi", 2, 0, 1, 0))
+            stream.sendall(struct.pack("!BBHHHH", 3, 0, 370, 345, 1, 1))
+            require(receive(stream, 4) == bytes([0, 0, 0, 1]), "观看流未返回指定画面区域")
+            require(struct.unpack("!HHHHi", receive(stream, 12)) == (370, 345, 1, 1, 0), "观看流画面格式无效")
+            return int.from_bytes(receive(stream, 4), "little") & 0xffffff
+
+    with ThreadingHTTPServer(("127.0.0.1", 3128), Site) as site, browser_launcher(first), browser_launcher(second):
+        thread = Thread(target=site.serve_forever, daemon=True)
+        thread.start()
+        try:
+            require(all(visible(bot).returncode == 1 for bot in (first, second)), "桌面启动时 Chrome 已打开")
+            if restored:
+                run_both(lambda bot: open_page(bot, "bot1" if bot == first else "bot2okok"))
+                print("已通过重建容器与新执行会话按桌面 ID 恢复各自的网站登录", flush=True)
+                return
+            run_both(lambda bot: open_page(bot, "empty"))
+            run_both(lambda bot: type_remote(bot, "bot" + str(bot.number)))
+            for bot in (first, second):
+                title(bot, "typed-bot" + str(bot.number))
+                expected = 0x2456ab if bot == first else 0xb74828
+                wait_for(lambda: screen_color(bot) == expected, "观看流的像素与桌面输入不符", 8)
+                before = visible(bot).stdout
+                bot.command(["google-chrome"])
+                require(visible(bot).stdout == before, "重复打开创建了其他窗口")
+                for owner in (first, second):
+                    require(bot.command(["ls", "/var/lib/tombot-browser/" + owner.desktop_id], check=False).returncode != 0,
+                            "桌面程序可直接读取浏览器持久配置")
+            job = first.application(["sh", "-c", 'while [ ! -f "$XDG_RUNTIME_DIR/continue" ]; do sleep 0.2; done'])
+            first.command(["xdotool", "key", "ctrl+shift+w"])
+            wait_for(lambda: visible(first).returncode == 1, "第一个 Chrome 未关闭")
+            first.command(["touch", str(first.runtime / "continue")])
+            require(job.wait(timeout=5) == 0 and first.ready(), "关闭 Chrome 影响了原桌面任务")
+            type_remote(second, "ok")
+            title(second, "typed-bot2ok")
+            open_page(first, "bot1")
+            pid = first.command(["xdotool", "getactivewindow", "getwindowpid"]).stdout.strip()
+            os.kill(int(pid), signal.SIGKILL)
+            wait_for(lambda: visible(first).returncode == 1, "异常退出的 Chrome 仍有窗口")
+            require(first.ready() and second.ready(), "浏览器退出影响了桌面")
+            type_remote(second, "ok")
+            title(second, "typed-bot2okok")
+            with remote_desktop(first.runtime / "desktop.sock"):
+                first.command(["true"])
+            print("已通过双桌面浏览器并发输入、独立登录、按需启动、关闭和崩溃隔离", flush=True)
+        finally:
+            site.shutdown()
+            thread.join(timeout=5)
+
+
+
+def inside(restored=False):
     require(os.getuid() == 0 and Path("/etc/os-release").is_file(), "验收入口必须运行在测试容器内")
     release = Path("/etc/os-release").read_text()
     require('VERSION_ID="13"' in release and "VERSION_CODENAME=trixie" in release, "基础系统不是 Debian 13")
@@ -309,15 +451,20 @@ def inside():
                 "没有封存授权和真实服务组的探针不得输出成功证据")
     require(subprocess.run(["python3", "/usr/lib/tombot/desktop.py", "--runtime", "/run/bot-desktops/root", "--display", "9"],
                            capture_output=True, timeout=5).returncode != 0, "不允许 root 图形桌面")
-    bots = [BotDesktop(1), BotDesktop(2)]
+    bots = [BotDesktop(n, n + 10 if restored else n) for n in (1, 2)]
     try:
         for bot in bots:
             bot.start()
         for bot in bots:
             wait_for(bot.ready, "完整 XFCE 桌面启动超时")
             bot.environment = json.loads((bot.runtime / "environment.json").read_text())
+        if restored:
+            verify_desktop_browsers(*bots, restored=True)
+            require(Path("/workspace/shared.txt").read_text() == "shared-b", "重建容器后共享文件未保留")
+            return
         verify_shared_files(*bots)
         verify_desktops(*bots)
+        verify_desktop_browsers(*bots)
         verify_programs(bots[1])
         verify_browser(bots[1])
         duplicate = bots[0].command(["python3", "/usr/lib/tombot/desktop.py", "--runtime", str(bots[0].runtime), "--display", "1"], check=False)
@@ -362,10 +509,10 @@ def test_volume(name, image):
     try:
         setup = """import os
 os.chmod('/test-volume', 0o755)
-for name, uid, mode in [('workspace', 0, 0o2770), ('browser', 30000, 0o700)]:
+for name, uid, mode in [('workspace', 0, 0o2770), ('desktops', 0, 0o711)]:
     path = '/test-volume/' + name
     os.mkdir(path, 0o700)
-    os.chown(path, uid, 20000)
+    os.chown(path, uid, 0 if name == 'desktops' else 20000)
     os.chmod(path, mode)
 """
         arguments = ["--network", "none", "--read-only", "--user", "0:20000", "--cap-drop", "ALL", "--cap-add", "CHOWN", "--cap-add", "FOWNER",
@@ -383,10 +530,11 @@ def verify(image, report):
     name = "tombot-image-check-" + uuid.uuid4().hex
     profile = Path(__file__).resolve().parents[1] / "deploy/computer/seccomp.json"
     inspected = json.loads(subprocess.run(["docker", "image", "inspect", image], check=True, timeout=30, capture_output=True).stdout)
-    require(len(inspected) == 1 and inspected[0]["Config"]["Labels"].get("io.tombot.computer.storage-layout") == "2",
+    require(len(inspected) == 1 and inspected[0]["Config"]["Labels"].get("io.tombot.computer.storage-layout") == "2"
+            and inspected[0]["Config"]["Labels"].get("io.tombot.computer.desktop-browser") == "1",
             "镜像持久盘布局版本不匹配")
     with tempfile.TemporaryDirectory(prefix="tombot-image-evidence-") as directory, test_volume(name + "-volume", image) as volume:
-        command = ["--init", "--network", "none", "--read-only",
+        command = ["--init", "--hostname", "desktop-verification", "--network", "none", "--read-only",
                    "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true", "--pids-limit", "768",
                    "--security-opt", f"seccomp={profile}",
                    "--env", "TOM_TEST_SECCOMP_SHA256=" + hashlib.sha256(profile.read_bytes()).hexdigest(),
@@ -394,7 +542,7 @@ def verify(image, report):
                    "--tmpfs", "/tmp:rw,nosuid,nodev,noexec,mode=1777,size=268435456",
                    "--tmpfs", "/run:rw,nosuid,nodev,noexec,mode=0755,size=134217728",
                    "--mount", f"type=volume,src={volume},dst=/workspace,volume-nocopy,volume-subpath=workspace",
-                   "--mount", f"type=volume,src={volume},dst=/var/lib/tombot-browser,volume-nocopy,volume-subpath=browser",
+                   "--mount", f"type=volume,src={volume},dst=/var/lib/tombot-browser,volume-nocopy,volume-subpath=desktops",
                    "--mount", f"type=bind,src={Path(__file__).resolve()},dst=/verify.py,readonly",
                    "--mount", f"type=bind,src={Path(directory).resolve()},dst=/verification-output",
                    "--entrypoint", "python3"]
@@ -405,20 +553,11 @@ def verify(image, report):
             subprocess.run(["docker", "start", "--attach", container], check=True, timeout=360)
             state = json.loads(subprocess.run(["docker", "inspect", container], check=True, timeout=30, capture_output=True).stdout)[0]
             mounted = {item["Target"]: item for item in state["HostConfig"]["Mounts"] if item["Type"] == "volume"}
-            for target, subpath in (("/workspace", "workspace"), ("/var/lib/tombot-browser", "browser")):
+            for target, subpath in (("/workspace", "workspace"), ("/var/lib/tombot-browser", "desktops")):
                 require(mounted[target]["Source"] == volume and mounted[target]["VolumeOptions"] == {"NoCopy": True, "Subpath": subpath},
                         "真实 Docker 子目录挂载与声明不符")
-        retained = """from pathlib import Path
-assert Path('/var/lib/tombot-browser/retained').read_text() == 'shared-profile'
-assert Path('/workspace/shared.txt').read_text() == 'shared-b'
-print('已通过：重建容器后共享文件与浏览器服务目录保留')
-"""
-        with test_container(name + "-retained", ["--network", "none", "--read-only", "--cap-drop", "ALL", "--cap-add", "DAC_OVERRIDE",
-                            "--security-opt", "no-new-privileges:true", "--pids-limit", "16", "--memory", "64m",
-                            "--mount", f"type=volume,src={volume},dst=/workspace,readonly,volume-nocopy,volume-subpath=workspace",
-                            "--mount", f"type=volume,src={volume},dst=/var/lib/tombot-browser,readonly,volume-nocopy,volume-subpath=browser",
-                            "--entrypoint", "python3", image, "-c", retained]) as container:
-            subprocess.run(["docker", "start", "--attach", container], check=True, timeout=30)
+        with test_container(name + "-restored", [*command, "--restore-logins"]) as container:
+            subprocess.run(["docker", "start", "--attach", container], check=True, timeout=150)
         shutil.copytree(directory, report)
     print(f"验收产物：{report}")
 
@@ -428,9 +567,10 @@ if __name__ == "__main__":
     parser.add_argument("--image", default="tombot-computer:trixie")
     parser.add_argument("--report", type=Path)
     parser.add_argument("--inside", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--restore-logins", action="store_true", help=argparse.SUPPRESS)
     arguments = parser.parse_args()
     if arguments.inside:
-        inside()
+        inside(arguments.restore_logins)
     else:
         target = arguments.report or Path(tempfile.gettempdir()) / ("tombot-image-report-" + uuid.uuid4().hex)
         require(not target.exists(), "验收产物目录已存在，不覆盖旧结果")

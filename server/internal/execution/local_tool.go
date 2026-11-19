@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"io.yueyang/tom/internal/botagent"
+	"io.yueyang/tom/internal/computer"
 )
 
 type localOperation struct {
@@ -29,6 +30,13 @@ func (relay *workerRelay) PrepareLocal(ctx context.Context, key string, call bot
 	}
 	if cached != nil {
 		return botagent.ToolPreparation{Result: cached}, nil
+	}
+	if call.Name == "computer_browser" {
+		preparer, ok := relay.worker.agents.(computer.BrowserPreparer)
+		if !ok || preparer.PrepareBrowser(ctx, relay.session) != nil {
+			result, err := relay.worker.recordTool(ctx, relay.lease, operation, botagent.ToolResult{IsError: true, Content: "Your desktop could not be prepared. Chrome was not opened. Other tools remain available."}, "")
+			return botagent.ToolPreparation{Result: &result}, err
+		}
 	}
 	grant := botagent.ToolGrant{OperationID: operation.ID, Sequence: operation.Sequence, Session: relay.session, ApprovalMode: relay.approvalMode, TimeoutMS: relay.worker.options.ToolTimeout.Milliseconds(), OutputBytes: relay.worker.options.MaxOutputBytes}
 	if grant.Validate() != nil {

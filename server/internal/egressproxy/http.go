@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"io.yueyang/tom/internal/browserprobe"
 )
 
 type authorizedKey struct{}
@@ -41,13 +39,6 @@ func (proxy *Server) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength > proxy.options.MaximumRequestBytes {
 		proxy.failure(w, r, 413, "请求正文超过限额")
-		return
-	}
-	if handled, err := browserprobe.Serve(w, r); handled {
-		if err != nil {
-			proxy.logFailure(r, "probe_response_failed")
-			panic(http.ErrAbortHandler)
-		}
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), proxy.options.RequestTimeout)

@@ -80,7 +80,7 @@ func ValidateImageReference(reference string) error {
 // Capabilities 只能由节点实际探针生成；缺少任何必需能力均不能将电脑标为就绪。
 type Capabilities struct {
 	Terminal         bool `json:"terminal"`
-	Browser          bool `json:"browser"`
+	Browser          bool `json:"browser,omitempty"`
 	Files            bool `json:"files"`
 	ProcessReaping   bool `json:"process_reaping"`
 	DiskQuota        bool `json:"disk_quota"`
@@ -89,7 +89,7 @@ type Capabilities struct {
 
 // Ready 要求所有基础能力同时通过，不能用进程存在或 HTTP 可达替代健康探针。
 func (capabilities Capabilities) Ready() bool {
-	return capabilities.Terminal && capabilities.Browser && capabilities.Files && capabilities.ProcessReaping && capabilities.DiskQuota && capabilities.NetworkIsolation
+	return capabilities.Terminal && capabilities.Files && capabilities.ProcessReaping && capabilities.DiskQuota && capabilities.NetworkIsolation
 }
 
 // Observation 返回节点刚刚核实的状态；absent 表示本次开户的容器、卷和网络全部不存在。

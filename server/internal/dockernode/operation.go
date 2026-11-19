@@ -23,3 +23,25 @@ func (controller *SessionController) withOperation(ctx context.Context, session 
 		return err
 	})
 }
+
+// PrepareBrowser 只准备绑定的图形桌面；Chrome 由本桌面的第一次打开操作启动。
+func (c *SessionController) PrepareBrowser(ctx context.Context, session computer.ExecutionSession) error {
+	status, err := c.StartDesktop(ctx, session)
+	ticker := time.NewTicker(c.options.RetryDelay)
+	defer ticker.Stop()
+	for err == nil && status.State == "starting" {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			status, err = c.InspectDesktop(ctx, session)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if status.State != "ready" || status.Session != session {
+		return failure("desktop_not_ready")
+	}
+	return ctx.Err()
+}

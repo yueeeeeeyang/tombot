@@ -44,19 +44,6 @@ func (scope *kernelScope) Console(ctx context.Context, request computer.ConsoleR
 				}
 			}
 		}
-		if scope.windows != nil {
-			windows, ok := scope.windows.(interface {
-				HumanControl(context.Context, bool) error
-			})
-			if !ok {
-				scope.consoleFailure = errors.New("原生窗口缺少用户交接屏障")
-			} else {
-				scope.consoleFailure = windows.HumanControl(ctx, paused)
-			}
-			if scope.consoleFailure != nil {
-				return receipt, scope.consoleFailure
-			}
-		}
 		scope.consoleFailure = scope.freezeTasks(ctx, paused)
 		if scope.consoleFailure != nil {
 			return receipt, scope.consoleFailure
@@ -80,7 +67,7 @@ func (scope *kernelScope) Console(ctx context.Context, request computer.ConsoleR
 	return receipt, errors.New("桌面接管动作无效")
 }
 
-// freezeTasks 只冻结任务子组；X11、桌面窗口和用户级 Chrome 仍然运行。确认失败不允许交接。
+// freezeTasks 只冻结任务子组；X11、桌面窗口和本桌面的 Chrome 仍然运行。确认失败不允许交接。
 func (scope *kernelScope) freezeTasks(ctx context.Context, paused bool) error {
 	value := "0"
 	if paused {

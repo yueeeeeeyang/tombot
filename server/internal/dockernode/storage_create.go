@@ -113,13 +113,14 @@ func (storage *FileStorage) finishLayout(ctx context.Context, resource Resource,
 	if err := ctx.Err(); err != nil {
 		return Workspace{}, err
 	}
-	if err := storage.layout.prepare(resource.WorkspacePath, state.Phase == "formatted"); err != nil {
+	if err := storage.layout.prepare(resource.WorkspacePath, state.Phase == "formatted", !state.DesktopProfiles); err != nil {
 		return Workspace{}, err
 	}
 	if err := ctx.Err(); err != nil {
 		return Workspace{}, err
 	}
 	state.Phase = "ready"
+	state.DesktopProfiles = true
 	if err := storage.save(state); err != nil {
 		return Workspace{}, err
 	}

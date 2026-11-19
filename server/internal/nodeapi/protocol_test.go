@@ -188,7 +188,7 @@ func TestNodeResultBinding(t *testing.T) {
 		{"inspect", computer.Observation{State: "absent"}},
 		{"ensure", func() computer.Observation {
 			value := testObservation(inputs["ensure"].(computer.Specification), "ready")
-			value.Capabilities.Browser = false
+			value.Capabilities.Files = false
 			return value
 		}()},
 		{"open", computer.SessionObservation{Session: wrong, Revision: 1, State: "active"}},

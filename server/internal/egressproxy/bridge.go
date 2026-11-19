@@ -1,6 +1,7 @@
 package egressproxy
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -116,9 +117,26 @@ func (bridge *Bridge) forward(parent context.Context, client net.Conn) {
 	stop()
 	if err != nil {
 		bridge.logger.WarnContext(parent, "电脑出网节点暂不可用")
-		if deadlineErr := client.SetWriteDeadline(time.Now().Add(bridge.options.ConnectTimeout)); deadlineErr != nil {
+		// Chrome 会预先建立空闲连接。等请求头真正到达再答复，避免客户端将 502 视为无对应请求的响应。
+		deadline, _ := ctx.Deadline()
+		if limit := time.Now().Add(bridge.options.ConnectTimeout); limit.Before(deadline) {
+			deadline = limit
+		}
+		if deadlineErr := client.SetDeadline(deadline); deadlineErr != nil {
 			bridge.logger.WarnContext(parent, "设置出网失败响应时限失败")
 			return
+		}
+		const maximumErrorHeaderBytes = 32 << 10
+		headers := bufio.NewReader(io.LimitReader(client, min(int64(maximumErrorHeaderBytes), bridge.options.MaximumTransferBytes)))
+		for {
+			line, readErr := headers.ReadString('\n')
+			if readErr != nil {
+				bridge.logger.DebugContext(parent, "上游不可用时客户端未完成代理请求头")
+				return
+			}
+			if line == "\r\n" || line == "\n" {
+				break
+			}
 		}
 		if _, writeErr := io.WriteString(client, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); writeErr != nil {
 			bridge.logger.WarnContext(parent, "出网失败响应未完成")

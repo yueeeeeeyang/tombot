@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func (executor browserWorkerExecutor) Execute(ctx context.Context, grant botagen
 
 func TestDefaultComputerToolsAgentLoop(t *testing.T) {
 	cluster := pgtest.Start(t)
-	for _, mode := range []string{"正常", "不支持视觉", "浏览器结果未知"} {
+	for _, mode := range []string{"正常", "不支持视觉", "浏览器结果未知", "浏览器桌面准备失败"} {
 		t.Run(mode, func(t *testing.T) {
 			fixture := newFixture(t, cluster)
 			fixture.service.options.MaxOperations = 16
@@ -80,6 +81,12 @@ func TestDefaultComputerToolsAgentLoop(t *testing.T) {
 				}
 				if models > 1 {
 					result := input.Messages[len(input.Messages)-1].Blocks[0].ToolResult
+					if models == 3 && mode == "浏览器桌面准备失败" {
+						if result == nil || !result.IsError || !strings.Contains(result.Content, "Your desktop could not be prepared") {
+							t.Fatal("模型未收到可恢复的浏览器故障")
+						}
+						return emitText(emit, "终端可以使用。浏览器未能恢复，请在设置的电脑页检查。")
+					}
 					if result == nil || result.IsError {
 						return modelgateway.Result{}, errors.New("工具回执未进入模型")
 					}
@@ -94,7 +101,7 @@ func TestDefaultComputerToolsAgentLoop(t *testing.T) {
 				case 1:
 					return emitDesktopTool(emit, models, "computer_shell", `{"command":"pwd"}`)
 				case 2:
-					return emitDesktopTool(emit, models, "computer_browser", `{"action":"open","url":"https://example.test"}`)
+					return emitDesktopTool(emit, models, "computer_browser", `{"action":"open"}`)
 				case 3:
 					return emitDesktopTool(emit, models, "computer_screenshot", `{}`)
 				case 4:
@@ -104,6 +111,9 @@ func TestDefaultComputerToolsAgentLoop(t *testing.T) {
 				}
 			}), fixture.computers(t, node, computerOptions()), tools...)
 			worker.options.MaxModelSteps = 5
+			if mode == "浏览器桌面准备失败" {
+				worker.agents.(*workerAgents).browserError = errors.New("浏览器未能恢复")
+			}
 			worker.agents.(*workerAgents).local = browserWorkerExecutor{execute: func(_ context.Context, grant botagent.ToolGrant, call botagent.ToolCall) (botagent.ToolResult, error) {
 				browsers++
 				if grant.Validate() != nil || grant.Session.RunID != lease.RunID || grant.Session.BotID != bot.ID || call.Name != "computer_browser" {
@@ -126,6 +136,10 @@ func TestDefaultComputerToolsAgentLoop(t *testing.T) {
 			case "不支持视觉":
 				if run.Status == "succeeded" || models != 0 || node.starts != 0 || browsers != 0 || desktop.captures != 0 || desktop.inputs != 0 {
 					t.Fatal("不支持视觉时仍执行电脑操作", run.Status)
+				}
+			case "浏览器桌面准备失败":
+				if run.Status != "succeeded" || models != 3 || node.starts != 1 || browsers != 0 {
+					t.Fatal("局部故障阻断聊天或派发了网页动作", run.Status, models, browsers)
 				}
 			case "浏览器结果未知":
 				if run.Status == "succeeded" || models != 2 || node.starts != 1 || browsers != 1 || desktop.captures != 0 || desktop.inputs != 0 {

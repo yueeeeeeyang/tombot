@@ -24,7 +24,7 @@ func TestImageUpgradeFromInterruptedRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.probe.missing = true
+	f.probe.coreMissing, f.probe.missing = true, true
 	requireFailure(t, f.node.resumeComputer(ctx, resource, state, current), "computer_probe_failed")
 	for _, marker := range []string{"", strings.Repeat("f", 64), source.ContainerID} {
 		if marker == "" {
@@ -50,7 +50,7 @@ func TestImageUpgradeFromInterruptedRecovery(t *testing.T) {
 	if _, err := f.node.journal.root.Stat(state.recoveryFile()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("旧代恢复标记未随已持久化的升级意图解除", err)
 	}
-	f.probe.missing = false
+	f.probe.coreMissing, f.probe.missing = false, false
 	target, err := f.node.UpgradeComputer(ctx, request)
 	if err != nil || !target.Matches(request.Target) || target.State != "ready" || !target.Capabilities.Ready() || target.ContainerID == source.ContainerID {
 		t.Fatal("恢复中断后未完成原计划的目标验收", target, err)

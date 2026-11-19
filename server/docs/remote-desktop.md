@@ -4,8 +4,8 @@
 
 ```mermaid
 flowchart LR
-  Chrome[同用户共享 Chrome 配置] --> Windows[Xpra 按原生窗口归属转发]
-  Windows --> Desktop[每 Bot 独立 Xtigervnc / XFCE 桌面]
+  Profile[桌面 ID 对应的持久配置] --> Chrome[按需启动 Chrome]
+  Chrome --> Desktop[所属 Xtigervnc / XFCE 桌面]
   Desktop --> Socket[私有 Unix socket / 标准 RFB]
   Socket --> Agent[computer-agent 权限门禁]
   Agent --> Node[tomnode / 双向 TLS WebSocket]
@@ -14,11 +14,11 @@ flowchart LR
   Client --> View[noVNC 画布]
 ```
 
-Xpra 仅用于将同一个用户的原生 Chrome 窗口分配到不同 Bot 屏幕，不是客户端远程观看协议。窗口、弹窗和新标签页继承原有 Bot 归属，未知窗口默认拒绝；剪贴板、文件转发、全局桌面命令和其他窗口访问均不开放。共享 Chrome 配置保证 Cookie、localStorage 和 IndexedDB 一致，同网站登录、退出或账号切换会影响同用户所有 Bot；不能把 Chrome profile 复制到多个进程并发写入。
+每个桌面的 Chrome 直接显示在自己的 X11 屏幕上。登录、退出和账号切换作用于该桌面的持久配置。
 
 ## 观看与控制
 
-`POST /api/v2/bots/{botID}/console` 创建只读观看记录。`heartbeat` 续约并启动对应显示服务；`stream` 提供标准 RFB WebSocket。`takeover` 申请独占控制，工作器在模型/工具边界交接，先阻止原生浏览器自动化，再确认 Shell cgroup 已冻结。桌面及共享 Chrome 不冻结，其他 Bot 继续运行。
+`POST /api/v2/bots/{botID}/console` 创建只读观看记录。`heartbeat` 续约并启动对应显示服务；`stream` 提供标准 RFB WebSocket。`takeover` 申请独占控制，工作器在模型/工具边界交接，确认运行 Bot 和 Shell 的 cgroup 已冻结。桌面及其 Chrome 不冻结，其他 Bot 继续运行。
 
 接管期间，服务端只接受所属观看者的 RFB 键鼠消息。`release` 撤销输入并释放按键和鼠标，再解除冻结，原运行继续执行，画面连接保持不变。`close` 结束观看并交还控制，不取消原任务。只读客户端即使自行发送键鼠包，也会被容器代理丢弃；noVNC 的 `viewOnly` 只负责交互表现，不能代替服务端权限检查。
 
@@ -30,11 +30,11 @@ Xpra 仅用于将同一个用户的原生 Chrome 窗口分配到不同 Bot 屏�
 
 电脑代理每次连接核验 Unix socket 的 UID/GID、0600 权限、对端 PID、cgroup 和完整执行身份。转发始终由代理持有，回收会话会断开已交付的连接。节点通道核验双向 TLS 证书指纹；用户通道沿用登录设备认证和持久授权。主进程保管认证头和服务证书，渲染进程只收到 RFB 字节，地址和凭据不会进入 URL、日志或网页。
 
-每桌面最多 4 条底层流，业务层同一 Bot 只允许一个活动观看设备。客户端最多 8 条流；未确认接收的画面超过 2 MiB 时关闭连接。代理读客户端包有长度上限，写入慢端超过 5 秒关闭。画面采用 noVNC/TigerVNC 支持的 RFB 编码和增量更新，不再进行 PNG 定时全屏轮询。Xpra 与窗口管理器增加电脑镜像体积、常驻内存和少量转发延迟，节点容量需按实际并发 Bot 数评估。
+每桌面最多 4 条底层流，业务层同一 Bot 只允许一个活动观看设备。客户端最多 8 条流；未确认接收的画面超过 2 MiB 时关闭连接。代理读客户端包有长度上限，写入慢端超过 5 秒关闭。画面采用 noVNC/TigerVNC 支持的 RFB 编码和增量更新，不再进行 PNG 定时全屏轮询。容量按实际同时运行的桌面和 Chrome 实例数评估。
 
 ## 部署、迁移和回滚
 
-成套发布桌面客户端、`tomd`、`tomnode` 与电脑镜像。镜像增加固定版本 Xpra 6.5.5、Xvfb 和 X11/Python 依赖，保留 Chrome 原生沙箱和用户私有 profile。网关只允许固定服务入口，反向代理需支持 `/api/v2/consoles/{id}/stream` 的 WebSocket Upgrade，空闲超时应至少覆盖 10 分钟；不开放容器 VNC 或调试端口。
+成套发布桌面客户端、`tomd`、`tomnode` 与电脑镜像。按桌面登录、节点配置、保盘换镜像和回滚步骤见[浏览器部署说明](browser-readiness.md)。网关只允许固定服务入口，反向代理需支持 `/api/v2/consoles/{id}/stream` 的 WebSocket Upgrade，空闲超时应至少覆盖 10 分钟；不开放容器 VNC 或调试端口。
 
 迁移 0076 增加观看/控制记录、控制代次、无模型运行来源及索引；0077 增加只读状态和交还后继续观看的标记，并重建单 Bot 活动观看唯一索引。迁移不读取画面、账号或键盘内容，不修改历史迁移。表结构变更短暂取得排他锁；新表尚无存量时耗时很短，已有大量观看历史时唯一索引重建时间随表规模增长，需停单维护窗口并检查锁等待。协议新增 `desktop_connect` 文件描述符交付、节点 `/v2/desktop` WebSocket，以及 6 个 cgroup 控制描述符，不提供旧协议兼容层。
 
@@ -46,7 +46,7 @@ Xpra 仅用于将同一个用户的原生 Chrome 窗口分配到不同 Bot 屏�
 - 节点真实 TLS 测试：指纹固定、查看者归属、跨 WebSocket 字节完整性、连接超过普通调用预算、退出回收。
 - 真实 PostgreSQL 测试：用户/设备隔离、只读启动、接管与恢复、到期回收、失败状态、原任务模型和工具不重放。
 - Linux TigerVNC 集成：真实全帧、1280×800 尺寸、只读鼠标阻断、接管输入到达 X11、交还撤权和错误 Bot 拒绝。该测试使用容器根 cgroup，冻结的单元测试不等同于实际生产 cgroup 联合验收。
-- 有头 Google Chrome 集成：共享登录/退出/账号切换、存储重启保留、独立屏幕、并发中文输入、弹窗及手动新标签页、对话框、下载和上传、用户接管及恢复。
+- 有头 Google Chrome 集成：双桌面并发输入、独立 Cookie、关闭和异常退出隔离，以及重建后的登录恢复。
 - 客户端测试：noVNC 画面渲染、同连接切换权限、坐标缩放、中文输入、滚轮不滚动外层、全屏和关闭；IPC 的窗口归属、缓冲上限、超时和异常输入。
 - `desktop/tests/e2e/console.spec.ts` 使用隔离的真实 Electron 和预加载桥接验证 RFB 解码及权限切换，业务回包与 RFB 服务由夹具提供；不会连接用户的真实服务。旧 `desktop.spec.ts` 的配套服务启动夹具仍依赖已移除的旧版接口，不包含在此次端到端通过范围内。
 

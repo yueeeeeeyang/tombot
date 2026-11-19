@@ -49,11 +49,8 @@ func (probe *capabilityProbe) Check(ctx context.Context, resource Resource, cont
 	if err := probe.node.storage.VerifyFilesystem(ctx, probe.node.diskResource(resource, lifecycle), evidence.FilesystemType, evidence.FilesystemSize); err != nil {
 		return computer.Capabilities{}, err
 	}
-	if err := probe.node.browsers.check(ctx, resource, current.container); err != nil {
-		return computer.Capabilities{}, err
-	}
 	if err := ctx.Err(); err != nil {
 		return computer.Capabilities{}, err
 	}
-	return computer.Capabilities{Terminal: evidence.Terminal, Browser: true, Files: evidence.Files, ProcessReaping: true, DiskQuota: true, NetworkIsolation: evidence.LocalNetwork}, nil
+	return computer.Capabilities{Terminal: evidence.Terminal, Files: evidence.Files, ProcessReaping: true, DiskQuota: true, NetworkIsolation: evidence.LocalNetwork}, nil
 }

@@ -40,7 +40,7 @@ func TestKernelFileProtocol(t *testing.T) {
 	scope := &recordingFileScope{fakeScope: f.factory.scopes[0], content: bytes.Repeat([]byte{0, 255}, computer.MaximumFileChunkBytes)}
 	f.guard.scope = scope
 	defer scope.transfers.close()
-	server, err := NewServer(f.controller, newTestProbeController(t, f), newTestBrowserController(t, f), sameTestProcess, 2*time.Second, 2, f.guard.logger)
+	server, err := NewServer(f.controller, newTestProbeController(t, f), sameTestProcess, 2*time.Second, 2, f.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

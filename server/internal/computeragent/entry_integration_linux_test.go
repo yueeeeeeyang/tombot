@@ -233,7 +233,7 @@ func TestContainerAgentEntrypoint(t *testing.T) {
 	browserOutput, browserErr := browserRestart.CombinedOutput()
 	browserTimeout := browserCtx.Err()
 	stopBrowser()
-	if browserErr == nil || browserTimeout != nil || !strings.Contains(string(browserOutput), "旧实例未确认关闭") || !strings.Contains(string(browserOutput), fixture.guard.identity.ComputerID) {
+	if browserErr == nil || browserTimeout != nil || !strings.Contains(string(browserOutput), "旧浏览器实例未确认关闭") || !strings.Contains(string(browserOutput), fixture.guard.identity.ComputerID) {
 		t.Fatalf("未知浏览器重启未拒绝：%v，%s", browserErr, browserOutput)
 	}
 	if _, err := os.Lstat(socket); !errors.Is(err, os.ErrNotExist) {

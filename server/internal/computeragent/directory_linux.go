@@ -154,6 +154,10 @@ func (directory *desktopDirectory) Close() error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return errors.New("检查待清理桌面运行目录失败")
 	}
+	// 资源组已确认排空；运行根由 root 持有，持久登录资料位于独立卷中。
+	if err := os.RemoveAll(computer.BrowserRuntimeRoot + "/" + directory.session.SessionID); err != nil {
+		return err
+	}
 	directory.closed = true
 	directory.closeError = directory.root.Close()
 	return directory.closeError

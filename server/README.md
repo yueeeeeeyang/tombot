@@ -4,7 +4,7 @@
 
 首次部署推荐使用[服务端一键安装](deploy/SERVER.md)：在 Debian/Ubuntu 或 RHEL/Rocky/AlmaLinux/CentOS Stream/Fedora 的 systemd 主机执行 `sudo ./tomd install`，确认访问地址即可自动准备本机 PostgreSQL、证书、密钥、配置和开机启动。用新版本程序执行 `sudo ./tomd-new upgrade` 升级，`sudo tomd status` 检查状态。管理平台已内置，无需单独部署前端。
 
-当前正在按[改造方案](docs/multi-user-refactor.md)实施。`tomd` 已切换到新的应用组合，提供认证、机器人目录、消息受理、运行查询、管理接口及后台 Worker；整体功能仍未完成。首位管理员的[本机部署命令](docs/admin-bootstrap.md)、[节点与镜像目录登记](docs/node-registration.md)、[固定镜像准备](docs/image-preparation.md)及[独立节点程序](internal/nodeapp/README.md)已接通；[节点控制心跳与过期门禁](docs/node-health.md)也已接通，[节点专用验收与镜像就绪发布](docs/node-verification.md)已接通；共享浏览器探针、真实部署验收及客户端 v2 切换尚待完成。按部署、浏览器、业务、管理平台、客户端、旧实现清理、交付验收的顺序继续；远程电脑交互功能暂缓并单独设计。不能以 API 或节点控制服务启动代替电脑与完整产品验收，详细证据见[实施进度](docs/multi-user-progress.md)。
+当前正在按[改造方案](docs/multi-user-refactor.md)实施。`tomd` 已切换到新的应用组合，提供认证、机器人目录、消息受理、运行查询、管理接口及后台 Worker；整体功能仍未完成。首位管理员的[本机部署命令](docs/admin-bootstrap.md)、[节点与镜像目录登记](docs/node-registration.md)、[固定镜像准备](docs/image-preparation.md)及[独立节点程序](internal/nodeapp/README.md)已接通；[节点控制心跳与过期门禁](docs/node-health.md)也已接通，[节点专用验收与镜像就绪发布](docs/node-verification.md)已接通；浏览器按桌面启动和验收，生产部署验收及客户端 v2 切换尚待完成。按部署、浏览器、业务、管理平台、客户端、旧实现清理、交付验收的顺序继续；远程电脑交互功能暂缓并单独设计。不能以 API 或节点控制服务启动代替电脑与完整产品验收，详细证据见[实施进度](docs/multi-user-progress.md)。
 
 镜像已包含[固定非 root 能力探针](internal/computerprobe/README.md)，实际终端、文件及网络检查在受限 Linux 容器通过；代理调用、持久消费、宿主服务组生命周期、重启回收与实际基础证据汇总已接通。浏览器能力仍未确认，不能完整就绪；真实内核正向及生产部署验收仍须完成。
 

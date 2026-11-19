@@ -26,7 +26,7 @@ func TestKernelDesktopIOProtocol(t *testing.T) {
 	})
 	defer access.stop()
 	fixture.guard.scope = &recordingDesktopIOScope{fakeScope: fixture.factory.scopes[0], access: access}
-	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), newTestBrowserController(t, fixture), sameTestProcess, 2*time.Second, 2, fixture.guard.logger)
+	server, err := NewServer(fixture.controller, newTestProbeController(t, fixture), sameTestProcess, 2*time.Second, 2, fixture.guard.logger)
 	if err != nil {
 		t.Fatal(err)
 	}

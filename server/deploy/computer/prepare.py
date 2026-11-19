@@ -11,7 +11,6 @@ import sys
 
 SHARED_GID = 20000
 SHARED_MODE = 0o2770
-BROWSER_UID = 30000
 BROWSER_DIRECTORY = "/var/lib/tombot-browser"
 
 
@@ -90,10 +89,10 @@ def prepare_layout(workspace, runtime, temporary, root_uid, root_gid, shared_gid
                 pass
 
 
-def verify_browser_directory(browser, workspace, browser_uid, shared_gid):
+def verify_browser_directory(browser, workspace, owner_uid, owner_gid):
     """浏览器配置由独立服务持有，但仍与业务目录使用同一块配额磁盘。"""
     with directory(browser) as profile, directory(workspace) as shared:
-        require(matches(profile, browser_uid, shared_gid, 0o700), "浏览器持久目录所属身份或权限无效")
+        require(matches(profile, owner_uid, owner_gid, 0o711), "浏览器持久目录所属身份或权限无效")
         profile_identity, shared_identity = os.fstat(profile), os.fstat(shared)
         require(profile_identity.st_dev == shared_identity.st_dev
                 and profile_identity.st_ino != shared_identity.st_ino,
@@ -109,7 +108,7 @@ def main():
             "运行空间初始化缺少容器限制")
     require(all(os.path.ismount(path) for path in ("/workspace", BROWSER_DIRECTORY, "/run", "/tmp")),
             "运行空间必须使用独立挂载")
-    verify_browser_directory(BROWSER_DIRECTORY, "/workspace", BROWSER_UID, SHARED_GID)
+    verify_browser_directory(BROWSER_DIRECTORY, "/workspace", 0, 0)
     prepare_layout("/workspace", "/run", "/tmp", 0, 0, SHARED_GID)
 
 

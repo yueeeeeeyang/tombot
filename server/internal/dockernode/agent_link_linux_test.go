@@ -141,7 +141,7 @@ func TestKernelNodeAgentBinding(t *testing.T) {
 			}
 			// 测试在同一 PID 空间运行，只有此测试服务采用本进程检查；正式入口固定 RequireHostPeer。
 			probes, _ := newLinkProbeController(t, computeragent.Identity{UserID: session.UserID, ComputerID: session.ComputerID, NodeID: session.NodeID, Generation: session.Generation})
-			server, err := computeragent.NewServer(guard, probes, newLinkBrowserController(t, computeragent.Identity{UserID: session.UserID, ComputerID: session.ComputerID, NodeID: session.NodeID, Generation: session.Generation}), func(peer agentchannel.Peer) error {
+			server, err := computeragent.NewServer(guard, probes, func(peer agentchannel.Peer) error {
 				if peer.PID != int32(os.Getpid()) || peer.UID != 0 || peer.GID != 0 {
 					return errors.New("测试进程身份错误")
 				}

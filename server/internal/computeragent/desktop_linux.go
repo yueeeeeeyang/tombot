@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"io.yueyang/tom/internal/computer"
@@ -24,6 +25,8 @@ type managedDesktop struct {
 	mu           sync.Mutex
 	status       computer.DesktopStatus
 	command      *exec.Cmd
+	launcher     *os.Process
+	launcherDone chan struct{}
 	stopping     bool
 	stopOnce     sync.Once
 	stop         chan struct{}
@@ -58,6 +61,29 @@ func (scope *kernelScope) StartDesktop(ctx context.Context, reference processgro
 	request := taskprocess.Request{Version: 2, OperationID: session.SessionID, Group: reference, Role: "browser", ProcessCommand: computer.ProcessCommand{Program: "/usr/bin/python3", WorkingDirectory: "/workspace", Arguments: []string{"-I", "-B", "/usr/lib/tombot/desktop.py", "--runtime", session.RuntimeDirectory(), "--display", strconv.Itoa(session.DisplayNumber)}}}
 	command, err := startDesktopTask(ctx, request, membership, revocation)
 	desktop.command = command
+	if err == nil && command != nil && command.Process != nil {
+		// 启动入口与 XFCE 共属桌面组，接管冻结 shell 时用户仍能打开程序。入口失效只影响本桌面的 Chrome。
+		launcher := request
+		launcher.Role = "desktop_chrome"
+		launcher.Program = "/usr/bin/python3"
+		launcher.Arguments = nil
+		child, launchErr := startDesktopTask(ctx, launcher, membership, revocation)
+		if launchErr != nil {
+			scope.logger.Warn("桌面浏览器入口启动失败", "desktop_id", session.DesktopID)
+		}
+		if child != nil && child.Process != nil {
+			done := make(chan struct{})
+			scope.mu.Lock()
+			desktop.launcher, desktop.launcherDone = child.Process, done
+			scope.mu.Unlock()
+			go func() {
+				defer close(done)
+				if err := child.Wait(); err != nil && desktop.snapshot().State == "ready" {
+					scope.logger.Warn("桌面浏览器入口退出", "desktop_id", session.DesktopID)
+				}
+			}()
+		}
+	}
 	if command != nil && command.Process != nil {
 		desktop.supervise(func(ctx context.Context) (bool, error) {
 			ready, err := directory.readyFile()
@@ -83,6 +109,9 @@ func startDesktopTask(ctx context.Context, request taskprocess.Request, membersh
 	if err == nil {
 		// 引导只输出固定状态与错误，用户桌面的各组件日志保留在私有运行目录。
 		command.Stdout, command.Stderr = io.Discard, io.Discard
+		if request.Role == "desktop_chrome" {
+			command.Stderr = os.Stderr
+		}
 		if err = ctx.Err(); err == nil {
 			err = command.Start()
 		}
@@ -91,6 +120,28 @@ func startDesktopTask(ctx context.Context, request taskprocess.Request, membersh
 		}
 	}
 	return command, err
+}
+
+// FinishDesktopBrowser 只用于租约仍有效的主动关闭，给 Chrome 一次落盘机会。看门狗仍可独立终止整组。
+func (scope *kernelScope) FinishDesktopBrowser(ctx context.Context) error {
+	scope.mu.Lock()
+	desktop := scope.desktop
+	if desktop == nil || desktop.launcher == nil {
+		scope.mu.Unlock()
+		return nil
+	}
+	launcher, done := desktop.launcher, desktop.launcherDone
+	scope.mu.Unlock()
+	err := launcher.Signal(syscall.SIGTERM)
+	if err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (scope *kernelScope) InspectDesktop(_ context.Context, session computer.ExecutionSession) (computer.DesktopStatus, error) {

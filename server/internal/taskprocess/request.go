@@ -34,8 +34,11 @@ func (request Request) Validate() error {
 	if _, err := ulid.ParseStrict(request.OperationID); err != nil {
 		return errors.New("任务引导操作标识无效")
 	}
-	if request.Role != "shell" && request.Role != "browser" {
+	if request.Role != "shell" && request.Role != "browser" && request.Role != "desktop_chrome" {
 		return errors.New("任务引导资源类型无效")
+	}
+	if request.Role == "desktop_chrome" && (request.OperationID != request.Group.Session.SessionID || request.Program != "/usr/bin/python3" || request.WorkingDirectory != "/workspace" || len(request.Arguments) != 0 || len(request.Environment) != 0) {
+		return errors.New("桌面浏览器只接受固定启动授权")
 	}
 	return request.ProcessCommand.Validate()
 }

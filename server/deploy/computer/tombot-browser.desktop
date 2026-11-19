@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Google Chrome
+Name[zh_CN]=Google Chrome 浏览器
+Exec=/usr/bin/python3 -I -B /usr/lib/tombot/open_browser.py %u
+Icon=google-chrome
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;
