@@ -4,11 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"io"
+
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
+
 	"time"
 
 	"io.yueyang/tom/internal/httpjson"
@@ -98,13 +98,13 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 			w.WriteHeader(204)
 			return
 		}
-		e, m, err := s.manifest(ctx, release)
+		artifact, m, err := s.manifest(ctx, release)
 		if err != nil {
 			w.WriteHeader(503)
 			return
 		}
 		if c.Action == "poll" {
-			respond(w, 200, noderelease.Assignment{Job: job, Release: release, Envelope: e}, logger)
+			respond(w, 200, noderelease.Assignment{Job: job, Release: release, Artifact: artifact, Manifest: m}, logger)
 			return
 		}
 		if c.Index < 0 || c.Index >= len(m.Chunks) {
@@ -112,12 +112,13 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 			return
 		}
 		d := m.Chunks[c.Index]
-		part, err := os.Open(filepath.Join(s.Directory, d))
+		part, err := os.Open(s.archivePath(artifact))
 		if err != nil {
 			w.WriteHeader(503)
 			return
 		}
-		b, err := io.ReadAll(io.LimitReader(part, m.PartSize(c.Index)+1))
+		b := make([]byte, m.PartSize(c.Index))
+		_, err = part.ReadAt(b, int64(c.Index)*noderelease.ChunkSize)
 		err = errors.Join(err, part.Close())
 		if err != nil || int64(len(b)) != m.PartSize(c.Index) || noderelease.Digest(b) != d {
 			w.WriteHeader(503)

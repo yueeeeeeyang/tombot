@@ -63,7 +63,7 @@ func (c updateClient) read(req *http.Request, max int64) (b []byte, failure erro
 	return b, err
 }
 
-// SyncNodeUpgrade 只执行独立发布方签名、同架构且分配给本节点的完整包，不处理命令或外部 URL。
+// SyncNodeUpgrade 只执行已绑定服务端核验、同架构且分配给本节点的完整包，不处理命令或外部 URL。
 func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error) {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return errors.New("远程升级需在 Linux 节点以 root 运行")
@@ -99,20 +99,12 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 	tr := &http.Transport{TLSClientConfig: tlsConfig}
 	defer tr.CloseIdleConnections()
 	c := updateClient{&http.Client{Transport: tr, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, conf.Enrollment.Server.URL, conf.NodeID, "linux/" + runtime.GOARCH, pair}
-	pemKey, err := fs.readConfig(fileRule{path: noderelease.KeyPath, maximum: 4096}, account{})
-	if err != nil {
-		return errors.New("请先通过可信安装包配置节点发布公钥，未启用远程升级")
-	}
-	key, err := noderelease.ParseKey(pemKey)
-	if err != nil {
-		return err
-	}
-	raw, err = c.call(ctx, "poll", "", "", 0, noderelease.MaxEnvelope)
+	raw, err = c.call(ctx, "poll", "", "", 0, noderelease.MaxManifest)
 	if err != nil || len(raw) == 0 {
 		return err
 	}
 	var a noderelease.Assignment
-	if json.Unmarshal(raw, &a) != nil || (computer.NodeQuery{NodeID: a.Job}).Validate() != nil || !noderelease.ValidDigest(a.Release) || a.Release != noderelease.Digest(a.Envelope.Payload) {
+	if json.Unmarshal(raw, &a) != nil || (computer.NodeQuery{NodeID: a.Job}).Validate() != nil || !noderelease.ValidDigest(a.Release) || a.Manifest.Validate(a.Artifact) != nil {
 		return errors.New("升级任务清单无效")
 	}
 	if err = fs.ensureInstallDirectory(updateCache, 0700); err != nil {
@@ -128,11 +120,11 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 	}
 	state := "failed"
 	err = func() error {
-		m, err := a.Envelope.Verify(key)
-		if err != nil || m.Platform != c.platform {
-			return errors.New("拒绝未签名或不同架构的节点发布包")
+		m := a.Manifest
+		if m.Platform != c.platform {
+			return errors.New("节点与发布包架构不匹配")
 		}
-		dir := filepath.Join(updateCache, a.Release)
+		dir := filepath.Join(updateCache, a.Artifact)
 		if _, err = os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 			if err = c.stage(ctx, dir, a, m); err != nil {
 				return err
@@ -145,10 +137,10 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 		}
 		sums, err := fs.readInstallationSource(filepath.Join(dir, "SHA256SUMS"), 64<<10, fs.owner)
 		if err != nil || noderelease.Digest(sums) != m.Checksums {
-			return errors.New("缓存校验清单与发布签名不符")
+			return errors.New("缓存校验清单与本次升级任务不符")
 		}
 		program, err := fs.readInstallationSource(filepath.Join(dir, "tomnode"), maximumNodeBinaryBytes, fs.owner)
-		if err != nil || !strings.Contains("\n"+string(sums), "\n"+contentDigest(program)+"  tomnode\n") || validateNodeExecutable(program, c.platform) != nil {
+		if err != nil || !strings.Contains("\n"+string(sums), "\n"+contentDigest(program)+"  tomnode\n") || noderelease.ValidateExecutable(program, c.platform) != nil {
 			return errors.New("缓存程序身份或架构无效")
 		}
 		command := exec.CommandContext(ctx, filepath.Join(dir, "tomnode"), "upgrade")
@@ -176,7 +168,7 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 		return errors.Join(err, saved)
 	}
 	if state == "started" {
-		if cleanup := os.RemoveAll(filepath.Join(updateCache, a.Release)); cleanup != nil {
+		if cleanup := os.RemoveAll(filepath.Join(updateCache, a.Artifact)); cleanup != nil {
 			logger.Warn("节点升级缓存未清理", "job_id", a.Job, "node_id", conf.NodeID, "reason", cleanup)
 		}
 	}
@@ -184,7 +176,7 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 	return errors.Join(err, ack)
 }
 
-// stage 流式验证签名清单的每个分片，再解压并原子发布；重复领取同一包复用私有暂存结果。
+// stage 流式验证升级任务指定的每个分片，再解压并原子发布；重复领取同一包复用私有暂存结果。
 func (c updateClient) stage(ctx context.Context, dest string, a noderelease.Assignment, m noderelease.Manifest) (failure error) {
 	stage, err := os.MkdirTemp(filepath.Dir(dest), ".download-")
 	if err != nil {

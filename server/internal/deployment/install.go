@@ -1,9 +1,10 @@
 package deployment
 
 import (
-	"bytes"
+	"io.yueyang/tom/internal/noderelease"
+
 	"context"
-	"encoding/binary"
+
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,8 @@ import (
 const nodeServiceName = "tombot-node.service"
 
 type nodeInstaller struct {
+	inspectRecovery     func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error)
+	holdRecovery        func(context.Context, nodeInstallRequest, string, nodeenrollment.RecoveryTarget) error
 	maintain            func(context.Context, nodeInstallRequest, string, bool) error
 	checkListen         func(context.Context, string) error
 	detectHost          func(context.Context) (installationHost, error)
@@ -93,7 +96,7 @@ func (installer nodeInstaller) install(ctx context.Context, requestPath, executa
 	if err != nil {
 		return report, err
 	}
-	if err := validateNodeExecutable(program, installer.platform); err != nil {
+	if err := noderelease.ValidateExecutable(program, installer.platform); err != nil {
 		return report, err
 	}
 	unlock, err := installer.fs.lockNodeInstallation()
@@ -211,26 +214,12 @@ func (installer nodeInstaller) install(ctx context.Context, requestPath, executa
 	if err := installer.fs.installExactFile(ctx, nodeServicePath, service, 0644); err != nil {
 		return NodeInstallationReport{}, err
 	}
-	if err := installer.installReleaseKey(ctx, executable); err != nil {
-		return NodeInstallationReport{}, err
-	}
 	if err := installer.startNodeServices(ctx, request.Server != nil, nil); err != nil {
 		return NodeInstallationReport{}, err
 	}
 	report.State = "control_started"
 	installer.logger.Info("节点已安装并设置开机启动，电脑能力仍须独立验收", "node_id", report.NodeID)
 	return report, nil
-}
-
-func validateNodeExecutable(content []byte, platform string) error {
-	machine := map[string]uint16{"linux/amd64": 62, "linux/arm64": 183}[platform]
-	if machine == 0 || len(content) < 64 || !bytes.Equal(content[:7], []byte{0x7f, 'E', 'L', 'F', 2, 1, 1}) || binary.LittleEndian.Uint16(content[18:20]) != machine {
-		return errors.New("节点安装程序必须是与宿主架构匹配的 Linux 二进制")
-	}
-	if kind := binary.LittleEndian.Uint16(content[16:18]); kind != 2 && kind != 3 {
-		return errors.New("节点安装程序必须是可执行文件")
-	}
-	return nil
 }
 
 func (installer nodeInstaller) loadInstallation(requestDigest, programDigest string) (nodeInstallation, bool, error) {

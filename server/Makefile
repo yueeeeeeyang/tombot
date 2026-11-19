@@ -1,4 +1,4 @@
-.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-time-namespaces test-shared-browser test-server-https-browser computer-image test-computer-image build release verify-release node-release verify-node-release
+.PHONY: admin-build fmt lint check test test-docker-engine test-host-tools test-docker-node test-image-preparation test-offline-image-import test-process-groups test-time-namespaces test-shared-browser test-server-https-browser computer-image test-computer-image build release release-linux-amd64 verify-release node-release verify-node-release
 
 GO ?= go
 NPM ?= npm
@@ -65,6 +65,9 @@ build: admin-build
 
 release:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_bundle.py build $(RELEASE_ARGS)
+
+release-linux-amd64:
+	PYTHONDONTWRITEBYTECODE=1 python3 scripts/build_linux_amd64.py $(RELEASE_ARGS)
 
 verify-release:
 	PYTHONDONTWRITEBYTECODE=1 python3 scripts/release_bundle.py verify $(RELEASE_VERIFY_ARGS)

@@ -103,7 +103,7 @@ func TestNodeBrowserRecordParticipatesInStartupRecovery(t *testing.T) {
 	if err := b.recover(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.node.restoreEgress(t.Context()); err != nil {
+	if err := f.node.restoreEgress(t.Context(), sessionLogger()); err != nil {
 		t.Fatalf("浏览器恢复后无法继续恢复出网：%+v", err)
 	}
 }

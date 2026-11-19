@@ -22,15 +22,22 @@ const registrationTimeout = 10 * time.Second
 // Register 在监听已建立后登记节点；已登记节点仅用签名认证，首次授权才读取一次性凭据。
 // 最多三轮重试及一次认证挑战，只有传输失败、限流或服务不可用可退避重试，冲突与授权失败立即返回。
 func Register(ctx context.Context, nodeID string, configuration Config, certificate tls.Certificate, readToken func(string) ([]byte, error)) error {
-	return registration(ctx, nodeID, configuration, certificate, readToken, nil)
+	return registration(ctx, nodeID, configuration, certificate, readToken, nil, nil)
 }
 
 // Maintain 请求或释放绑定到安装计划的维护窗口；不读取一次性接入凭据。
 func Maintain(ctx context.Context, nodeID string, configuration Config, certificate tls.Certificate, operation MaintenanceRequest) error {
-	return registration(ctx, nodeID, configuration, certificate, nil, &operation)
+	return registration(ctx, nodeID, configuration, certificate, nil, &operation, nil)
 }
 
-func registration(ctx context.Context, nodeID string, configuration Config, certificate tls.Certificate, readToken func(string) ([]byte, error), maintenance *MaintenanceRequest) error {
+// InspectRecovery 用已登记证书查询当前节点的一项阻塞计划；没有阻塞项时返回 clear。
+func InspectRecovery(ctx context.Context, nodeID string, config Config, pair tls.Certificate, release string) (*RecoveryInspection, error) {
+	var inspection *RecoveryInspection
+	err := registration(ctx, nodeID, config, pair, nil, &MaintenanceRequest{InspectRelease: release}, &inspection)
+	return inspection, err
+}
+
+func registration(ctx context.Context, nodeID string, configuration Config, certificate tls.Certificate, readToken func(string) ([]byte, error), maintenance *MaintenanceRequest, inspection **RecoveryInspection) error {
 	if configuration.Validate() != nil || readToken == nil && maintenance == nil || len(certificate.Certificate) != 1 {
 		return errors.New("节点自动登记依赖无效")
 	}
@@ -54,7 +61,9 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 	expected := "registered"
 	if maintenance != nil {
 		expected = "upgrade_held"
-		if maintenance.Finish {
+		if maintenance.InspectRelease != "" {
+			expected = "recovery_inspected"
+		} else if maintenance.Finish {
 			expected = "upgrade_finished"
 		}
 	}
@@ -68,7 +77,7 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 		if err != nil {
 			return errors.New("节点登记签名无法编码")
 		}
-		status, err := sendRegistration(ctx, client, configuration.Server.URL, body, token, nodeID, configuration.Registration.ImageID, expected)
+		status, err := sendRegistration(ctx, client, configuration.Server.URL, body, token, nodeID, configuration.Registration.ImageID, expected, inspection)
 		if status == http.StatusUnauthorized && token == nil && maintenance == nil {
 			token, err = readToken(configuration.Server.TokenFile)
 			if err != nil {
@@ -78,7 +87,7 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 			if err := ValidateToken(token); err != nil {
 				return err
 			}
-			status, err = sendRegistration(ctx, client, configuration.Server.URL, body, token, nodeID, configuration.Registration.ImageID, expected)
+			status, err = sendRegistration(ctx, client, configuration.Server.URL, body, token, nodeID, configuration.Registration.ImageID, expected, inspection)
 		}
 		if maintenance != nil && status == http.StatusConflict {
 			return ErrMaintenanceConflict
@@ -106,7 +115,7 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 	return errors.New("节点登记未完成")
 }
 
-func sendRegistration(ctx context.Context, client *http.Client, origin string, body, token []byte, nodeID, imageID, expected string) (status int, failure error) {
+func sendRegistration(ctx context.Context, client *http.Client, origin string, body, token []byte, nodeID, imageID, expected string, inspection **RecoveryInspection) (status int, failure error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+Path, bytes.NewReader(body))
 	if err != nil {
 		return 0, errors.New("节点登记请求无法建立")
@@ -133,6 +142,12 @@ func sendRegistration(ctx context.Context, client *http.Client, origin string, b
 	decoder.DisallowUnknownFields()
 	if err != nil || len(encoded) > maximumBodyBytes || decoder.Decode(&receipt) != nil || decoder.Decode(new(any)) != io.EOF || receipt.NodeID != nodeID || receipt.ImageID != imageID || receipt.State != expected {
 		return http.StatusBadRequest, errors.New("节点登记回执身份或状态无效")
+	}
+	if inspection != nil {
+		if receipt.Recovery == nil {
+			return http.StatusBadRequest, errors.New("节点缺少电脑恢复检查回执")
+		}
+		*inspection = receipt.Recovery
 	}
 	return http.StatusOK, nil
 }

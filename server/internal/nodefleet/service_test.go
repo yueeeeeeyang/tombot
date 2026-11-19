@@ -1,7 +1,9 @@
 package nodefleet
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -13,6 +15,8 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http/httptest"
+	"os"
+
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +27,7 @@ import (
 	"io.yueyang/tom/internal/testkit/pgtest"
 )
 
-func TestSignedFleetDistribution(t *testing.T) {
+func TestSinglePackageFleetDistribution(t *testing.T) {
 	ctx := t.Context()
 	cluster := pgtest.Start(t)
 	pool, name := cluster.Database(t)
@@ -35,27 +39,31 @@ func TestSignedFleetDistribution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := Service{db, t.TempDir(), func() (ed25519.PublicKey, error) { return pub, nil }}
-	part := []byte("完整性测试分片")
-	encoded, err := json.Marshal(noderelease.Manifest{Checksums: noderelease.Digest(part), Version: 1, Label: "test", Platform: "linux/amd64", Size: int64(len(part)), Chunks: []string{noderelease.Digest(part)}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := noderelease.Envelope{Payload: encoded, Signature: ed25519.Sign(priv, encoded)}
-	bad := e
-	bad.Payload = append(bytes.Clone(encoded), ' ')
-	if _, err = s.publish(ctx, bad); !errors.Is(err, ErrInput) {
-		t.Fatal("篡改清单获准")
-	}
-	r, err := s.publish(ctx, e)
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := Service{db, t.TempDir()}
 	admin := ids.New()
+	part := standardArchive(t, "test", "")
+	artifact := noderelease.Digest([]byte(noderelease.Digest(part)))
+	upload := func() {
+		t.Helper()
+		if _, err := s.begin(admin, artifact, int64(len(part))); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.savePart(admin, artifact, "0", noderelease.Digest(part), part); err != nil {
+			t.Fatal(err)
+		}
+	}
+	upload()
+	r, err := s.publish(ctx, admin, artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r {
+		t.Fatal("已确认的发布不能重取", again, err)
+	}
+	upload()
+	if again, err := s.publish(ctx, admin, artifact); err != nil || again != r {
+		t.Fatal("重复上传没有复用版本", again, err)
+	}
 	n, image := ids.New(), ids.New()
 	secondNode := ids.New()
 	np, nk, err := ed25519.GenerateKey(rand.Reader)
@@ -104,13 +112,13 @@ func TestSignedFleetDistribution(t *testing.T) {
 	if w := call(noderelease.Call{Node: n, Action: "poll"}); w.Code != 204 {
 		t.Fatal(w.Code)
 	}
+	if err := os.Rename(s.archivePath(artifact), s.archivePath(artifact)+".saved"); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.dispatch(ctx, r.ID, []string{n}, false, admin, ids.New()); !errors.Is(err, ErrConflict) {
-		t.Fatal("分片缺失仍下发", err)
+		t.Fatal("归档缺失仍下发", err)
 	}
-	if err = s.savePart(ctx, r.ID, "0", []byte("坏")); !errors.Is(err, ErrInput) {
-		t.Fatal("篡改分片被接受", err)
-	}
-	if err = s.savePart(ctx, r.ID, "0", part); err != nil {
+	if err := os.Rename(s.archivePath(artifact)+".saved", s.archivePath(artifact)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(`UPDATE tombot.computer_nodes SET reserved=1 WHERE id=$1`, n); err != nil {
@@ -121,7 +129,7 @@ func TestSignedFleetDistribution(t *testing.T) {
 	}
 	w := call(noderelease.Call{Node: n, Action: "poll"})
 	var a noderelease.Assignment
-	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &a) != nil || a.Release != r.ID {
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &a) != nil || a.Release != r.ID || a.Artifact != artifact || a.Manifest.Validate(artifact) != nil || a.Manifest.Label != "test" {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	if err = s.dispatch(ctx, r.ID, []string{n}, false, admin, ids.New()); !errors.Is(err, ErrConflict) {
@@ -169,4 +177,100 @@ func TestSignedFleetDistribution(t *testing.T) {
 			t.Fatalf("冲突后仍有 %d 条新任务和 %d 条审计记录", newJobs, auditEvents)
 		}
 	})
+}
+
+// standardArchive 使用与标准打包一致的六个成员；可单独改变归档正文以检验接收端是否重算摘要。
+func standardArchive(t *testing.T, label, changed string) []byte {
+	t.Helper()
+	image := []byte("节点镜像")
+	header := make([]byte, 64)
+	copy(header, []byte{0x7f, 'E', 'L', 'F', 2, 1, 1})
+	header[16] = 2
+	header[18] = 62
+	profile, err := json.Marshal(noderelease.Profile{Version: 1, Platform: "linux/amd64", Label: label, ImageReference: "example.test/computer@sha256:" + noderelease.Digest(image), ArchiveSHA256: noderelease.Digest(image), Docker: json.RawMessage(`{"version":2,"timeout_seconds":300,"minimum_free_bytes":1073741824}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{"node-release.json": profile, "tomnode": header, "computer-image.tar": image, "安装说明.txt": []byte("说明"), "node-install.example.json": []byte("{}")}
+	var sums strings.Builder
+	for name, body := range files {
+		sums.WriteString(noderelease.Digest(body) + "  " + name + "\n")
+	}
+	files["SHA256SUMS"] = []byte(sums.String())
+	if changed != "" {
+		files[changed] = []byte("内容已改变")
+	}
+	var b bytes.Buffer
+	gz := gzip.NewWriter(&b)
+	tw := tar.NewWriter(gz)
+	for name, body := range files {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(body)), Mode: 0644}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := errors.Join(tw.Close(), gz.Close()); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestUploadValidationAndResume(t *testing.T) {
+	s := Service{Directory: t.TempDir()}
+	owner := ids.New()
+	first := bytes.Repeat([]byte{3}, noderelease.ChunkSize)
+	last := []byte{7}
+	hash := noderelease.Digest([]byte(noderelease.Digest(first) + "\n" + noderelease.Digest(last)))
+	size := int64(len(first) + len(last))
+	if _, err := s.begin(owner, "../escape", size); !errors.Is(err, ErrInput) {
+		t.Fatal(err)
+	}
+	if _, err := s.begin(owner, hash, noderelease.MaxSize+1); !errors.Is(err, ErrInput) {
+		t.Fatal(err)
+	}
+	if _, err := s.begin(owner, hash, size); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.savePart(owner, hash, "1", noderelease.Digest(last), last); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if err := s.savePart(owner, hash, "0", noderelease.Digest(last), first); !errors.Is(err, ErrInput) {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := s.savePart(owner, hash, "0", noderelease.Digest(first), first); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if next, err := s.begin(owner, hash, size); err != nil || next.Next != 1 {
+		t.Fatal(next, err)
+	}
+	if _, err := s.publish(t.Context(), owner, hash); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if err := s.savePart(ids.New(), hash, "1", noderelease.Digest(last), last); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	for _, changed := range []string{"tomnode", "computer-image.tar", "SHA256SUMS"} {
+		b := standardArchive(t, "v1", changed)
+		d := noderelease.Digest(b)
+		artifact := noderelease.Digest([]byte(d))
+		if _, err := s.begin(owner, artifact, int64(len(b))); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.savePart(owner, artifact, "0", d, b); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.publish(t.Context(), owner, artifact); !errors.Is(err, noderelease.ErrPackage) {
+			t.Fatal("错误归档被登记", changed, err)
+		}
+		if next, err := s.begin(owner, artifact, int64(len(b))); err != nil || next.Next != 0 {
+			t.Fatal("损坏暂存不能重传", err)
+		}
+		if _, err := os.Stat(s.archivePath(artifact)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("验证失败仍发布", err)
+		}
+	}
 }

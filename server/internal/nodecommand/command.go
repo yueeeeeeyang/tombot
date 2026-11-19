@@ -147,7 +147,7 @@ const usage = `用法：tomnode <子命令>
 
   template          输出可选的节点高级参数模板
   install [文件]    一次完成配置、证书、程序和系统服务安装并启动
-  upgrade           从当前程序配套的完整离线包升级节点，自动协调维护、停机和启动
+  upgrade           从标准离线包升级节点，自动恢复并验收符合条件的隔离电脑
   repair [选项]     修复已停止的节点，保留节点身份；支持 --listen、--url、--image-package
   start             检查节点配置、准备 Docker 和镜像，然后运行节点
   configure         从部署参数生成配置，不覆盖已有输出目录

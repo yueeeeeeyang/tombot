@@ -104,7 +104,7 @@ func TestKernelNodeEgressLifecycle(t *testing.T) {
 	controller = newEgress(fixture.node, sessionLogger())
 	controller.locate = locate
 	fixture.node.egress = controller
-	if err := fixture.node.restoreEgress(t.Context()); err != nil {
+	if err := fixture.node.restoreEgress(t.Context(), sessionLogger()); err != nil {
 		t.Fatal(err)
 	}
 	assertProxy()

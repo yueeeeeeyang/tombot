@@ -51,7 +51,7 @@ func runRepair(ctx context.Context, args []string, output io.Writer, logger *slo
 	return 0
 }
 
-// runUpgrade 仅接受完整发布包，不让命令行替换节点身份或目标端点。
+// runUpgrade 使用程序所在目录的配套包；部署层核验节点身份、发布镜像及控制服务返回的原电脑计划。
 func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode) int {
 	report, err := repair(ctx, deployment.NodeRepairOptions{Upgrade: true})
 	if err != nil {

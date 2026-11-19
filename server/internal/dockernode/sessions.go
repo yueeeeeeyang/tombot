@@ -60,18 +60,19 @@ func newSessions(ctx context.Context, node *Runtime, groups processgroup.Groups,
 	if node == nil || node.journal == nil || groups == nil || agent == nil || logger == nil || options.Validate() != nil {
 		return nil, errors.New("电脑执行节点配置无效")
 	}
-	ctx, stop := context.WithTimeout(ctx, options.CallTimeout)
+	recovery, stop := context.WithTimeout(ctx, options.CallTimeout)
 	defer stop()
-	release, err := node.journal.lock(ctx, "execution-service")
+	release, err := node.journal.lock(recovery, "execution-service")
 	if err != nil {
 		return nil, err
 	}
 	controller = &SessionController{node: node, groups: groups, agent: agent, options: options, logger: logger, epoch: ids.New(), leases: map[sessionKey]sessionLease{}, releaseLock: release}
-	if err = controller.recover(ctx); err != nil {
+	if err = controller.recover(recovery); err != nil {
 		return nil, errors.Join(err, release())
 	}
-	// 先终止所有旧执行，再恢复电脑出网，避免节点重启给未清理进程重新开放副作用通道。
-	if err = node.restoreEgress(ctx); err != nil {
+	stop()
+	// 先终止所有旧执行，再恢复电脑及其出网，避免旧进程重新获得副作用通道。
+	if err = node.restoreEgress(ctx, logger); err != nil {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), node.options.Egress.ShutdownTimeout)
 		defer cancel()
 		return nil, errors.Join(err, node.egress.shutdown(cleanup), release())
@@ -179,6 +180,11 @@ func (controller *SessionController) Open(ctx context.Context, command computer.
 		}
 		if resourceState == nil || resourceState.Phase != "ready" || resourceState.Specification.ComputerID != command.Session.ComputerID || resourceState.Specification.NodeID != command.Session.NodeID || resourceState.Specification.Generation != command.Session.Generation || resourceState.ContainerID != command.Session.ContainerID {
 			return computer.SessionObservation{}, failure("session_computer_mismatch")
+		}
+		if recovering, err := controller.node.journal.hasComputerRecovery(resourceState); err != nil {
+			return computer.SessionObservation{}, err
+		} else if recovering {
+			return computer.SessionObservation{}, failure("session_computer_recovering")
 		}
 		resource := controller.node.resource(resourceState.Specification)
 		current, err := controller.node.load(ctx, resource, resourceState)

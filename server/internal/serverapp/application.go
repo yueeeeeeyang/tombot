@@ -14,6 +14,7 @@ import (
 	"io.yueyang/tom/internal/adminapi"
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
+	"io.yueyang/tom/internal/clientrelease"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/computercontrol"
 	"io.yueyang/tom/internal/computertools"
@@ -248,7 +249,11 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	router := http.NewServeMux()
 	build, _ := debug.ReadBuildInfo()
 	router.HandleFunc("/api/v2/version", versionHandler(versionFromBuild(releaseVersion, build), logger))
-	updates := nodefleet.Service{DB: databases[postgres.ControlRole], Directory: nodefleet.Directory, Key: noderelease.ReadKey}
+	clientReleases := clientrelease.Service{DB: databases[postgres.ControlRole], Directory: configuration.ClientReleaseDir}
+	if err := clientReleases.Register(router, gate, authentication, logger); err != nil {
+		return nil, err
+	}
+	updates := nodefleet.Service{DB: databases[postgres.ControlRole], Directory: nodefleet.Directory}
 	upgradeAdmin, err := updates.Admin(gate, authentication, logger)
 	if err != nil {
 		return nil, err

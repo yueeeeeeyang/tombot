@@ -81,6 +81,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 	if err != nil {
 		return Receipt{}, err
 	}
+	var inspection *RecoveryInspection
 	state := "registered"
 	err = service.control.Platform(ctx, func(tx *sql.Tx) error {
 		// 首次接入争用总量与多个唯一身份，固定全局顺序避免并发突破容量或重复消费。
@@ -97,6 +98,18 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 				return ErrConflict
 			}
 			if claim.Maintenance != nil {
+				m := claim.Maintenance
+				if m.InspectRelease != "" {
+					if m.Recovery != nil || m.Finish || m.OperationID != "" || !validRelease(m.InspectRelease) || claim.Registration.ImageID != imageID || !claim.SupportsComputerUpgrades {
+						return ErrConflict
+					}
+					state = "recovery_inspected"
+					inspection, err = inspectRecovery(ctx, tx, claim.NodeID, imageID, m.InspectRelease)
+					return err
+				}
+				if m.Recovery != nil && (m.Finish || m.Recovery.validate() != nil) {
+					return ErrConflict
+				}
 				state, err = reserveUpgrade(ctx, tx, catalog, claim, imageID, requestID)
 				if err != nil || !claim.SupportsComputerUpgrades {
 					return err
@@ -167,7 +180,7 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 	if err != nil {
 		return Receipt{}, transactionError(err)
 	}
-	return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: state}, nil
+	return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: state, Recovery: inspection}, nil
 }
 
 // Resolve 只返回已授权且不可变的节点连接，不接受调用方提供的目标地址。

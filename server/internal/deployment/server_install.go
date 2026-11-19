@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io.yueyang/tom/internal/noderelease"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -110,7 +111,7 @@ func (installer serverInstaller) manage(ctx context.Context, action string, opti
 	if err != nil {
 		return report, err
 	}
-	if err := validateNodeExecutable(program, installer.platform); err != nil {
+	if err := noderelease.ValidateExecutable(program, installer.platform); err != nil {
 		return report, errors.New("服务端程序不是与宿主匹配的 Linux 可执行文件")
 	}
 	if action == "upgrade" {

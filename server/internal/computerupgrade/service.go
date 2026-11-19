@@ -87,7 +87,7 @@ func (service *Service) process(ctx context.Context) (bool, error) {
 			code = "node_call_timeout"
 		}
 		service.logger.WarnContext(ctx, "已有电脑目标实例尚未通过验收", "node_id", plan.upgrade.Target.NodeID, "computer_id", plan.upgrade.Target.ComputerID, "image_id", plan.targetImage, "attempt", plan.attempt, "error_code", code)
-		return true, service.retry(commit, *plan)
+		return true, service.retry(commit, *plan, code)
 	}
 	if err = service.finish(commit, *plan, observation); err != nil {
 		return true, err

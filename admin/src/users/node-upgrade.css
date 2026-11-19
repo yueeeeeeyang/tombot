@@ -1,0 +1,244 @@
+.node-upgrade[open] {
+  --dialog-width: min(568px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.node-upgrade .dialog-heading {
+  flex: none;
+  margin-bottom: 20px;
+}
+.upgrade-body {
+  display: grid;
+  gap: 20px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  margin: -4px;
+}
+.upgrade-impact,
+.upgrade-notice,
+.upgrade-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.upgrade-impact,
+.upgrade-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+.upgrade-impact {
+  padding: 10px 12px;
+  background: var(--surface-muted);
+  border-radius: 9px;
+}
+.upgrade-impact svg,
+.upgrade-notice svg {
+  align-self: flex-start;
+  flex: none;
+  margin-top: 3px;
+}
+.upgrade-section-heading,
+.upgrade-list-heading,
+.upgrade-node,
+.upgrade-file-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.upgrade-section-heading {
+  margin-bottom: 8px;
+}
+.upgrade-section-heading label,
+.upgrade-targets legend,
+.upgrade-file-name strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.upgrade-section-heading .upgrade-upload-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.upgrade-version .select-trigger {
+  min-height: 40px;
+}
+.upgrade-targets {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.upgrade-targets legend {
+  padding: 0;
+  margin: 0 0 10px;
+}
+.upgrade-scope,
+.upgrade-targets label,
+.upgrade-node-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.upgrade-scope {
+  flex-wrap: wrap;
+  gap: 8px 24px;
+  margin-bottom: 12px;
+}
+.upgrade-targets label {
+  font-size: 13px;
+  cursor: pointer;
+}
+.upgrade-targets:disabled label {
+  cursor: default;
+}
+.upgrade-targets input {
+  flex: none;
+  margin: 0;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--text);
+}
+.upgrade-nodes {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: clip;
+  background: var(--surface);
+}
+.upgrade-list-heading {
+  min-height: 36px;
+  background: var(--surface-muted);
+  padding: 8px 14px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.upgrade-list-heading label {
+  font-size: inherit;
+}
+.upgrade-node {
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  min-height: 44px;
+}
+.upgrade-node-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-wrap: anywhere;
+  min-height: 22px;
+  font-size: 13px;
+}
+.upgrade-node svg {
+  flex: none;
+  color: var(--muted);
+}
+.upgrade-node .status {
+  overflow-wrap: anywhere;
+}
+.upgrade-file > small {
+  display: block;
+  margin-top: 7px;
+  color: var(--text-secondary);
+}
+.upgrade-all-hint {
+  display: block;
+  margin: 0 0 12px;
+  color: var(--text-secondary);
+}
+.upgrade-empty {
+  padding: 14px;
+}
+.upgrade-file-picker {
+  position: relative;
+  padding: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  cursor: pointer;
+}
+.upgrade-file-picker:hover {
+  background: var(--surface-muted);
+}
+.upgrade-file-picker:has(:focus-visible) {
+  outline: 2px solid var(--text-secondary);
+  outline-offset: 2px;
+}
+.upgrade-file-picker:has(:disabled) {
+  opacity: 0.6;
+  cursor: default;
+}
+.upgrade-file-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+.upgrade-file-name {
+  display: grid;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.upgrade-file-name > span,
+.upgrade-file-action {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.upgrade-file-name > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+.upgrade-file-action {
+  flex: none;
+  padding: 5px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.upgrade-progress {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.upgrade-progress progress {
+  width: 100%;
+  height: 6px;
+  accent-color: var(--text);
+}
+.upgrade-feedback {
+  flex: none;
+  margin-top: 16px;
+}
+.node-upgrade .upgrade-actions {
+  flex: none;
+  justify-content: space-between;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+@media (max-width: 480px) {
+  .node-upgrade[open] {
+    --dialog-padding: 18px 16px;
+  }
+  .upgrade-body {
+    gap: 16px;
+  }
+  .upgrade-file-picker {
+    gap: 9px;
+    padding: 12px 10px;
+  }
+}

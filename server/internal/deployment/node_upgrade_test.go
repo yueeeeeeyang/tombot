@@ -17,15 +17,10 @@ import (
 func TestUpgradeStopsOnlyAfterValidationAndResumesWithoutStopping(t *testing.T) {
 	i, bin, _ := legacyRepairFixture(t)
 	image := []byte("升级包归档")
-	r := nodeRelease{Version: 1, Platform: i.platform, ImageReference: "registry.example.test/bot@sha256:" + strings.Repeat("a", 64), ArchiveSHA256: contentDigest(image), Docker: encodeFixture(t, dockerbootstrap.DefaultManifest())}
-	var sums strings.Builder
-	for name, body := range map[string][]byte{"node-release.json": encodeFixture(t, r), "computer-image.tar": image, "node-install.example.json": []byte("{}"), "安装说明.txt": []byte("测试说明"), "tomnode": bin} {
-		if name != "tomnode" {
-			writeInstallFixture(t, i.fs, "/source/"+name, body, 0644)
-		}
-		sums.WriteString(contentDigest(body) + "  " + name + "\n")
+	writeFullUpgradeFixture(t, i, bin, image, "registry.example.test/bot@sha256:"+strings.Repeat("a", 64))
+	i.inspectRecovery = func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error) {
+		return &nodeenrollment.RecoveryInspection{State: "clear"}, nil
 	}
-	writeInstallFixture(t, i.fs, "/source/SHA256SUMS", []byte(sums.String()), 0644)
 	var sequence []string
 	i.systemctl = func(ctx context.Context, args ...string) error { sequence = append(sequence, args[0]); return nil }
 	held, finish := false, false
@@ -118,4 +113,17 @@ func TestUpgradeReceiptSurvivesLostReply(t *testing.T) {
 	if previous, err := i.fs.previousReceipt(a); err != nil || previous != "" {
 		t.Fatal(previous, err)
 	}
+}
+
+func writeFullUpgradeFixture(t *testing.T, i *nodeInstaller, bin, image []byte, reference string) {
+	t.Helper()
+	r := nodeRelease{Version: 1, Platform: i.platform, ImageReference: reference, ArchiveSHA256: contentDigest(image), Docker: encodeFixture(t, dockerbootstrap.DefaultManifest())}
+	var sums strings.Builder
+	for name, body := range map[string][]byte{"node-release.json": encodeFixture(t, r), "computer-image.tar": image, "node-install.example.json": []byte("{}"), "安装说明.txt": []byte("测试说明"), "tomnode": bin} {
+		if name != "tomnode" {
+			writeInstallFixture(t, i.fs, "/source/"+name, body, 0644)
+		}
+		sums.WriteString(contentDigest(body) + "  " + name + "\n")
+	}
+	writeInstallFixture(t, i.fs, "/source/SHA256SUMS", []byte(sums.String()), 0644)
 }

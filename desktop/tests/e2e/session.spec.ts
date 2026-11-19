@@ -5,7 +5,9 @@ import {
   type ElectronApplication,
   type Page,
 } from '@playwright/test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -295,4 +297,100 @@ test('连接失败页的空白处可拖动，按钮不参与拖动', async () =>
   await page.reload()
   await expect(page.getByRole('heading', { name: '无法连接服务' })).toBeVisible()
   await expectSessionDrag(page)
+})
+
+test('登录后自动发现本机更新，确认保存后下载完整安装包', async () => {
+  const server = await startServer()
+  server.publishUpdate()
+  const page = await openApp(join(testDirectory, 'profile'), server.url)
+  await login(page, server)
+  const dialog = page.getByRole('dialog', { name: '发现客户端新版本' })
+  await expect(dialog).toContainText('99.1.0')
+  await expect(dialog).toContainText('修复断线后的消息同步。')
+  await expect(dialog.getByRole('button', { name: '立即升级' })).toBeDisabled()
+  await expect(dialog).toContainText('当前为开发版')
+  const target = join(testDirectory, 'test-update.zip')
+  await application!.evaluate(({ dialog, shell }, path) => {
+    dialog.showSaveDialog = async () => ({ filePath: path, canceled: false })
+    shell.showItemInFolder = () => undefined
+  }, target)
+  await dialog.getByRole('button', { name: '下载安装包' }).click()
+  await expect(dialog).toContainText('安装包已保存')
+  expect((await readFile(target)).equals(server.installer)).toBe(true)
+})
+
+test('同一客户端切换服务后从新服务检查并安装更新，保护未保存修改并请求重启', async () => {
+  test.skip(process.platform !== 'darwin', '验证 macOS 系统更新器交接')
+  const original = await startServer()
+  const server = await startServer()
+  const bundle = join(testDirectory, 'TomBot.app', 'Contents')
+  await mkdir(bundle, { recursive: true })
+  await writeFile(
+    join(bundle, 'Info.plist'),
+    '<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.tombot.desktop</string><key>CFBundleShortVersionString</key><string>99.1.0</string></dict></plist>',
+  )
+  const zip = join(testDirectory, 'TomBot.zip')
+  await promisify(execFile)(
+    '/usr/bin/ditto',
+    ['-c', '-k', '--keepParent', join(testDirectory, 'TomBot.app'), zip],
+    { timeout: 10000 },
+  )
+  server.publishUpdate(await readFile(zip))
+  const page = await openApp(join(testDirectory, 'profile'), original.url)
+  await application!.evaluate(({ app, autoUpdater, dialog }) => {
+    // 模拟已安装状态，并截取会实际更新测试主机的系统调用；连接地址由窗口中的用户操作确定。
+    Object.defineProperty(app, 'isPackaged', { configurable: true, value: true })
+    let feed = ''
+    autoUpdater.setFeedURL = ({ url }) => {
+      feed = url
+    }
+    autoUpdater.checkForUpdates = () => {
+      void (async () => {
+        const metadata = await (await fetch(feed)).json()
+        const packageText = Buffer.from(await (await fetch(metadata.url)).arrayBuffer()).toString(
+          'base64',
+        )
+        Reflect.set(globalThis, '__verifiedInstaller', packageText)
+        autoUpdater.emit('update-downloaded')
+      })().catch((error) => autoUpdater.emit('error', error))
+    }
+    autoUpdater.quitAndInstall = () => {
+      Reflect.set(globalThis, '__installAndRestart', true)
+    }
+    dialog.showSaveDialog = async () => {
+      throw new Error('自动升级不应出现保存对话框')
+    }
+  })
+  await confirmAddress(page, original.url)
+  await trustCertificate(page, original)
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect
+    .poll(() => original.requests.includes('GET /api/v2/client-updates/latest'))
+    .toBe(true)
+  await page.getByRole('button', { name: '修改地址' }).click()
+  await page.getByLabel('服务地址', { exact: true }).fill(server.url)
+  await login(page, server)
+  const dialog = page.getByRole('dialog', { name: '发现客户端新版本' })
+  const install = dialog.getByRole('button', { name: '立即升级' })
+  await expect(install).toBeEnabled()
+  expect(server.requests).toContain('GET /api/v2/client-updates/latest')
+  const originalChecks = original.requests.length
+  await page.evaluate(() =>
+    window.addEventListener('beforeunload', (event) => event.preventDefault(), { once: true }),
+  )
+  await install.click()
+  await expect(dialog.getByRole('alert')).toContainText('未保存的修改')
+  expect(
+    await application!.evaluate(() => Reflect.get(globalThis, '__installAndRestart')),
+  ).toBeUndefined()
+  await install.click()
+  await expect(dialog.getByRole('status')).toHaveText('正在安装并重启客户端…')
+  expect(await application!.evaluate(() => Reflect.get(globalThis, '__verifiedInstaller'))).toBe(
+    server.installer.toString('base64'),
+  )
+  expect(await application!.evaluate(() => Reflect.get(globalThis, '__installAndRestart'))).toBe(
+    true,
+  )
+  expect(original.requests).toHaveLength(originalChecks)
+  expect(server.requests.some((route) => route.endsWith('/parts/0'))).toBe(true)
 })

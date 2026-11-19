@@ -1,3 +1,4 @@
+import manifest from '../../../../../package.json' with { type: 'json' }
 import type { CatTask } from '../../../../shared/tasks'
 import { replyExcerpt } from '../workspace/model'
 import {
@@ -13,6 +14,7 @@ import { ulid } from '../../../../shared/ulid'
 import { normalizeServerAddress } from '../../../../shared/serverAddress'
 import type {
   ApplicationAbout,
+  ClientUpdate,
   GroupSummary,
   ConversationPreview,
   DeliveryResult,
@@ -48,9 +50,24 @@ export class MemoryBackend implements DesktopBackend {
       }),
     )
   }
+  checkClientUpdate(): Promise<ClientUpdate | null> {
+    return Promise.resolve(null)
+  }
+  installClientUpdate(
+    ..._request: Parameters<DesktopBackend['installClientUpdate']>
+  ): Promise<boolean> {
+    void _request
+    return Promise.reject(new Error('当前环境无法安装桌面客户端。'))
+  }
+  downloadClientUpdate(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  watchUpdateRequest() {
+    return () => undefined
+  }
   loadAbout(): Promise<ApplicationAbout> {
     return Promise.resolve({
-      clientVersion: '0.1.0',
+      clientVersion: manifest.version,
       serverUrl: this.serverUrl,
       serverVersion: '测试版本',
     })

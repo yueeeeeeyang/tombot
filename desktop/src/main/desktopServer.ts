@@ -1,3 +1,10 @@
+import {
+  installationIssue,
+  installedEnvironment,
+  installClientUpdate,
+  type FinishUpdate,
+} from './installClientUpdate'
+import { checkClientUpdate, saveClientUpdate } from './clientUpdates'
 import { loadApplicationAbout } from './applicationAbout'
 import { readConversationPreviews } from './conversationPreviews'
 import { readGroups, createGroup, changeGroup, sendGroupMessage } from './groupChat'
@@ -709,7 +716,8 @@ async function pumpEvents(
 const eventWatches = new Map<string, AbortController>()
 
 /** 注册渲染进程可调用的服务通道。令牌只留在主进程，页面拿不到。 */
-export function registerDesktopIpc(): void {
+export function registerDesktopIpc(finishUpdate: FinishUpdate): void {
+  let updateConnection = new AbortController()
   ipcMain.handle('desktop:session', () => handle(() => inspectSession()))
   ipcMain.handle('desktop:connect', (_event, input: unknown) =>
     handle(async () => {
@@ -721,6 +729,8 @@ export function registerDesktopIpc(): void {
       if (next !== savedServerAddress) {
         // 凭据属于上一台服务，换地址后不能继续带过去。
         clearCredentials()
+        updateConnection.abort(new Error('服务地址已变更，请重新检查更新。'))
+        updateConnection = new AbortController()
         savedServerAddress = next
         await persistSession()
       }
@@ -765,6 +775,92 @@ export function registerDesktopIpc(): void {
     }),
   )
   ipcMain.handle('desktop:logout', () => handle(() => logout()))
+  const platform = process.platform + '-' + process.arch
+  const latest = async (origin: string, signal: AbortSignal) => {
+    const release = await checkClientUpdate(transport(), origin, platform, app.getVersion(), signal)
+    signal.throwIfAborted()
+    return release
+  }
+  let downloading = false
+  ipcMain.handle('desktop:check-update', () =>
+    handle(async () => {
+      const origin = requireServerAddress()
+      const { signal } = updateConnection
+      const release = await latest(origin, signal)
+      return (
+        release && {
+          id: release.id,
+          version: release.version,
+          notes: release.notes,
+          installUnavailable: installationIssue(installedEnvironment(), origin, release),
+        }
+      )
+    }),
+  )
+  async function useUpdatePackage(event: IpcMainInvokeEvent, id: unknown, install: boolean) {
+    if (downloading) throw new Error('正在下载客户端安装包。')
+    downloading = true
+    try {
+      const origin = requireServerAddress()
+      const { signal } = updateConnection
+      const release = await latest(origin, signal)
+      if (!release || release.id !== id || requireServerAddress() !== origin)
+        throw new Error('可用版本已变更，请重新检查更新。')
+      if (install) {
+        const assertCurrent = () => {
+          signal.throwIfAborted()
+          if (event.sender.isDestroyed())
+            throw new Error('升级窗口或服务地址已变更，请重新检查更新。')
+        }
+        try {
+          console.info(
+            `开始安装客户端升级，发布 ID=${release.id}，平台=${platform}，版本=${release.version}`,
+          )
+          await installClientUpdate(
+            transport(),
+            origin,
+            release,
+            installedEnvironment(),
+            assertCurrent,
+            finishUpdate,
+            (message) => {
+              if (!event.sender.isDestroyed()) event.sender.send('desktop:update-progress', message)
+            },
+            signal,
+          )
+        } catch (cause) {
+          console.warn(`客户端升级未完成，发布 ID=${release.id}，平台=${platform}`)
+          const code = (cause as NodeJS.ErrnoException)?.code
+          if (code === 'ENOSPC') throw new Error('磁盘空间不足，请清理空间后重新升级。', { cause })
+          if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS')
+            throw new Error('无法写入安装目录，请检查客户端是否位于可写目录。', { cause })
+          throw cause
+        }
+        return true
+      }
+      const selected = await dialog.showSaveDialog({
+        title: '保存客户端安装包',
+        defaultPath: join(
+          app.getPath('downloads'),
+          `TomBot-${release.version}-${platform}${release.extension}`,
+        ),
+        buttonLabel: '保存',
+      })
+      if (selected.canceled || !selected.filePath) return false
+      signal.throwIfAborted()
+      await saveClientUpdate(transport(), origin, release, selected.filePath, undefined, signal)
+      shell.showItemInFolder(selected.filePath)
+      return true
+    } finally {
+      downloading = false
+    }
+  }
+  ipcMain.handle('desktop:download-update', (event, id: unknown) =>
+    handle(() => useUpdatePackage(event, id, false)),
+  )
+  ipcMain.handle('desktop:install-update', (event, id: unknown) =>
+    handle(() => useUpdatePackage(event, id, true)),
+  )
   ipcMain.handle('desktop:about', () =>
     handle(() => loadApplicationAbout(app.getVersion(), requireServerAddress(), transport())),
   )

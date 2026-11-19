@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { BrowserRouter, Link, NavLink, Navigate, Route, Routes } from 'react-router'
-import { Users, Boxes, SlidersHorizontal, Server, ShieldCheck, Menu } from 'lucide-react'
+import { Users, Boxes, SlidersHorizontal, Server, ShieldCheck, Download, Menu } from 'lucide-react'
 import { ThemePicker } from './components/ThemePicker'
 import { AccountMenu } from './components/AccountMenu'
 import { AdminClient, ApiError, errorMessage } from './api/client'
 import { Alert, Dialog, Field } from './components'
+import { ClientUpdatesPage } from './releases/ClientUpdatesPage'
 import { UsersPage } from './users/UsersPage'
 import { AdministratorsPage } from './users/AdministratorsPage'
 import { NodesPage } from './users/NodesPage'
@@ -231,6 +232,7 @@ function Workspace({ client }: { client: AdminClient }) {
   const navigation = [
     { id: 'users', title: '用户', icon: Users },
     { id: 'administrators', title: '管理员', icon: ShieldCheck },
+    { id: 'client-updates', title: '客户端升级', icon: Download },
     { id: 'computer-nodes', title: '电脑节点', icon: Server },
     { id: 'model-providers', title: '模型供应商', icon: Boxes },
     { id: 'model-policies', title: '模型策略', icon: SlidersHorizontal },
@@ -294,6 +296,7 @@ function Workspace({ client }: { client: AdminClient }) {
           )}
           <Routes>
             <Route path="/" element={<Navigate to="/users" replace />} />
+            <Route path="/client-updates" element={<ClientUpdatesPage client={client} />} />
             <Route path="/users" element={<UsersPage client={client} />} />
             <Route path="/administrators" element={<AdministratorsPage client={client} />} />
             <Route path="/computer-nodes" element={<NodesPage client={client} />} />

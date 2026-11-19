@@ -1,4 +1,5 @@
-package deployment
+// Package jsonshape 校验部署配置与节点发布清单的 JSON 结构。
+package jsonshape
 
 import (
 	"bytes"
@@ -10,16 +11,16 @@ import (
 	"unicode/utf8"
 )
 
-// validatePreparationJSON 只核对对象结构和字段拼写；具体字段值交给所属组件的正式解析器。
-func validatePreparationJSON(encoded []byte, target any) error {
-	invalid := errors.New("部署参数包含歧义字段或无效 JSON")
+// Validate 只核对对象结构和字段拼写；具体字段值交给所属组件的正式解析器。
+func Validate(encoded []byte, target any) error {
+	invalid := errors.New("输入包含歧义字段或无效 JSON")
 	trimmed := bytes.TrimSpace(encoded)
 	if len(trimmed) == 0 || len(encoded) > 256<<10 || trimmed[0] != '{' || !utf8.Valid(encoded) {
 		return invalid
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.UseNumber()
-	if readPreparationValue(decoder, reflect.TypeOf(target), 0) != nil {
+	if readValue(decoder, reflect.TypeOf(target), 0) != nil {
 		return invalid
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -28,8 +29,8 @@ func validatePreparationJSON(encoded []byte, target any) error {
 	return nil
 }
 
-func readPreparationValue(decoder *json.Decoder, shape reflect.Type, depth int) error {
-	invalid := errors.New("部署参数结构无效")
+func readValue(decoder *json.Decoder, shape reflect.Type, depth int) error {
+	invalid := errors.New("JSON 结构无效")
 	if depth > 16 {
 		return invalid
 	}
@@ -81,7 +82,7 @@ func readPreparationValue(decoder *json.Decoder, shape reflect.Type, depth int) 
 					return invalid
 				}
 			}
-			if readPreparationValue(decoder, child, depth+1) != nil {
+			if readValue(decoder, child, depth+1) != nil {
 				return invalid
 			}
 		}
@@ -98,7 +99,7 @@ func readPreparationValue(decoder *json.Decoder, shape reflect.Type, depth int) 
 			child = shape.Elem()
 		}
 		for decoder.More() {
-			if readPreparationValue(decoder, child, depth+1) != nil {
+			if readValue(decoder, child, depth+1) != nil {
 				return invalid
 			}
 		}

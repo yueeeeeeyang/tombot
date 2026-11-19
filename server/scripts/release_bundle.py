@@ -22,12 +22,12 @@ from build_computer_image import ENVIRONMENT_FILE, IMAGE_FILES
 
 ROOT = Path(__file__).resolve().parents[2]
 ARCHITECTURES = ("amd64", "arm64")
-FORMAT_VERSION = 8
+FORMAT_VERSION = 9
 HOST_PROGRAMS = ("tomd", "tomnode")
 COMPUTER_PROGRAMS = ("computer-agent", "computer-task", "computer-probe", "bot-agent")
 DEPLOY_FILES = ("tomd.service", "systemd/tombot-node.service", "systemd/tombot-node-update.service", "systemd/tombot-node-update.timer", "node.example.json", "node-install.example.json",
                 "docker-install.schema.json", "computer-image.schema.json", "CONFIGURE.md", "NODE.md", "SERVER.md")
-VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py", "node_release.py", "sign_node_release.py")
+VERIFICATION_FILES = ("release_bundle.py", "build_computer_image.py", "node_release.py")
 SOURCE_DIRECTORIES = ("server/cmd", "server/internal", "server/web", "server/deploy", "server/scripts", "admin", "ui")
 SHARED_ASSETS = ("desktop/src/renderer/src/assets/cats/frames/bombay.png",)
 SOURCE_SUFFIXES = {".go", ".sql", ".html", ".json", ".py", ".xml", ".service", ".timer", ".md",
@@ -203,14 +203,14 @@ def validate_embedded_admin(binary, assets):
     require(all(content in program for content in assets.values()), "服务端未嵌入本次构建的全部管理资源")
 
 
-def compile_artifacts(source, payload, version):
+def compile_artifacts(source, payload, version, architectures=ARCHITECTURES):
     release_version(version)
     environment = build_environment()
     run_command(["npm", "ci", "--no-audit", "--no-fund"], source / "admin", environment, 600, "安装锁定的管理平台依赖")
     run_command(["npm", "run", "build"], source / "admin", environment, 300, "构建管理平台")
     assets = read_admin_build(source / "server/web/admin/bundle/dist")
     run_command(["go", "test", "./web/admin/bundle"], source / "server", environment, 300, "验证内置管理页面")
-    for architecture in ARCHITECTURES:
+    for architecture in architectures:
         environment["GOOS"], environment["GOARCH"] = "linux", architecture
         for name, target_architecture in binary_paths().items():
             if target_architecture != architecture:

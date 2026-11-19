@@ -28,6 +28,7 @@ func (options AgentStartupOptions) Validate() error {
 
 type agentAvailability interface {
 	wait(context.Context, Resource, container) error
+	prepareRestart(context.Context, Resource, *record) error
 }
 
 type agentStartup struct {

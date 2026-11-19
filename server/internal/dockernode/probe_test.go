@@ -261,7 +261,7 @@ func TestNodeProbeRecoveryNeverReplays(t *testing.T) {
 			if err != nil || state.Phase != "closed" || state.Grant.Revision != 1 {
 				t.Fatal(state, err)
 			}
-			if err := f.node.restoreEgress(t.Context()); err != nil {
+			if err := f.node.restoreEgress(t.Context(), sessionLogger()); err != nil {
 				t.Fatal("探针记录污染出网扫描", err)
 			}
 		})

@@ -19,6 +19,7 @@ import (
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/nodeapi"
 	"io.yueyang/tom/internal/nodeenrollment"
+	"io.yueyang/tom/internal/noderelease"
 )
 
 // NodeInstallOptions 仅描述本节点差异，省略项由探测与发布清单提供；不接受凭据。
@@ -29,13 +30,7 @@ type NodeInstallOptions struct {
 	Listen   string `json:"listen,omitempty"`
 }
 
-type nodeRelease struct {
-	Version        int             `json:"version"`
-	Platform       string          `json:"platform"`
-	ImageReference string          `json:"image_reference"`
-	ArchiveSHA256  string          `json:"archive_sha256"`
-	Docker         json.RawMessage `json:"docker"`
-}
+type nodeRelease = noderelease.Profile
 type installationInput struct {
 	request       nodeInstallRequest
 	token         []byte

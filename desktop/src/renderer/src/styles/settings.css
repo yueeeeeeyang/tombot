@@ -208,13 +208,30 @@
   }
 }
 
-.settings-about .setting-row {
+.settings-versions .setting-row {
   gap: 24px;
 }
-.settings-about .setting-row > span:last-child {
+.settings-versions .setting-row > span:last-child {
   min-width: 0;
   text-align: right;
   overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 13px;
+}
+
+.client-update {
+  margin: 16px 0;
+  font-size: 14px;
+}
+.client-update-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 32vh;
+  overflow-y: auto;
+  line-height: 1.6;
+}
+.client-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

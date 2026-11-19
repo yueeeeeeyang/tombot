@@ -129,6 +129,22 @@ contextBridge.exposeInMainWorld(
         )) as CallResult<WorkspaceSnapshot>
         return result.ok ? result.value : { errorCode: result.code, message: result.message }
       },
+      checkClientUpdate: () => invoke('desktop:check-update'),
+      installClientUpdate: async (id: string, onProgress: (message: string) => void) => {
+        const progress = (_event: Electron.IpcRendererEvent, message: string) => onProgress(message)
+        ipcRenderer.on('desktop:update-progress', progress)
+        try {
+          return await invoke('desktop:install-update', id)
+        } finally {
+          ipcRenderer.removeListener('desktop:update-progress', progress)
+        }
+      },
+      downloadClientUpdate: (id: string) => invoke('desktop:download-update', id),
+      watchUpdateRequest: (onRequest: () => void) => {
+        const listener = () => onRequest()
+        ipcRenderer.on('desktop:update-request', listener)
+        return () => ipcRenderer.removeListener('desktop:update-request', listener)
+      },
       loadAbout: () => invoke('desktop:about'),
       loadConversationPreviews: (ids: string[]) => invoke('desktop:conversation-previews', ids),
       loadAgentConversation: (agentId: string, before?: number) =>

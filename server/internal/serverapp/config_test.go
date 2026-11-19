@@ -123,6 +123,7 @@ func TestLoadConfig(t *testing.T) {
 		{"来源包含路径", func(c *Config) { c.AdminOrigin += "/admin" }},
 		{"缺少监听端口", func(c *Config) { c.Address = "127.0.0.1" }},
 		{"自动监听端口", func(c *Config) { c.Address = "127.0.0.1:0" }},
+		{"客户端发布目录无效", func(c *Config) { c.ClientReleaseDir = "../releases" }},
 		{"相对文件路径", func(c *Config) { c.IdentityKeyFile = "identity.key" }},
 		{"截图额度不足一张", func(c *Config) { c.Runs.Images.MaxUserBytes = 1 }},
 		{"截图数量无界", func(c *Config) { c.Runs.Images.MaxUserImages = 4097 }},

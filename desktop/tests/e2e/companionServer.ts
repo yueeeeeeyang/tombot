@@ -300,6 +300,9 @@ export class Companion {
 
   private registerRoutes(): void {
     this.register('session', () => this.backend.session())
+    this.register('check-update', () => this.backend.checkClientUpdate())
+    this.register('install-update', () => this.backend.installClientUpdate('', () => undefined))
+    this.register('download-update', () => this.backend.downloadClientUpdate())
     this.register('about', () => this.backend.loadAbout())
     this.register('user-profile', () => this.backend.loadUserProfile())
     this.register('load-workspace', () => ({ workspace: this.workspace(), pristine: false }))

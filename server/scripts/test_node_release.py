@@ -18,13 +18,14 @@ class NodeReleaseTest(unittest.TestCase):
         self.archive = Path(self.directory.name) / 'node.tar.gz'
         self.runtime = json.loads((node_release.ROOT / 'deploy/runtime/linux.json').read_bytes())
         header = bytearray(64)
-        header[:6] = b'\x7fELF\x02\x01'
+        header[:7] = b'\x7fELF\x02\x01\x01'
+        header[16:18] = (2).to_bytes(2, 'little')
         header[18:20] = (62).to_bytes(2, 'little')
         self.contents = {
             'tomnode': bytes(header), 'computer-image.tar': b'archive-fixture',
             'node-install.example.json': b'{}\n', '安装说明.txt': '测试安装说明'.encode(),
         }
-        self.release = {'version': 1, 'platform': 'linux/amd64', 'image_reference': 'example.test/computer@sha256:' + hashlib.sha256(b'image-fixture').hexdigest(), 'archive_sha256': hashlib.sha256(self.contents['computer-image.tar']).hexdigest(), 'docker': self.runtime}
+        self.release = {'version': 1, 'label': '1.2.3', 'platform': 'linux/amd64', 'image_reference': 'example.test/computer@sha256:' + hashlib.sha256(b'image-fixture').hexdigest(), 'archive_sha256': hashlib.sha256(self.contents['computer-image.tar']).hexdigest(), 'docker': self.runtime}
 
     def bundle(self, missing=None, extra=None, changed=None):
         self.contents['node-release.json'] = json.dumps(self.release).encode()
@@ -61,7 +62,7 @@ class NodeReleaseTest(unittest.TestCase):
             node_release.verify(self.archive)
 
     def test_rejects_manifest_mismatch(self):
-        for key, value in (('platform', 'linux/arm64'), ('image_reference', 'computer:latest'), ('archive_sha256', '0' * 64), ('version', 2), ('unknown', True)):
+        for key, value in (('label', '../invalid'), ('platform', 'linux/arm64'), ('image_reference', 'computer:latest'), ('archive_sha256', '0' * 64), ('version', 2), ('unknown', True)):
             with self.subTest(key=key):
                 original = dict(self.release)
                 self.release[key] = value

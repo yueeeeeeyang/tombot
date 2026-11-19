@@ -1,15 +1,12 @@
-// Package nodefleet 管理签名节点发布包和每节点的升级任务，不接收命令、下载地址或宿主路径。
+// Package nodefleet 管理由管理员上传并通过校验的节点包和每节点的升级任务，不接收命令、下载地址或宿主路径。
 package nodefleet
 
 import (
 	"context"
-	"crypto/ed25519"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
-	"strconv"
 
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/infra/ids"
@@ -22,10 +19,10 @@ const Directory = "/var/lib/tombot-node-releases"
 type Service struct {
 	DB        *postgres.Database
 	Directory string
-	Key       func() (ed25519.PublicKey, error)
 }
 
-var ErrInput = errors.New("发布参数、文件摘要或签名无效")
+var ErrUploadBusy = errors.New("该账号有另一项上传正在处理，请稍后重试")
+var ErrInput = errors.New("发布参数或分片摘要无效")
 var ErrConflict = errors.New("发布包尚未上传完成、节点不存在或已有升级任务")
 
 type Release struct {
@@ -40,82 +37,25 @@ type Job struct {
 	Label string `json:"label"`
 }
 
-func (s Service) publish(ctx context.Context, e noderelease.Envelope) (Release, error) {
-	key, err := s.Key()
-	if err != nil {
-		return Release{}, err
-	}
-	m, err := e.Verify(key)
-	if err != nil {
-		return Release{}, ErrInput
-	}
-	r := Release{noderelease.Digest(e.Payload), m.Label, m.Platform}
-	body, err := json.Marshal(e)
-	if err != nil {
-		return Release{}, err
-	}
-	err = s.DB.Platform(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `INSERT INTO tombot.node_releases(id,label,platform,envelope) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`, r.ID, r.Label, r.Platform, body)
-		return err
-	})
-	return r, err
-}
-func (s Service) manifest(ctx context.Context, id string) (noderelease.Envelope, noderelease.Manifest, error) {
-	var e noderelease.Envelope
+func (s Service) manifest(ctx context.Context, id string) (artifact string, m noderelease.Manifest, err error) {
 	if !noderelease.ValidDigest(id) {
-		return e, noderelease.Manifest{}, ErrInput
+		return "", m, ErrInput
 	}
-	var b []byte
-	err := s.DB.Platform(ctx, func(tx *sql.Tx) error {
-		return tx.QueryRowContext(ctx, `SELECT envelope FROM tombot.node_releases WHERE id=$1`, id).Scan(&b)
+	var encoded []byte
+	err = s.DB.Platform(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx, `SELECT r.artifact,a.manifest FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE r.id=$1`, id).Scan(&artifact, &encoded)
 	})
 	if err != nil {
-		return e, noderelease.Manifest{}, err
+		return "", m, err
 	}
-	if json.Unmarshal(b, &e) != nil || noderelease.Digest(e.Payload) != id {
-		return e, noderelease.Manifest{}, ErrInput
+	if err = json.Unmarshal(encoded, &m); err != nil {
+		return "", m, err
 	}
-	key, err := s.Key()
-	if err != nil {
-		return e, noderelease.Manifest{}, err
-	}
-	m, err := e.Verify(key)
-	return e, m, err
+	return artifact, m, m.Validate(artifact)
 }
-func (s Service) savePart(ctx context.Context, id, ordinal string, part []byte) (failure error) {
-	_, m, err := s.manifest(ctx, id)
-	if err != nil {
-		return err
-	}
-	i, err := strconv.Atoi(ordinal)
-	if err != nil || i < 0 || i >= len(m.Chunks) || int64(len(part)) != m.PartSize(i) || noderelease.Digest(part) != m.Chunks[i] {
-		return ErrInput
-	}
-	file, err := os.CreateTemp(s.Directory, ".upload-")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if e := os.Remove(file.Name()); !errors.Is(e, os.ErrNotExist) {
-			failure = errors.Join(failure, e)
-		}
-	}()
-	_, err = file.Write(part)
-	err = errors.Join(err, file.Sync(), file.Close())
-	if err != nil {
-		return err
-	}
-	if err = os.Rename(file.Name(), filepath.Join(s.Directory, m.Chunks[i])); err != nil {
-		return err
-	}
-	dir, err := os.Open(s.Directory)
-	if err != nil {
-		return err
-	}
-	return errors.Join(dir.Sync(), dir.Close())
-}
+
 func (s Service) dispatch(ctx context.Context, id string, nodes []string, all bool, actor, requestID string) error {
-	_, m, err := s.manifest(ctx, id)
+	artifact, m, err := s.manifest(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -129,14 +69,9 @@ func (s Service) dispatch(ctx context.Context, id string, nodes []string, all bo
 		}
 		seen[n] = true
 	}
-	for i, d := range m.Chunks {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		f, err := os.Lstat(filepath.Join(s.Directory, d))
-		if err != nil || !f.Mode().IsRegular() || f.Size() != m.PartSize(i) {
-			return ErrConflict
-		}
+	info, err := os.Lstat(s.archivePath(artifact))
+	if err != nil || !info.Mode().IsRegular() || info.Size() != m.Size {
+		return ErrConflict
 	}
 	return s.DB.Platform(ctx, func(tx *sql.Tx) error {
 		// 按固定节点顺序协调并发下发；实际分配和验收在节点申请维护时封闭。

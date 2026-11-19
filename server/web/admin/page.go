@@ -130,7 +130,7 @@ func isPagePath(value string) bool {
 	}
 	if len(parts) == 1 {
 		switch parts[0] {
-		case "users", "administrators", "computer-nodes", "model-providers", "model-policies":
+		case "users", "administrators", "computer-nodes", "client-updates", "model-providers", "model-policies":
 			return true
 		}
 	}

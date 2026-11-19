@@ -68,9 +68,10 @@ type Request struct {
 }
 
 type Receipt struct {
-	NodeID  string `json:"node_id"`
-	ImageID string `json:"image_id"`
-	State   string `json:"state"`
+	Recovery *RecoveryInspection `json:"recovery,omitempty"`
+	NodeID   string              `json:"node_id"`
+	ImageID  string              `json:"image_id"`
+	State    string              `json:"state"`
 }
 
 // Verify 同时检查新鲜度、证书有效期和私钥持有证明；公开证书本身不构成接入授权。

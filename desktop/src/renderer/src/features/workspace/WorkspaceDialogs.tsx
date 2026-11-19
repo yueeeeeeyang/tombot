@@ -1,3 +1,4 @@
+import manifest from '../../../../../package.json' with { type: 'json' }
 import { GroupAvatar } from '../../components/GroupAvatar'
 import type { GroupSummary } from '../desktop/backend'
 import type { ConnectionStatus } from '../session/useConnectionStatus'
@@ -231,7 +232,7 @@ export function WorkspaceDialog({
         <Avatar preset="bombay" size="large" starred />
         <h3>TomBot</h3>
         <p>让每个想法，都有一个好搭档。</p>
-        <span>版本 0.1.0</span>
+        <span>版本 {manifest.version}</span>
       </div>
       <div className="workspace-stats">
         <div>

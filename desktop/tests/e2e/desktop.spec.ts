@@ -475,8 +475,8 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   })
   await chooseOption('主题', '深色')
   await chooseOption('语言', '简体中文')
-  await window.getByRole('button', { name: '关于', exact: true }).click()
-  await expect(settingsDialog.getByRole('heading', { name: '关于', exact: true })).toBeVisible()
+  await window.getByRole('button', { name: '更新', exact: true }).click()
+  await expect(settingsDialog.getByRole('heading', { name: '更新', exact: true })).toBeVisible()
   await expect(settingsDialog).toContainText(companion.url)
   await expect(window.getByLabel('API 密钥')).toHaveCount(0)
   await expect(window.getByRole('spinbutton', { name: /最大输出长度/ })).toHaveCount(0)
@@ -485,7 +485,7 @@ test('参考图设置页和搜索框的布局与交互', async () => {
     element.scrollTop = 0
   })
   await window.screenshot({
-    path: testInfo.outputPath('desktop-settings-about.png'),
+    path: testInfo.outputPath('desktop-settings-updates.png'),
     scale: 'css',
   })
   await window.keyboard.press('Escape')
@@ -507,7 +507,7 @@ test('参考图设置页和搜索框的布局与交互', async () => {
 
   await setPageSize(860, 640)
   await expect.poll(() => window.evaluate(() => innerHeight)).toBe(640)
-  await window.getByRole('button', { name: '关于', exact: true }).click()
+  await window.getByRole('button', { name: '更新', exact: true }).click()
   expect(
     await settingsDialog.evaluate((element) => element.scrollWidth <= element.clientWidth),
   ).toBe(true)

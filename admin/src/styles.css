@@ -1182,3 +1182,8 @@ section + section {
   flex-shrink: 0;
   color: var(--text-secondary);
 }
+
+.release-notes {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -2,6 +2,8 @@
 Description=TomBot 受信宿主电脑节点
 Wants=network-online.target
 After=network-online.target
+# 关机时保留 Docker 供节点收尾，首次安装仍由节点引导 Docker。
+After=docker.service
 
 [Service]
 Type=notify

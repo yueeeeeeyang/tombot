@@ -1,6 +1,6 @@
 {
   "name": "tombot-desktop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "TomBot 桌面客户端",
   "private": true,
   "type": "module",
@@ -19,7 +19,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test"
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test",
+    "dist:all": "node scripts/package-clients.mjs",
+    "signing:init": "node scripts/initialize-signing.mjs",
+    "dist": "npm run build && electron-builder --config electron-builder.config.mjs --publish never"
   },
   "overrides": {
     "minimatch": "11.0.5"
@@ -35,6 +38,7 @@
     "zod": "4.6.7"
   },
   "devDependencies": {
+    "@electron/osx-sign": "1.3.3",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.65.0",
     "@testing-library/jest-dom": "7.0.1",
@@ -45,6 +49,7 @@
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.3.0",
     "electron": "45.2.3",
+    "electron-builder": "26.18.0",
     "electron-vite": "6.0.0",
     "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",

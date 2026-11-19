@@ -11,7 +11,7 @@ import (
 	"io.yueyang/tom/internal/computer"
 )
 
-const AgentPath = "/api/v2/node-update-agent"
+const AgentPath = "/api/v2/node-update-agent/package"
 
 type Call struct {
 	Node     string `json:"node"`
@@ -28,9 +28,10 @@ type SignedCall struct {
 	Signature   []byte `json:"signature"`
 }
 type Assignment struct {
+	Manifest Manifest `json:"manifest"`
 	Job      string   `json:"job"`
 	Release  string   `json:"release"`
-	Envelope Envelope `json:"envelope"`
+	Artifact string   `json:"artifact"`
 }
 
 func (c Call) message() ([]byte, error) {

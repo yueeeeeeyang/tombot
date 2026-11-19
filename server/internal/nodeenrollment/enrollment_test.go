@@ -275,8 +275,11 @@ func TestClientEnrollmentAndRestart(t *testing.T) {
 		if !registered && received != token {
 			return Receipt{}, ErrUnauthorized
 		}
+		if r.Claim.Maintenance != nil && r.Claim.Maintenance.InspectRelease == strings.Repeat("a", 64) && received == "" {
+			return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: "recovery_inspected", Recovery: &RecoveryInspection{State: "clear"}}, nil
+		}
 		registered = true
-		return Receipt{claim.NodeID, claim.Registration.ImageID, "registered"}, nil
+		return Receipt{NodeID: claim.NodeID, ImageID: claim.Registration.ImageID, State: "registered"}, nil
 	}), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
@@ -304,6 +307,11 @@ func TestClientEnrollmentAndRestart(t *testing.T) {
 	if reads != 1 || requests != 3 {
 		t.Fatal("认证挑战或重启次数不正确", reads, requests)
 	}
+	inspection, err := InspectRecovery(t.Context(), claim.NodeID, configuration, pair, strings.Repeat("a", 64))
+	if err != nil || inspection == nil || inspection.State != "clear" || requests != 4 {
+		t.Fatal("已绑定节点未取得一次签名恢复检查回执", inspection, err)
+	}
+
 }
 
 func TestEnrollmentHTTPBounds(t *testing.T) {

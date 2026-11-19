@@ -273,6 +273,10 @@ test.beforeEach(async ({ page }) => {
             max_file_bytes: 16777216,
           }),
           previewChatFile: async () => ({ file }),
+          checkClientUpdate: async () => null,
+          installClientUpdate: async () => true,
+          downloadClientUpdate: async () => false,
+          watchUpdateRequest: () => () => undefined,
           loadAbout: async () => ({
             clientVersion: '0.1.0',
             serverUrl: session.serverUrl,
@@ -347,7 +351,7 @@ test('返回底部一次点击生效且按钮居中，输入区域透明，私�
   await page.screenshot({ path: 'test-results/screenshots/dm-spacing.png' })
 })
 
-test('群聊提及、头像、资料卡和关于页符合布局要求', async ({ page }) => {
+test('群聊提及、头像、资料卡和更新页符合布局要求', async ({ page }) => {
   await expect(page.getByRole('button', { name: '项目讨论', exact: true })).toContainText(
     '群聊的最后一条消息',
   )
@@ -375,13 +379,13 @@ test('群聊提及、头像、资料卡和关于页符合布局要求', async ({
   await expect(page.getByRole('menuitem')).toHaveCount(4)
   await page.keyboard.press('Escape')
   await page.getByRole('button', { name: '打开设置' }).click()
-  await page.getByRole('button', { name: '关于', exact: true }).click()
-  await expect(page.getByRole('region', { name: '关于' })).toContainText('test-build')
-  await expect(page.getByRole('button', { name: '关于', exact: true })).toHaveCSS(
+  await page.getByRole('button', { name: '更新', exact: true }).click()
+  await expect(page.getByRole('region', { name: '更新' })).toContainText('test-build')
+  await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCSS(
     'background-color',
     'rgb(231, 231, 231)',
   )
-  await page.screenshot({ path: 'test-results/screenshots/about.png' })
+  await page.screenshot({ path: 'test-results/screenshots/updates.png' })
 })
 
 test('原生拖拽群聊到机器人分组后刷新保持分类', async ({ page }) => {
@@ -462,13 +466,13 @@ test('设置错误位于标题与内容之间，重试按钮保持在提示右�
     })
   })
   await page.getByRole('button', { name: '打开设置' }).click()
-  await page.getByRole('button', { name: '关于', exact: true }).click()
-  const pane = page.getByRole('region', { name: '关于' })
+  await page.getByRole('button', { name: '更新', exact: true }).click()
+  const pane = page.getByRole('region', { name: '更新' })
   const alert = pane.getByRole('alert')
   await expect(alert).toContainText('服务端版本读取失败')
-  const heading = (await pane.getByRole('heading', { name: '关于' }).boundingBox())!
+  const heading = (await pane.getByRole('heading', { name: '更新' }).boundingBox())!
   const notice = (await alert.boundingBox())!
-  const content = (await pane.locator('.settings-about').boundingBox())!
+  const content = (await pane.locator('.settings-versions').boundingBox())!
   expect(notice.y).toBeGreaterThanOrEqual(heading.y + heading.height)
   expect(notice.y + notice.height).toBeLessThan(content.y)
   const retry = alert.getByRole('button', { name: '重试读取版本' })
@@ -476,7 +480,7 @@ test('设置错误位于标题与内容之间，重试按钮保持在提示右�
   const message = (await alert.locator('span').boundingBox())!
   expect(button.x).toBeGreaterThan(message.x + message.width)
   expect(Math.abs(button.y + button.height / 2 - message.y - message.height / 2)).toBeLessThan(1)
-  await page.screenshot({ path: 'test-results/screenshots/about-error.png' })
+  await page.screenshot({ path: 'test-results/screenshots/updates-error.png' })
   await retry.click()
   await expect(pane).toContainText('test-build')
   await expect(alert).toHaveCount(0)

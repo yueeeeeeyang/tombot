@@ -28,7 +28,7 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 
 | 包内路径 | 用途与部署位置 |
 | --- | --- |
-| `manifest.json` | 格式版本 8，平台、源码摘要及全部文件的 SHA-256、大小和权限 |
+| `manifest.json` | 格式版本 9，平台、源码摘要及全部文件的 SHA-256、大小和权限 |
 | `linux-<架构>/bin/tomd` | 内置管理平台、启动时自动迁移数据库的非 root API/Worker，安装到 `/usr/local/bin/tomd` |
 | `linux-<架构>/bin/tomnode` | 节点与一键安装、配置生成、检查、宿主和镜像准备，自动安装到 `/usr/lib/tombot/tomnode` |
 | `linux-<架构>/computer-image/` | 自包含的对应架构 Docker 构建上下文，含四个容器内程序；不安装到宿主命令路径 |
@@ -61,7 +61,7 @@ make verify-release RELEASE_VERIFY_ARGS='--archive /绝对路径/tombot-0.2.0-rc
 
 `make release` 由分散交叉编译文件改为单个完整双架构压缩包，不再生成旧 `bin/tomd-linux-*` 布局；调用者使用上表路径。没有旧布局兼容层，开发用 `make build` 保留本机编译用途。
 
-格式版本 8 新增独立节点更新服务和定时器，继续将管理平台嵌入 `tomd`，不交付独立 `admin/` 文件集合。构建器验证前端入口、资源数量与容量，并逐项比对两个架构的二进制确实包含本次构建资源；归档核验使用受信整体摘要和文件散列校验完整二进制，拒绝格式 1–7、旧前端目录及其他未知文件。部署机无需 Node.js，更新页面只需替换 `tomd` 并重启。
+格式版本 9 将节点校验清单封装在离线包内，继续将管理平台嵌入 `tomd`，不交付独立 `admin/` 文件集合。构建器验证前端入口、资源数量与容量，并逐项比对两个架构的二进制确实包含本次构建资源；归档核验使用受信整体摘要和文件散列校验完整二进制，拒绝格式 1–8、旧前端目录及其他未知文件。部署机无需 Node.js，更新页面只需替换 `tomd` 并重启。
 
 本次无数据库变更。升级前备份原二进制、配置与前端目录，删除 `server.json` 中的 `admin_directory` 后替换程序。旧字段拒绝解析，不回退外部目录。回滚旧版本时恢复配套二进制、配置和旧前端目录；其他数据库与节点协议升级仍按各自迁移要求处理。
 
@@ -90,12 +90,27 @@ Agent 私有标准流升级为协议 3，增加本地工具授权、结果确认
 
 升级须停止接单、排空原 Agent 与会话，使用同一版本的服务端、节点、电脑代理和新镜像重建阶段环境；不要让协议 3 服务端调度旧 Agent。按项目约定不提供旧数据迁移。回滚先排空新运行并保留完整记录，再恢复原组件、镜像、配置与一致快照；不能降协议继续处理未确认动作。本地构建和单项验证不能替代首次安装、开户、cgroup、备份恢复与发布验收。
 
-## 节点离线安装包
+## Linux x64 一键打包
 
-完整服务发布包格式 8 与节点离线包格式 1 分开核验。节点包自带电脑镜像，终端用户无需镜像仓库账号或镜像参数。先使用当前工作树构建、验收相同架构的镜像，然后执行：
+仅需交付 Linux x64 时，在仓库根目录执行一条命令，生成服务端程序和节点离线包。
 
 ```sh
-make node-release NODE_RELEASE_ARGS="--image tombot-computer:release-amd64 --architecture amd64 --runtime deploy/runtime/linux.json --output /绝对路径/tomnode-linux-amd64-offline.tar.gz"
+make -C server release-linux-amd64 RELEASE_ARGS='--version 0.2.0-rc.1 --output-dir /绝对路径/tombot-0.2.0-rc.1-linux-amd64'
+```
+
+也可以直接执行 `PYTHONDONTWRITEBYTECODE=1 python3 server/scripts/build_linux_amd64.py` 并传入相同参数。将版本替换为本次发布的版本。输出目录须为新目录，父目录须已存在。所有成品均来自同一份当前工作树快照，包含未提交的修改。
+
+- `tomd` 是 Linux x64 可执行文件，内嵌本次构建的管理端。打包命令的 `--version` 写入二进制的服务版本信息。
+- `tomnode-linux-amd64-offline.tar.gz` 包含节点程序、电脑镜像、运行清单、校验清单与安装说明。生成时会比对镜像内代理与源码编译结果，并核验成品归档。
+
+构建机需要 Go、Node.js/npm、Python 3，以及支持 `linux/amd64` 的 Docker Buildx 和 OCI 镜像存储。首次构建需访问依赖软件源，并为镜像及压缩中间文件预留磁盘空间。电脑镜像保留在本地 Docker，构建回执会给出镜像标签、源码摘要与成品路径。升级与回滚仍按上文的配套版本和一致性备份要求执行。
+
+## 节点离线安装包
+
+完整服务发布包格式 9 与节点离线包格式 1 分开核验。节点包自带电脑镜像，终端用户无需镜像仓库账号或镜像参数。先使用当前工作树构建、验收相同架构的镜像，然后执行：
+
+```sh
+make node-release NODE_RELEASE_ARGS="--label 1.2.0 --image tombot-computer:release-amd64 --architecture amd64 --runtime deploy/runtime/linux.json --output /绝对路径/tomnode-linux-amd64-offline.tar.gz"
 make verify-node-release NODE_RELEASE_VERIFY_ARGS="/绝对路径/tomnode-linux-amd64-offline.tar.gz"
 ```
 
@@ -103,21 +118,6 @@ make verify-node-release NODE_RELEASE_VERIFY_ARGS="/绝对路径/tomnode-linux-a
 
 Docker 和 Ubuntu 宿主软件不在镜像归档中，仍从官方软件源安装。离线镜像不等于宿主完全断网安装，也不代表真实 Linux 宿主的 systemd、挂载配额和 cgroup 验收通过。首次安装和既有节点维护升级、回滚边界见 [NODE.md](NODE.md)。
 
-## 签发管理平台可下发的节点包
+## 上传与回滚
 
-使用上方已核验的完整离线包，在发布机（OpenSSL 3）执行。首次离线生成 Ed25519 密钥对；私钥留在发布机，不随包上传。公钥通过可信安装介质交付，不能由升级任务更换。
-
-```sh
-umask 077
-openssl genpkey -algorithm ED25519 -out node-release-signing.pem
-openssl pkey -in node-release-signing.pem -pubout -out node-release.pub
-```
-
-每次发布只运行签发命令，继续使用原签名密钥：
-
-```sh
-python3 scripts/sign_node_release.py tomnode-linux-amd64-offline.tar.gz \
-  --label 1.2.0 --key node-release-signing.pem --output tomnode-linux-amd64.signed.json
-```
-
-将归档与对应的签名 JSON 一起交给平台管理员。签名绑定版本名、架构、大小、顺序分片和包内校验清单。服务发布包格式 8，节点离线包仍是格式 1。操作入口、恢复和回滚见[节点运维](NODE.md#管理平台远程升级)。
+在管理平台的「电脑节点 → 远程升级」上传完整的离线包。版本标签和架构在 `node-release.json` 中，文件摘要在包内的 `SHA256SUMS` 中。服务端校验通过后登记版本，节点从其已绑定的服务端取得校验记录。日常发布只交付这一个离线包。服务端与旧节点首次切换、历史包处理及回滚见[节点运维](NODE.md#管理平台远程升级)。

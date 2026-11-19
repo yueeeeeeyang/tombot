@@ -1,5 +1,6 @@
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   dialog,
   Menu,
@@ -36,8 +37,6 @@ function pinUserDataDirectory(): void {
   }
   app.setPath('userData', root)
 }
-
-pinUserDataDirectory()
 
 /** 图标损坏时仍允许访问聊天与登录界面，并记录默认图标的回退原因。 */
 function loadApplicationIcon(): NativeImage | undefined {
@@ -130,6 +129,9 @@ async function createWindow(icon: NativeImage | undefined): Promise<void> {
   }
 }
 
+// 安装包启动器也须遵守客户端的渲染沙盒设置。
+if (process.platform === 'linux' && app.isPackaged) app.enableSandbox()
+pinUserDataDirectory()
 // 单实例避免两个窗口同时覆盖本地工作空间。
 const hasInstanceLock = app.requestSingleInstanceLock()
 if (!hasInstanceLock) {
@@ -145,9 +147,27 @@ if (!hasInstanceLock) {
   app
     .whenReady()
     .then(async () => {
+      if (process.platform === 'darwin') {
+        // 超时关闭本机服务之后，系统更新器仍可能异步报告上一次请求的错误。
+        autoUpdater.on('error', () => console.warn('系统更新器报告安装异常，应用=TomBot'))
+      }
       const icon = loadApplicationIcon()
       if (icon) app.dock?.setIcon(icon)
-      registerDesktopIpc()
+      registerDesktopIpc(async (install) => {
+        const window = BrowserWindow.getAllWindows()[0]
+        if (!window || window.isDestroyed()) throw new Error('升级窗口已关闭，请重新检查更新。')
+        // 冻结交互后复用页面已有的离开检查，避免在下载安装期间产生的新修改随重启丢失。
+        window.setEnabled(false)
+        try {
+          const canLeave = await window.webContents.executeJavaScript(
+            "window.dispatchEvent(new Event('beforeunload', {cancelable: true}))",
+          )
+          if (!canLeave) throw new Error('有未保存的修改，请保存后再点立即升级。')
+          await install()
+        } finally {
+          if (!window.isDestroyed()) window.setEnabled(true)
+        }
+      })
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
           ...(process.platform === 'darwin'
@@ -155,7 +175,13 @@ if (!hasInstanceLock) {
                 {
                   label: 'TomBot',
                   submenu: [
-                    { role: 'about' as const, label: '关于 TomBot' },
+                    {
+                      label: '检查更新…',
+                      click: () =>
+                        BrowserWindow.getAllWindows()[0]?.webContents.send(
+                          'desktop:update-request',
+                        ),
+                    },
                     { role: 'quit' as const, label: '退出 TomBot' },
                   ],
                 },

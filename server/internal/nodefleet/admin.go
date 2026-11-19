@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/httpjson"
@@ -31,6 +32,7 @@ func fail(w http.ResponseWriter, status int, code, msg string, logger *slog.Logg
 }
 func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logger *slog.Logger) (http.Handler, error) {
 	uploadSlots := make(chan struct{}, 8)
+	verifySlots := make(chan struct{}, 2)
 	return gate.Protect("admin", func(w http.ResponseWriter, r *http.Request, p identity.Principal, a identity.Attempt) {
 		ctx := r.Context()
 		if err := auth.RequireAdmin(ctx, p, r.Method != "GET"); err != nil {
@@ -47,12 +49,42 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 		switch {
 		case r.Method == "GET" && path == "status":
 			result, err = s.status(ctx)
-		case r.Method == "POST" && path == "releases":
-			var e noderelease.Envelope
-			if httpjson.Decode(r, &e, noderelease.MaxEnvelope) != nil {
+		case r.Method == "POST" && path == "uploads":
+			var input struct {
+				Artifact string `json:"artifact"`
+				Size     int64  `json:"size"`
+			}
+			if httpjson.Decode(r, &input, 1024) != nil {
 				err = ErrInput
 			} else {
-				result, err = s.publish(ctx, e)
+				result, err = s.begin(p.UserID, input.Artifact, input.Size)
+			}
+		case r.Method == "POST" && path == "releases":
+			var input struct {
+				Artifact string `json:"artifact"`
+			}
+			if httpjson.Decode(r, &input, 1024) != nil {
+				err = ErrInput
+				break
+			}
+			select {
+			case verifySlots <- struct{}{}:
+				defer func() { <-verifySlots }()
+			default:
+				fail(w, 429, "UPDATE_BUSY", "正在校验其他升级包，请稍后重试", logger)
+				return
+			}
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				err = errors.New("升级校验缺少请求时限")
+				break
+			}
+			if err = http.NewResponseController(w).SetWriteDeadline(deadline.Add(time.Second)); err != nil && !errors.Is(err, http.ErrNotSupported) {
+				break
+			}
+			result, err = s.publish(ctx, p.UserID, input.Artifact)
+			if err == nil {
+				logger.Info("节点升级包已校验", "actor_id", p.UserID, "request_id", a.RequestID, "artifact", input.Artifact)
 			}
 		case r.Method == "PUT" && strings.HasPrefix(path, "parts/"):
 			select {
@@ -63,14 +95,18 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 				return
 			}
 			parts := strings.Split(path, "/")
-			if len(parts) != 3 || r.Header.Get("Content-Type") != "application/octet-stream" {
+			if len(parts) != 4 || r.Header.Get("Content-Type") != "application/octet-stream" {
 				err = ErrInput
 				break
 			}
 			var b []byte
 			b, err = io.ReadAll(http.MaxBytesReader(w, r.Body, noderelease.ChunkSize))
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				err = ErrInput
+			}
 			if err == nil {
-				err = s.savePart(ctx, parts[1], parts[2], b)
+				err = s.savePart(p.UserID, parts[1], parts[2], parts[3], b)
 			}
 		case r.Method == "POST" && path == "dispatch":
 			var body struct {
@@ -89,13 +125,17 @@ func (s Service) Admin(gate *authapi.Handler, auth nodecatalog.Authorizer, logge
 		}
 		if err != nil {
 			switch {
+			case errors.Is(err, noderelease.ErrPackage):
+				fail(w, 400, "PACKAGE_INVALID", "离线包校验失败，请选择完整的标准节点升级包", logger)
+			case errors.Is(err, ErrUploadBusy):
+				fail(w, 409, "UPDATE_BUSY", ErrUploadBusy.Error(), logger)
 			case errors.Is(err, ErrInput):
 				fail(w, 400, "INPUT_INVALID", ErrInput.Error(), logger)
 			case errors.Is(err, ErrConflict), errors.Is(err, sql.ErrNoRows):
 				fail(w, 409, "UPDATE_CONFLICT", ErrConflict.Error(), logger)
 			default:
 				logger.Error("节点发布操作失败", "request_id", a.RequestID, "action", r.Method, "reason", err)
-				fail(w, 503, "UPDATE_UNAVAILABLE", "升级服务不可用，请检查发布公钥、存储或服务端日志", logger)
+				fail(w, 503, "UPDATE_UNAVAILABLE", "升级服务不可用，请检查存储或服务端日志", logger)
 			}
 			return
 		}
@@ -111,7 +151,7 @@ type dashboard struct {
 func (s Service) status(ctx context.Context) (dashboard, error) {
 	value := dashboard{[]Release{}, []Job{}}
 	err := s.DB.Platform(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id,label,platform FROM tombot.node_releases ORDER BY created_at DESC LIMIT 50`)
+		rows, err := tx.QueryContext(ctx, `SELECT id,label,platform FROM tombot.node_releases JOIN tombot.node_release_archives USING(artifact) ORDER BY created_at DESC LIMIT 50`)
 		if err != nil {
 			return err
 		}

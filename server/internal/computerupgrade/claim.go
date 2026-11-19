@@ -120,7 +120,7 @@ func makePlan(ctx context.Context, tx *sql.Tx, current computer.Specification, s
  (user_id,computer_id,node_id,source_image_id,target_image_id,source_generation,source_container_id,source_specification,target_specification,state)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'draining') ON CONFLICT (user_id) DO UPDATE SET
  source_image_id=$4,target_image_id=$5,source_generation=$6,source_container_id=$7,source_specification=$8,target_specification=$9,
- state='draining',attempt_count=0,lease_expires_at=NULL,next_attempt_at=clock_timestamp(),created_at=clock_timestamp(),updated_at=clock_timestamp()`,
+ state='draining',attempt_count=0,recovery_release=NULL,last_failure_code=NULL,lease_expires_at=NULL,next_attempt_at=clock_timestamp(),created_at=clock_timestamp(),updated_at=clock_timestamp()`,
 		current.UserID, current.ComputerID, current.NodeID, sourceImage, targetImage, current.Generation, containerID, source, encoded); err != nil {
 		return err
 	}

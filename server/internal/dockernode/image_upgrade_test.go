@@ -118,7 +118,7 @@ func TestImageUpgradeResumesOldRetirementAndUnknownCreation(t *testing.T) {
 	})
 	restarted := *f.node
 	restarted.journal = journal
-	if err := restarted.restoreUserEgress(ctx, request.Current.UserID); err != nil {
+	if err := restarted.restoreUserEgress(ctx, sessionLogger(), request.Current.UserID); err != nil {
 		t.Fatal("节点重启未跳过正在退役的实例", err)
 	}
 	f.engine.removeVolumeError = nil

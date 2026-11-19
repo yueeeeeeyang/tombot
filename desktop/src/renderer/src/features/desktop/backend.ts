@@ -103,6 +103,12 @@ export interface AgentConversation extends MessagePage {
  * 测试用的内存实现会同步保存；真正的服务调用返回 Promise。
  */
 export type ConversationPreview = { conversation_id: string; sequence: number; content: string }
+export type ClientUpdate = {
+  id: string
+  version: string
+  notes: string
+  installUnavailable?: string
+}
 export type ApplicationAbout = {
   clientVersion: string
   serverUrl: string
@@ -112,6 +118,10 @@ export type ApplicationAbout = {
 
 export interface DesktopBackend extends Partial<ConsoleBackend> {
   loadConversationPreviews: (ids: string[]) => Promise<ConversationPreview[]>
+  checkClientUpdate: () => Promise<ClientUpdate | null>
+  installClientUpdate: (id: string, onProgress: (message: string) => void) => Promise<boolean>
+  downloadClientUpdate: (id: string) => Promise<boolean>
+  watchUpdateRequest: (onRequest: () => void) => () => void
   loadAbout: () => Promise<ApplicationAbout>
   readClipboardFiles?: () => Promise<Array<{ name: string; type: string; bytes: Uint8Array }>>
   savesSynchronously?: boolean

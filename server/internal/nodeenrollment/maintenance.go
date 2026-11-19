@@ -13,8 +13,10 @@ var ErrMaintenanceConflict = errors.New("节点维护状态冲突，请检查在
 
 // MaintenanceRequest 随登记内容一起签名，旧接入请求不能被换作停机授权。
 type MaintenanceRequest struct {
-	OperationID string `json:"operation_id"`
-	Finish      bool   `json:"finish"`
+	InspectRelease string          `json:"inspect_release,omitempty"`
+	Recovery       *RecoveryTarget `json:"recovery,omitempty"`
+	OperationID    string          `json:"operation_id"`
+	Finish         bool            `json:"finish"`
 }
 
 // reserveUpgrade 仅允许原证书持有者操作本节点。失联保留维护窗口，避免断电后恢复时与新分配竞争。
@@ -52,7 +54,14 @@ func reserveUpgrade(ctx context.Context, tx *sql.Tx, catalog *nodecatalog.Servic
 		if err := catalog.RequireNoVerificationLeaseInTransaction(ctx, tx); err != nil {
 			return "", err
 		}
-		if claim.SupportsComputerUpgrades {
+		if m.Recovery != nil {
+			if !claim.SupportsComputerUpgrades || image != currentImage || m.Recovery.validate() != nil {
+				return "", ErrConflict
+			}
+			if err := requeueRecovery(ctx, tx, claim.NodeID, image, *m.Recovery, requestID); err != nil {
+				return "", err
+			}
+		} else if claim.SupportsComputerUpgrades {
 			// 中央迁移与维护共用节点行锁，旧计划可收尾，下一次维护不能打断原电脑的镜像切换。
 			var pending bool
 			if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.computer_image_upgrades

@@ -1,6 +1,5 @@
 [Unit]
 Description=TomBot 节点发布包更新
-ConditionPathExists=/etc/tombot/node-release.pub
 After=network-online.target
 Wants=network-online.target
 [Service]

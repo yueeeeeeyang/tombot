@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 
 	"github.com/oklog/ulid/v2"
 )
 
-// restoreEgress 在开放节点前逐批恢复端点；不恢复旧执行租约、不重建容器，也不将监听成功当作电脑就绪。
-// 调用方持有节点生命周期及执行服务锁，并已清理全部旧执行；失败时必须关闭已恢复端点并终止启动。
-func (node *Runtime) restoreEgress(ctx context.Context) (result error) {
+// restoreEgress 在开放节点前逐批恢复原电脑和出网端点。调用方已持有节点服务锁并关闭旧执行。
+// 单台电脑恢复失败时保留准入屏障；未知生命周期或出网无法封闭时拒绝节点启动。
+func (node *Runtime) restoreEgress(ctx context.Context, logger *slog.Logger) (result error) {
 	directory, err := node.journal.root.Open(".")
 	if err != nil {
 		return err
@@ -34,7 +35,7 @@ func (node *Runtime) restoreEgress(ctx context.Context) (result error) {
 			if _, err := ulid.ParseStrict(userID); err != nil {
 				return failure("egress_journal_name_invalid")
 			}
-			if err := node.restoreUserEgress(ctx, userID); err != nil {
+			if err := node.restoreUserEgress(ctx, logger, userID); err != nil {
 				return err
 			}
 		}
@@ -44,7 +45,7 @@ func (node *Runtime) restoreEgress(ctx context.Context) (result error) {
 	}
 }
 
-func (node *Runtime) restoreUserEgress(ctx context.Context, userID string) (result error) {
+func (node *Runtime) restoreUserEgress(ctx context.Context, logger *slog.Logger, userID string) (result error) {
 	release, err := node.journal.lock(ctx, userID)
 	if err != nil {
 		return err
@@ -57,16 +58,28 @@ func (node *Runtime) restoreUserEgress(ctx context.Context, userID string) (resu
 	if state == nil || state.Specification.NodeID != node.options.NodeID {
 		return failure("egress_journal_identity_invalid")
 	}
-	resource := node.resource(state.Specification)
-	if state.upgradeInProgress() {
+	resource := node.withStorage(node.resource(state.Specification), state)
+	resuming, err := node.journal.hasComputerRecovery(state)
+	if err != nil {
+		return err
+	}
+	if state.upgradeInProgress() && !resuming {
 		return node.egress.stop(ctx, resource)
 	}
 	current, err := node.load(ctx, resource, state)
+	wasReady := state.Phase == "ready" && state.ContainerID != ""
 	if err != nil {
+		if resuming || wasReady && current.hasContainer && !current.container.State.Running {
+			logComputerRecovery(ctx, logger, state, err)
+			return node.egress.stop(ctx, resource)
+		}
 		return err
 	}
 	if state.Phase == "absent" && !current.absent() {
 		return failure("closed_generation_has_resources")
+	}
+	if resuming || wasReady && !current.container.State.Running {
+		return node.restoreComputer(ctx, logger, resource, state, current)
 	}
 	if current.hasContainer && current.container.State.Running && state.Phase != "removing" && state.Phase != "absent" {
 		return node.egress.ensure(ctx, resource, current.container)

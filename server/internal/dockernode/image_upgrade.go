@@ -97,9 +97,56 @@ func validUpgradeFence(previous, target computer.Specification) bool {
 	return target.FencingToken > previous.FencingToken || target.FencingToken == previous.FencingToken && target.LeaseExpiresAt.Equal(previous.LeaseExpiresAt)
 }
 
-func (node *Runtime) prepareImageUpgrade(ctx context.Context, state *record, request computer.ImageUpgrade) error {
-	if state.Phase != "ready" || !immutableEqual(state.Specification, request.Current) || state.ContainerID != request.CurrentContainerID || request.Target.FencingToken <= state.Specification.FencingToken {
+// CheckUpgradeSource 在安装器停机前只读核对原实例。实际退役仍在用户独占锁内重新核验规格和宿主资源。
+func CheckUpgradeSource(directory string, owner uint32, source computer.Specification, containerID string, requireMarker bool) (result error) {
+	if source.Validate() != nil {
 		return failure("computer_image_upgrade_source_mismatch")
+	}
+	journal, err := openJournal(directory, owner)
+	if err != nil {
+		return err
+	}
+	defer func() { result = errors.Join(result, journal.root.Close()) }()
+	state, err := journal.read(source.UserID)
+	if err != nil {
+		return err
+	}
+	if state == nil || !immutableEqual(state.Specification, source) || state.Specification.FencingToken != source.FencingToken || state.ContainerID != containerID {
+		return failure("computer_image_upgrade_source_mismatch")
+	}
+	if requireMarker {
+		confirmed, err := journal.hasComputerRecovery(state)
+		if err != nil {
+			return err
+		}
+		if !confirmed {
+			return failure("computer_image_upgrade_source_mismatch")
+		}
+	}
+	return journal.requireUpgradeSource(state)
+}
+
+func (journal *journal) requireUpgradeSource(state *record) error {
+	if state.Phase == "ready" {
+		return nil
+	}
+	// 只有曾就绪的原容器会在启动复验前留下恢复标记；普通开户中的容器不能作为升级来源。
+	recovering, err := journal.hasComputerRecovery(state)
+	if err != nil {
+		return err
+	}
+	if !recovering {
+		return failure("computer_image_upgrade_source_mismatch")
+	}
+	return nil
+}
+
+func (node *Runtime) prepareImageUpgrade(ctx context.Context, state *record, request computer.ImageUpgrade) error {
+	if !immutableEqual(state.Specification, request.Current) || state.ContainerID != request.CurrentContainerID || request.Target.FencingToken <= state.Specification.FencingToken {
+		return failure("computer_image_upgrade_source_mismatch")
+	}
+	if err := node.journal.requireUpgradeSource(state); err != nil {
+		return err
 	}
 	resource := node.withStorage(node.resource(state.Specification), state)
 	current, err := node.load(ctx, resource, state)
@@ -135,6 +182,19 @@ func (node *Runtime) retireUpgradeSource(ctx context.Context, resource Resource,
 		}
 		if !workspace.Exists || !workspace.Ready || workspace.Path != resource.WorkspacePath || workspace.CapacityBytes != resource.Specification.Resources.DiskBytes {
 			return failure("retained_storage_unconfirmed")
+		}
+	}
+	// 升级意图已经落盘并接管旧实例，崩溃重试继续退役，不再尝试恢复旧容器。
+	marker, err := node.journal.readFile(state.recoveryFile())
+	if err != nil {
+		return err
+	}
+	if marker != nil {
+		if string(marker) != state.ImageUpgrade.CurrentContainerID {
+			return failure("computer_image_upgrade_source_mismatch")
+		}
+		if err := node.journal.root.Remove(state.recoveryFile()); err != nil {
+			return failure("computer_recovery_intent_remove_failed")
 		}
 	}
 	return node.retireRuntime(ctx, resource, current, state.ImageUpgrade.CurrentContainerID)

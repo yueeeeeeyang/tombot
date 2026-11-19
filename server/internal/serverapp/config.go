@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"io.yueyang/tom/internal/accounts"
+	"io.yueyang/tom/internal/clientrelease"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/domain"
 	"io.yueyang/tom/internal/execution"
@@ -43,6 +44,7 @@ func (value *Duration) UnmarshalJSON(encoded []byte) error {
 }
 
 type Config struct {
+	ClientReleaseDir   string            `json:"client_release_directory"`
 	Address            string            `json:"address"`
 	AdminOrigin        string            `json:"admin_origin"`
 	TLSCertificateFile string            `json:"tls_certificate_file"`
@@ -207,7 +209,7 @@ func (configuration EventsConfig) retentionOptions() userevents.RetentionOptions
 func DefaultConfig() Config {
 	second, minute, hour := Duration(time.Second), Duration(time.Minute), Duration(time.Hour)
 	return Config{
-		MaxBots: 100, MaxGroups: 100,
+		MaxBots: 100, MaxGroups: 100, ClientReleaseDir: clientrelease.Directory,
 		Database:  DatabaseConfig{MaxConnections: 16, ConnectTimeout: 5 * second, StatementTimeout: 10 * second, LockTimeout: 3 * second, TransactionTimeout: 20 * second, ConnectionLifetime: 30 * minute},
 		Node:      NodeConfig{MaximumNodes: 128, CallTimeout: 60 * second, HeartbeatInterval: 10 * second, ControlLifetime: 4 * minute, Verification: VerificationConfig{Resources: computer.Resources{CPUMillis: 1000, MemoryBytes: 2 << 30, DiskBytes: 1 << 30, ProcessLimit: 512}, LeaseDuration: 5 * minute, Interval: 5 * minute, Lifetime: 15 * minute, RetryDelay: 5 * second, MaxAttempts: 5}},
 		HTTP:      HTTPConfig{ReadHeaderTimeout: 5 * second, ReadTimeout: 30 * second, WriteTimeout: minute, IdleTimeout: minute, RequestTimeout: minute, ShutdownTimeout: minute},
@@ -279,7 +281,7 @@ func (configuration Config) validate() error {
 	if configuration.Node.MaximumNodes < 1 || configuration.Node.MaximumNodes > 1000 {
 		return errors.New("节点数量上限必须介于 1 与 1000")
 	}
-	paths := []string{configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.CertificateFile, configuration.Node.PrivateKeyFile, configuration.Database.MigrationDSNFile}
+	paths := []string{configuration.ClientReleaseDir, configuration.TLSCertificateFile, configuration.TLSPrivateKeyFile, configuration.IdentityKeyFile, configuration.CSRFKeyFile, configuration.Node.CertificateFile, configuration.Node.PrivateKeyFile, configuration.Database.MigrationDSNFile}
 	if configuration.Models.RootCAFile != "" {
 		paths = append(paths, configuration.Models.RootCAFile)
 	}

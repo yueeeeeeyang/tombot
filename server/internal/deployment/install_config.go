@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io.yueyang/tom/internal/infra/jsonshape"
 	"math/big"
 	"path/filepath"
 	"reflect"
@@ -172,7 +173,7 @@ func renderNodeInstallation(request nodeInstallRequest, platform string) (config
 		return configuration{}, nil, err
 	}
 	docker, err := dockerbootstrap.ParseManifest(request.Docker)
-	if err != nil || validatePreparationJSON(request.Docker, &dockerbootstrap.Manifest{}) != nil {
+	if err != nil || jsonshape.Validate(request.Docker, &dockerbootstrap.Manifest{}) != nil {
 		return configuration{}, nil, errors.New("节点安装需要有效的 Docker 引导清单")
 	}
 	image := dockernode.ImageManifest{ArchiveFile: request.Image.ArchiveFile, ArchiveSHA256: request.Image.ArchiveSHA256, Version: 1, NodeID: request.NodeID, ImageID: request.ImageID, Reference: request.Image.Reference, Platform: platform, Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", AuthenticationFile: request.Image.AuthenticationFile, CallTimeoutSeconds: request.Image.CallTimeoutSeconds, TimeoutSeconds: request.Image.TimeoutSeconds}

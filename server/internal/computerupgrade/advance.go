@@ -79,17 +79,17 @@ func (service *Service) advanceDrain(ctx context.Context, plan migration, blocke
 	return err
 }
 
-func (service *Service) retry(ctx context.Context, plan migration) error {
+func (service *Service) retry(ctx context.Context, plan migration, code string) error {
 	state := "switching"
 	if plan.attempt >= maxAttempts {
 		state = "quarantined"
 	}
 	delay := scanInterval * (1 << min(plan.attempt-1, maxAttempts-1))
 	return service.database.Platform(ctx, func(tx *sql.Tx) error {
-		result, err := tx.ExecContext(ctx, `UPDATE tombot.computer_image_upgrades SET state=$3,lease_expires_at=NULL,
+		result, err := tx.ExecContext(ctx, `UPDATE tombot.computer_image_upgrades SET state=$3,lease_expires_at=NULL,last_failure_code=$5,
  next_attempt_at=clock_timestamp()+$4::bigint*interval '1 millisecond',updated_at=clock_timestamp()
  WHERE user_id=$1 AND state='switching' AND lease_expires_at=$2 AND lease_expires_at>clock_timestamp()`,
-			plan.upgrade.Current.UserID, plan.lease, state, delay.Milliseconds())
+			plan.upgrade.Current.UserID, plan.lease, state, delay.Milliseconds(), code)
 		return checkUpdated(result, err)
 	})
 }

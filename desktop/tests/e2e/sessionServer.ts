@@ -91,6 +91,9 @@ export async function startSessionServer(directory: string) {
   const authorizations = new Map<string, Authorization>()
   const requests: string[] = []
   const unexpectedRequests: string[] = []
+  let installer: Buffer = Buffer.from('桌面升级端到端测试包')
+  const releaseId = '01ARZ3NDEKTSV4RRFFQ69G5FB0'
+  let hasUpdate = false
   const credentials = {
     access_token: randomBytes(32).toString('base64url'),
     refresh_token: randomBytes(32).toString('base64url'),
@@ -99,6 +102,34 @@ export async function startSessionServer(directory: string) {
   }
 
   async function serve(request: IncomingMessage, response: ServerResponse, route: string) {
+    if (
+      route === 'GET /api/v2/client-updates/latest' ||
+      route === `GET /api/v2/client-updates/${releaseId}/parts/0`
+    ) {
+      if (request.headers.authorization || request.headers.cookie)
+        throw new Error('升级请求携带了会话凭据')
+      if (route.endsWith('/parts/0')) {
+        response.writeHead(200, { 'Content-Type': 'application/octet-stream' }).end(installer)
+        return
+      }
+      const query = new URL(request.url!, 'https://127.0.0.1').searchParams
+      const platform = process.platform + '-' + process.arch
+      if (query.get('platform') !== platform || !query.get('version'))
+        throw new Error('客户端没有提供本机平台和版本')
+      return reply(response, 200, {
+        release: hasUpdate
+          ? {
+              id: releaseId,
+              platform,
+              version: '99.1.0',
+              notes: '修复断线后的消息同步。',
+              size: installer.length,
+              extension: '.zip',
+              chunks: [createHash('sha256').update(installer).digest('hex')],
+            }
+          : null,
+      })
+    }
     if (route === 'POST /api/v2/auth/browser/start') {
       const { redirect_uri: address, state, code_challenge: challenge } = await readBody(request)
       if (
@@ -196,6 +227,13 @@ export async function startSessionServer(directory: string) {
   return {
     url,
     fingerprint,
+    get installer() {
+      return installer
+    },
+    publishUpdate: (content?: Buffer) => {
+      if (content) installer = content
+      hasUpdate = true
+    },
     requests,
     unexpectedRequests,
     async approve(address: string, validState = true): Promise<Response> {

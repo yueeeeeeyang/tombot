@@ -41,6 +41,10 @@ func legacyRepairFixture(t *testing.T) (*nodeInstaller, []byte, map[string][]byt
 	}
 	record.Files["docker-install.json"] = contentDigest(legacy)
 	writeInstallFixture(t, installer.fs, deploy.NodeDirectory+"/docker-install.json", legacy, 0600)
+	// 使用原安装摘要模拟尚未加入 Docker 停服顺序的受管单元。
+	legacyService := bytes.Replace([]byte(deploy.NodeService()), []byte("After=docker.service\n"), nil, 1)
+	record.ServiceSHA256 = contentDigest(legacyService)
+	writeInstallFixture(t, installer.fs, nodeServicePath, legacyService, 0644)
 	writeInstallFixture(t, installer.fs, path, encodeFixture(t, record), 0600)
 	protected := map[string][]byte{}
 	for _, name := range []string{"certificate.pem", "private.key", "enrollment.token", "computer-image.tar"} {
@@ -80,6 +84,10 @@ func TestNodeRepairMigratesLegacyManifestAndPreservesIdentity(t *testing.T) {
 	}
 	if _, err := dockerbootstrap.ParseManifest(manifest); err != nil {
 		t.Fatal(err)
+	}
+	service, err := os.ReadFile(installer.fs.resolve(nodeServicePath))
+	if err != nil || string(service) != deploy.NodeService() || !bytes.Contains(service, []byte("After=docker.service\n")) {
+		t.Fatal("修复未安装带 Docker 停服顺序的新节点单元", err)
 	}
 	backups, err := filepath.Glob(installer.fs.resolve(nodeRepairDirectory + "-*/plan.json"))
 	if err != nil || len(backups) != 1 {

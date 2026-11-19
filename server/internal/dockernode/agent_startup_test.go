@@ -10,10 +10,20 @@ import (
 	"io.yueyang/tom/internal/processgroup"
 )
 
-type fakeAgentAvailability struct{ failure error }
+type fakeAgentAvailability struct {
+	failure error
+	prepare func(context.Context, Resource, *record) error
+}
 
 func (probe *fakeAgentAvailability) wait(context.Context, Resource, container) error {
 	return probe.failure
+}
+
+func (probe *fakeAgentAvailability) prepareRestart(ctx context.Context, resource Resource, state *record) error {
+	if probe.prepare != nil {
+		return probe.prepare(ctx, resource, state)
+	}
+	return nil
 }
 
 func testAgentStartupOptions() AgentStartupOptions {

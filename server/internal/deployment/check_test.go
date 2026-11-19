@@ -239,13 +239,22 @@ func TestNodeSystemdService(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"ExecStart=/usr/lib/tombot/tomnode start", "User=root", "Type=notify", "NotifyAccess=main", "TimeoutStartSec=140min", "TimeoutStopSec=11min", "NoNewPrivileges=true", "KillMode=control-group", "Environment=TOM_NODE_CONFIG=/etc/tombot/node/node.json", "Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/node/docker-install.json", "Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/node/computer-image.json", "WantedBy=multi-user.target"} {
-		if !strings.Contains(string(encoded), expected+"\n") {
+	service := string(encoded)
+	if deploy.NodeService() != service {
+		t.Fatal("内嵌与发布的节点服务单元不一致")
+	}
+	for _, expected := range []string{"After=docker.service", "Wants=network-online.target", "ExecStart=/usr/lib/tombot/tomnode start", "User=root", "Type=notify", "NotifyAccess=main", "TimeoutStartSec=140min", "TimeoutStopSec=11min", "NoNewPrivileges=true", "KillMode=control-group", "Environment=TOM_NODE_CONFIG=/etc/tombot/node/node.json", "Environment=TOM_DOCKER_INSTALL_MANIFEST=/etc/tombot/node/docker-install.json", "Environment=TOM_IMAGE_PREPARATION_MANIFEST=/etc/tombot/node/computer-image.json", "WantedBy=multi-user.target"} {
+		if !strings.Contains(service, expected+"\n") {
 			t.Fatal("节点服务契约丢失", expected)
 		}
 	}
+	for line := range strings.SplitSeq(service, "\n") {
+		if strings.HasPrefix(line, "Wants=") && line != "Wants=network-online.target" {
+			t.Fatal("节点服务新增了启动依赖", line)
+		}
+	}
 	for _, forbidden := range []string{"TOM_SERVER_CONFIG", "Requires=", "RemainAfterExit=yes", "PrivateTmp=true", "ProtectSystem=", "ProtectHome="} {
-		if strings.Contains(string(encoded), forbidden) {
+		if strings.Contains(service, forbidden) {
 			t.Fatal("节点依赖 API、缓存检查或隔离了挂载传播", forbidden)
 		}
 	}
@@ -253,7 +262,7 @@ func TestNodeSystemdService(t *testing.T) {
 	if err != nil || len(units) != 3 || units[0].Name() != "tombot-node-update.service" || units[1].Name() != "tombot-node-update.timer" || units[2].Name() != "tombot-node.service" {
 		t.Fatal("节点单元集合不完整或存在额外服务", err)
 	}
-	if !strings.Contains(deploy.NodeUpdateService, "ExecStart=/usr/lib/tombot/tomnode sync-upgrade\n") || !strings.Contains(deploy.NodeUpdateService, "ConditionPathExists=/etc/tombot/node-release.pub\n") || !strings.Contains(deploy.NodeUpdateTimer, "OnUnitInactiveSec=1min\n") {
+	if !strings.Contains(deploy.NodeUpdateService, "ExecStart=/usr/lib/tombot/tomnode sync-upgrade\n") || strings.Contains(deploy.NodeUpdateService, "ConditionPathIsDirectory=") || !strings.Contains(deploy.NodeUpdateTimer, "OnUnitInactiveSec=1min\n") {
 		t.Fatal("独立更新器启动契约不完整")
 	}
 }

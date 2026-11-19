@@ -196,7 +196,7 @@ beforeEach(async () => {
     }),
   )
   const { registerDesktopIpc } = await import('./desktopServer')
-  registerDesktopIpc()
+  registerDesktopIpc(vi.fn())
 })
 afterEach(() => {
   vi.useRealTimers()

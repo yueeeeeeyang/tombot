@@ -237,10 +237,19 @@ func (node *Runtime) inspect(ctx context.Context, resource Resource, state *reco
 			return computer.Observation{}, err
 		}
 		if capabilities.Ready() {
+			recovering, err := node.journal.hasComputerRecovery(state)
+			if err != nil {
+				return computer.Observation{}, err
+			}
 			state.Phase = "ready"
 			state.ContainerID = current.container.ID
 			if err = node.journal.save(state); err != nil {
 				return computer.Observation{}, err
+			}
+			if recovering {
+				if err = node.journal.root.Remove(state.recoveryFile()); err != nil {
+					return computer.Observation{}, failure("computer_recovery_intent_remove_failed")
+				}
 			}
 			return observed(resource, "ready", current.container.ID, capabilities), nil
 		}

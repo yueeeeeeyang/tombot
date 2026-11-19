@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io.yueyang/tom/internal/infra/jsonshape"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -92,7 +93,7 @@ func Prepare(ctx context.Context, source, destination string) (Report, error) {
 
 // decodePreparation 拒绝重复字段、空值、未知字段和大小写别名，不把解码器原始内容带入错误。
 func decodePreparation(encoded []byte, target any) error {
-	if err := validatePreparationJSON(encoded, target); err != nil {
+	if err := jsonshape.Validate(encoded, target); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
@@ -153,7 +154,7 @@ func renderConfiguration(encoded []byte, api account, platform string) ([]config
 	}
 	image := dockernode.ImageManifest{ArchiveFile: request.Image.ArchiveFile, ArchiveSHA256: request.Image.ArchiveSHA256, Version: 1, NodeID: request.NodeID, ImageID: request.ImageID, Reference: request.Image.Reference, Platform: platform, Socket: dockerbootstrap.SocketPath, StateDirectory: "/var/lib/tombot-node/images", AuthenticationFile: request.Image.AuthenticationFile, CallTimeoutSeconds: request.Image.CallTimeoutSeconds, TimeoutSeconds: request.Image.TimeoutSeconds}
 	docker, err := dockerbootstrap.ParseManifest(request.Docker)
-	if err != nil || validatePreparationJSON(request.Docker, &dockerbootstrap.Manifest{}) != nil {
+	if err != nil || jsonshape.Validate(request.Docker, &dockerbootstrap.Manifest{}) != nil {
 		return nil, Report{}, errors.New("Docker 与宿主软件清单无效")
 	}
 	registration := nodecatalog.Registration{Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, ImageReference: image.Reference}

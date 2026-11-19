@@ -133,7 +133,7 @@ describe('通用设置账号', () => {
   })
 })
 
-it('关于页展示实际客户端与服务端信息，失败可重试并返回通用', async () => {
+it('更新页展示实际客户端与服务端信息，失败可重试并返回通用', async () => {
   const load = vi
     .spyOn(memoryBackend, 'loadAbout')
     .mockResolvedValueOnce({
@@ -150,8 +150,8 @@ it('关于页展示实际客户端与服务端信息，失败可重试并返回�
   const user = userEvent.setup()
   render(<App />)
   await user.click(screen.getByRole('button', { name: '打开设置' }))
-  await user.click(screen.getByRole('button', { name: '关于' }))
-  const pane = screen.getByRole('region', { name: '关于' })
+  await user.click(screen.getByRole('button', { name: '更新' }))
+  const pane = screen.getByRole('region', { name: '更新' })
   expect(await within(pane).findByText('1.2.3')).toBeInTheDocument()
   expect(within(pane).getByText('https://tom.example.test')).toBeInTheDocument()
   expect(within(pane).getByRole('alert')).toHaveTextContent('版本查询失败')

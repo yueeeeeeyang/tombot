@@ -24,6 +24,8 @@ function installBackend(overrides: Partial<DesktopBackend> = {}): DesktopBackend
       serverUrl: 'https://tom.example.com',
     } satisfies SessionSnapshot),
     browserLogin: vi.fn().mockResolvedValue({ phase: 'ready' } satisfies SessionSnapshot),
+    checkClientUpdate: vi.fn().mockResolvedValue(null),
+    watchUpdateRequest: () => () => undefined,
     loadWorkspace: vi.fn(),
     saveWorkspace: vi.fn(),
     deliverMessage: vi.fn(),

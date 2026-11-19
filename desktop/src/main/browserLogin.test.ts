@@ -91,7 +91,7 @@ beforeEach(async () => {
   vi.stubGlobal('setTimeout', setTimeout)
   vi.stubGlobal('clearTimeout', clearTimeout)
   const { registerDesktopIpc } = await import('./desktopServer')
-  registerDesktopIpc()
+  registerDesktopIpc(vi.fn())
 })
 afterEach(() => {
   vi.unstubAllGlobals()

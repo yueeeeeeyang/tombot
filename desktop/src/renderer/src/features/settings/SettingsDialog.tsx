@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getBackend, type ApplicationAbout } from '../desktop/backend'
-import { Info, Settings, X } from 'lucide-react'
+import { UpdatePanel } from './ClientUpdates'
+import { Download, Settings, X } from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../../../../../ui/Select'
 import workspaceCat from '../../assets/cats/workspace-cat.png'
@@ -37,7 +38,7 @@ export function SettingsDialog({
   onSignOut,
   onClose,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<'general' | 'about'>('general')
+  const [section, setSection] = useState<'general' | 'updates'>('general')
   return (
     <Dialog title="设置" variant="settings" onClose={onClose}>
       <div className="settings-layout">
@@ -53,17 +54,17 @@ export function SettingsDialog({
           </button>
           <button
             type="button"
-            className={section === 'about' ? 'is-active' : ''}
-            aria-current={section === 'about' ? 'page' : undefined}
-            onClick={() => setSection('about')}
+            className={section === 'updates' ? 'is-active' : ''}
+            aria-current={section === 'updates' ? 'page' : undefined}
+            onClick={() => setSection('updates')}
           >
-            <Info size={17} strokeWidth={1.7} />
-            关于
+            <Download size={17} strokeWidth={1.7} />
+            更新
           </button>
         </nav>
         <section className="settings-pane" aria-labelledby="settings-section-title">
-          {section === 'about' ? (
-            <AboutSettings />
+          {section === 'updates' ? (
+            <UpdateSettings />
           ) : (
             <>
               <h2 id="settings-section-title">通用</h2>
@@ -176,8 +177,8 @@ function GeneralSettings({
   )
 }
 
-/** 关于页展示主进程与当前连接的实际版本；失败提供重试，不用占位版本掩盖错误。 */
-function AboutSettings() {
+/** 更新页展示主进程与当前连接的实际版本；失败提供重试，不用占位版本掩盖错误。 */
+function UpdateSettings() {
   const [about, setAbout] = useState<ApplicationAbout>()
   const [error, setError] = useState('')
   const [attempt, setAttempt] = useState(0)
@@ -202,7 +203,7 @@ function AboutSettings() {
   }, [attempt])
   return (
     <>
-      <h2 id="settings-section-title">关于</h2>
+      <h2 id="settings-section-title">更新</h2>
       {error && (
         <div className="settings-errors">
           <SettingsError
@@ -214,7 +215,7 @@ function AboutSettings() {
           />
         </div>
       )}
-      <div className="settings-card settings-about">
+      <div className="settings-card settings-versions">
         <div className="setting-row">
           <span>客户端版本</span>
           <span>{about?.clientVersion ?? '正在读取…'}</span>
@@ -228,6 +229,7 @@ function AboutSettings() {
           <span>{about?.serverVersion || (error ? '暂时无法获取' : '正在读取…')}</span>
         </div>
       </div>
+      <UpdatePanel />
     </>
   )
 }

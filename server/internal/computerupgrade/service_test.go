@@ -78,8 +78,9 @@ func seedComputer(t *testing.T, pool *sql.DB, sourceImage, targetImage string) (
 	return userID, computerID, nodeID, operationID
 }
 
-func TestUpgradeExistingComputer(t *testing.T) {
-	ctx := context.Background()
+func upgradeDatabase(t *testing.T) (*sql.DB, *postgres.Database, string) {
+	t.Helper()
+	ctx := t.Context()
 	cluster := pgtest.Start(t)
 	pool, databaseName := cluster.Database(t)
 	if err := postgres.Migrate(ctx, pool); err != nil {
@@ -95,6 +96,16 @@ func TestUpgradeExistingComputer(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	var owner string
+	if err := pool.QueryRow("SELECT current_user").Scan(&owner); err != nil {
+		t.Fatal(err)
+	}
+	return pool, database, cluster.DSN(databaseName, owner)
+}
+
+func TestUpgradeExistingComputer(t *testing.T) {
+	ctx := context.Background()
+	pool, database, _ := upgradeDatabase(t)
 	source, target, next := ids.New(), ids.New(), ids.New()
 	imageReference := func(image string) string { return "example.test/computer@sha256:" + secure.Hash(image) }
 	for _, image := range []string{source, target, next} {

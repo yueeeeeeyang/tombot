@@ -148,6 +148,10 @@ func (handler *Handler) transport(next http.Handler) http.Handler {
 		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v2/consoles/") && strings.HasSuffix(r.URL.Path, "/stream") {
 			timeout = 10 * time.Minute
 		}
+		// 发布前需流式校验整个节点镜像，分片上传和普通管理请求仍使用短时限。
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v2/admin/node-updates/releases" {
+			timeout = 15 * time.Minute
+		}
 		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		requestID := ids.New()

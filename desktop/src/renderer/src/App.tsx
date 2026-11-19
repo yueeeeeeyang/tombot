@@ -47,6 +47,7 @@ import { useSidebarPreferences } from './features/workspace/useSidebarPreference
 import { removeSidebarAgent, setSidebarFlag } from './features/workspace/sidebarPreferences'
 
 import { SearchDialog } from './features/search/SearchDialog'
+import { ClientUpdates } from './features/settings/ClientUpdates'
 import { SettingsDialog } from './features/settings/SettingsDialog'
 import { useTheme } from './features/settings/useTheme'
 import { SidebarResizer, SIDEBAR_WIDTH } from './features/workspace/SidebarResizer'
@@ -63,11 +64,20 @@ type Surface = { kind: 'agent' | 'group'; id: string }
 export default function App() {
   const session = useSession()
   useTheme()
-  if (session.phase !== 'ready') return <SessionGate session={session} />
   return (
-    <ChatImagePreviewProvider key={session.serverUrl}>
-      <WorkspaceApp session={session} />
-    </ChatImagePreviewProvider>
+    <ClientUpdates
+      key={session.phase === 'login' || session.phase === 'ready' ? session.serverUrl : ''}
+      signedIn={session.phase === 'ready'}
+      connected={!!session.serverUrl && (session.phase === 'login' || session.phase === 'ready')}
+    >
+      {session.phase === 'ready' ? (
+        <ChatImagePreviewProvider>
+          <WorkspaceApp session={session} />
+        </ChatImagePreviewProvider>
+      ) : (
+        <SessionGate session={session} />
+      )}
+    </ClientUpdates>
   )
 }
 

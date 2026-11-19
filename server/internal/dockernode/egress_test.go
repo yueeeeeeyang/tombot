@@ -316,14 +316,14 @@ func TestEgressRestoreDoesNotReviveLeaseOrCreateContainer(t *testing.T) {
 		stopCall: func(context.Context, Resource) error { stopped++; return nil },
 	}
 	before := len(fixture.engine.events)
-	if err := fixture.node.restoreEgress(t.Context()); err != nil || opened != 1 || stopped != 0 {
+	if err := fixture.node.restoreEgress(t.Context(), sessionLogger()); err != nil || opened != 1 || stopped != 0 {
 		t.Fatal("运行实例端点未恢复", err)
 	}
 	state.Phase = "removing"
 	if err := fixture.node.journal.save(state); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.node.restoreEgress(t.Context()); err != nil || opened != 1 || stopped != 1 {
+	if err := fixture.node.restoreEgress(t.Context(), sessionLogger()); err != nil || opened != 1 || stopped != 1 {
 		t.Fatal("恢复重新开放了删除中的实例", err)
 	}
 	if len(fixture.engine.events) != before {
@@ -332,7 +332,7 @@ func TestEgressRestoreDoesNotReviveLeaseOrCreateContainer(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fixture.statePath, "invalid.json"), []byte("{}"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.node.restoreEgress(t.Context()); err == nil {
+	if err := fixture.node.restoreEgress(t.Context(), sessionLogger()); err == nil {
 		t.Fatal("恢复忽略了未知状态文件")
 	}
 }

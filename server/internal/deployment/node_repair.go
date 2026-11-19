@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io.yueyang/tom/internal/noderelease"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -25,11 +26,13 @@ const nodeRepairDirectory = "/etc/tombot/node-repair"
 
 // NodeRepairOptions 允许修正端点和导入完整离线镜像包，不接受新节点身份或凭据。
 type NodeRepairOptions struct {
-	PackageSHA256 string `json:"package_sha256,omitempty"`
-	Upgrade       bool   `json:"upgrade,omitempty"`
-	ImagePackage  string `json:"image_package,omitempty"`
-	Listen        string `json:"listen"`
-	URL           string `json:"url"`
+	AwaitComputers bool                          `json:"await_computers,omitempty"`
+	Recovery       nodeenrollment.RecoveryTarget `json:"recovery,omitzero"`
+	PackageSHA256  string                        `json:"package_sha256,omitempty"`
+	Upgrade        bool                          `json:"upgrade,omitempty"`
+	ImagePackage   string                        `json:"image_package,omitempty"`
+	Listen         string                        `json:"listen"`
+	URL            string                        `json:"url"`
 }
 
 type nodeRepairFile struct {
@@ -87,6 +90,8 @@ func RepairNode(ctx context.Context, executable string, caller uint32, options N
 	if options.Upgrade {
 		options.ImagePackage = filepath.Dir(executable)
 		installer.maintain = installer.maintainNode
+		installer.inspectRecovery = installer.inspectNodeRecovery
+		installer.holdRecovery = installer.holdNodeRecovery
 		installer.systemctl = func(ctx context.Context, args ...string) error {
 			if len(args) > 0 && args[0] == "stop" {
 				return stopNodeForUpgrade(ctx)
@@ -110,19 +115,24 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	if err != nil {
 		return report, err
 	}
-	if err := validateNodeExecutable(program, installer.platform); err != nil {
+	if err := noderelease.ValidateExecutable(program, installer.platform); err != nil {
 		return report, err
 	}
 	if !options.Upgrade {
 		if err := checkStopped(ctx); err != nil {
 			return report, err
 		}
-	} else {
-		options.PackageSHA256, err = installer.checkUpgradePackage(options.ImagePackage, program)
-		if err != nil {
-			return report, err
-		}
+		return installer.applyNodeRepair(ctx, executable, program, options, checkStopped)
 	}
+	options.PackageSHA256, err = installer.checkUpgradePackage(options.ImagePackage, program)
+	if err != nil {
+		return report, err
+	}
+	return installer.upgradeWithRecovery(ctx, executable, program, options, checkStopped)
+}
+
+func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable string, program []byte, options NodeRepairOptions, checkStopped func(context.Context) error) (report NodeInstallationReport, result error) {
+	recovering := options.Recovery.ComputerID != ""
 	journalPath := nodeRepairDirectory + "/plan.json"
 	var journal nodeRepair
 	if _, err := os.Lstat(installer.fs.resolve(nodeRepairDirectory)); errors.Is(err, os.ErrNotExist) {
@@ -224,17 +234,20 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	for _, file := range journal.Files {
 		noChange = noChange && file.Before == file.After
 	}
-	if err := installer.installReleaseKey(ctx, executable); err != nil {
-		return NodeInstallationReport{}, err
-	}
 	if request.Server != nil {
 		if err := installer.verifyUpdateUnits(previous.UpdateUnits); err != nil {
 			return report, err
 		}
 	}
-	if !noChange && !resumeFinish {
+	if (!noChange || recovering) && !resumeFinish {
 		if options.Upgrade {
-			if err := installer.maintain(ctx, request, journal.OperationID, false); err != nil {
+			var holdErr error
+			if recovering {
+				holdErr = installer.holdRecovery(ctx, request, journal.OperationID, options.Recovery)
+			} else {
+				holdErr = installer.maintain(ctx, request, journal.OperationID, false)
+			}
+			if err := holdErr; err != nil {
 				// 只有明确拒绝且目标完全未动才可撤下准备计划；网络回执未知时保留同一操作身份。
 				if errors.Is(err, nodeenrollment.ErrMaintenanceConflict) && allOriginal {
 					discard := installer.fs.resolve(nodeRepairDirectory + "-declined-" + journal.OperationID)
@@ -250,6 +263,10 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 				}
 				return report, err
 			}
+		}
+	}
+	if !noChange && !resumeFinish {
+		if options.Upgrade {
 			if err := installer.systemctl(ctx, "stop", nodeServiceName); err != nil {
 				return report, err
 			}
@@ -281,7 +298,7 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	if err := installer.startNodeServices(ctx, request.Server != nil, previous.UpdateUnits); err != nil {
 		return NodeInstallationReport{}, err
 	}
-	if options.Upgrade && !noChange {
+	if options.Upgrade && (!noChange || recovering) {
 		if !resumeFinish {
 			if err := writeConfigurationFile(installer.fs.resolve(nodeRepairDirectory+"/started"), []byte(journal.OperationID), 0600); err != nil {
 				return report, err
@@ -306,14 +323,23 @@ func (installer nodeInstaller) repair(ctx context.Context, executable string, op
 	return report, nil
 }
 
-func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []byte, options NodeRepairOptions) (result error) {
+// installedNodeRecord 只读取受本机安装器管理的快照，供修复准备和重复验收共用。
+func (installer nodeInstaller) installedNodeRecord() (nodeInstallation, error) {
+	var record nodeInstallation
 	encoded, err := installer.fs.readConfig(fileRule{path: deploy.NodeDirectory + "/installation.json", maximum: 256 << 10, private: true}, account{})
 	if err != nil {
-		return err
+		return record, err
 	}
-	var record nodeInstallation
 	if decodePreparation(encoded, &record) != nil || record.Version != 2 {
-		return errors.New("节点修复需要有效安装记录，未接管手工部署")
+		return record, errors.New("节点修复需要有效安装记录，未接管手工部署")
+	}
+	return record, nil
+}
+
+func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []byte, options NodeRepairOptions) (result error) {
+	record, err := installer.installedNodeRecord()
+	if err != nil {
+		return err
 	}
 	request, digest, err := parseNodeInstallRequest(record.Request)
 	if err != nil || digest != record.RequestSHA256 {

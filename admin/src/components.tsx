@@ -1,5 +1,6 @@
 import {
   cloneElement,
+  useCallback,
   useEffect,
   useId,
   useLayoutEffect,
@@ -93,26 +94,37 @@ export function Dialog({
   )
 }
 
-export function useQuery<T>(client: AdminClient, path: string, schema: z.ZodType<T>) {
+export function useQuery<T>(
+  client: AdminClient,
+  path: string,
+  schema: z.ZodType<T>,
+  { retainOnRefresh = false } = {},
+) {
   const [revision, setRevision] = useState(0)
-  const [result, setResult] = useState<{ key: string; value?: T; error?: unknown }>({ key: '' })
-  const key = `${path}:${revision}`
+  const [result, setResult] = useState<{
+    path: string
+    revision: number
+    value?: T
+    error?: unknown
+  }>()
+  const reload = useCallback(() => setRevision((current) => current + 1), [])
   useEffect(() => {
     const controller = new AbortController()
     client.request(path, schema, { signal: controller.signal }).then(
       (value) => {
-        if (!controller.signal.aborted) setResult({ key, value })
+        if (!controller.signal.aborted) setResult({ path, revision, value })
       },
       (error: unknown) => {
-        if (!controller.signal.aborted) setResult({ key, error })
+        if (!controller.signal.aborted) setResult({ path, revision, error })
       },
     )
     return () => controller.abort()
-  }, [client, path, schema, key])
+  }, [client, path, schema, revision])
+  const current = result?.path === path && result.revision === revision
   return {
-    value: result.key === key ? result.value : undefined,
-    error: result.key === key ? result.error : undefined,
-    reload: () => setRevision((value) => value + 1),
+    value: current || (retainOnRefresh && result?.path === path) ? result?.value : undefined,
+    error: current ? result.error : undefined,
+    reload,
   }
 }
 

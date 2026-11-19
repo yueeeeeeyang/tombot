@@ -7,7 +7,6 @@ import (
 	"io.yueyang/tom/internal/noderelease"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"io.yueyang/tom/deploy"
@@ -22,13 +21,9 @@ func (installer nodeInstaller) checkUpgradePackage(directory string, program []b
 	if err != nil {
 		return "", errors.New("请从完整离线节点包执行 upgrade，缺少校验清单")
 	}
-	files := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSuffix(string(sums), "\n"), "\n") {
-		digest, name, ok := strings.Cut(line, "  ")
-		if !ok || len(digest) != 64 || strings.Trim(digest, "0123456789abcdef") != "" || files[name] != "" {
-			return "", errors.New("节点发布包校验清单无效")
-		}
-		files[name] = digest
+	files, err := noderelease.ParseChecksums(sums)
+	if err != nil {
+		return "", err
 	}
 	if len(files) != 5 || files["tomnode"] == "" || files["computer-image.tar"] == "" || files["node-release.json"] == "" {
 		return "", errors.New("请解压完整节点离线包后，从包含 computer-image.tar 和 node-release.json 的目录执行 ./tomnode upgrade")
@@ -67,8 +62,27 @@ func (installer nodeInstaller) maintainNode(ctx context.Context, request nodeIns
 	if err != nil {
 		return err
 	}
-	config := nodeenrollment.Config{Server: request.Server.runtime(), Registration: nodecatalog.Registration{Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, PreviousImageID: request.PreviousImageID, ImageReference: request.Image.Reference}}
-	return nodeenrollment.Maintain(ctx, request.NodeID, config, pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Finish: finish})
+	return nodeenrollment.Maintain(ctx, request.NodeID, enrollmentConfig(request), pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Finish: finish})
+}
+
+func enrollmentConfig(request nodeInstallRequest) nodeenrollment.Config {
+	return nodeenrollment.Config{Server: request.Server.runtime(), Registration: nodecatalog.Registration{Name: request.Name, Capacity: request.Capacity, ImageID: request.ImageID, PreviousImageID: request.PreviousImageID, ImageReference: request.Image.Reference}}
+}
+
+func (installer nodeInstaller) inspectNodeRecovery(ctx context.Context, request nodeInstallRequest, release string) (*nodeenrollment.RecoveryInspection, error) {
+	pair, err := installer.fs.nodeKeyPair()
+	if err != nil {
+		return nil, err
+	}
+	return nodeenrollment.InspectRecovery(ctx, request.NodeID, enrollmentConfig(request), pair, release)
+}
+
+func (installer nodeInstaller) holdNodeRecovery(ctx context.Context, request nodeInstallRequest, operation string, target nodeenrollment.RecoveryTarget) error {
+	pair, err := installer.fs.nodeKeyPair()
+	if err != nil {
+		return err
+	}
+	return nodeenrollment.Maintain(ctx, request.NodeID, enrollmentConfig(request), pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Recovery: &target})
 }
 
 func (fs filesystem) nodeKeyPair() (tls.Certificate, error) {
@@ -151,24 +165,6 @@ func (installer nodeInstaller) startNodeServices(ctx context.Context, registered
 		}
 	}
 	return nil
-}
-
-// installReleaseKey 只从管理员本地运行的可信发布目录引入初始公钥；远端任务不能替换信任根。
-func (installer nodeInstaller) installReleaseKey(ctx context.Context, executable string) error {
-	path := filepath.Join(filepath.Dir(executable), "node-release.pub")
-	if _, err := os.Lstat(installer.fs.resolve(path)); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	body, err := installer.fs.readInstallationSource(path, 4096, installer.caller)
-	if err != nil {
-		return err
-	}
-	if _, err := noderelease.ParseKey(body); err != nil {
-		return err
-	}
-	return installer.fs.installExactFile(ctx, noderelease.KeyPath, body, 0644)
 }
 
 // stopNodeForUpgrade 区分原先已失败与本次停机异常；不能在 systemd 强杀旧进程后立即覆盖文件。

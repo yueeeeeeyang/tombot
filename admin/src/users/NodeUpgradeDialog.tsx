@@ -1,16 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
+import { Archive, ArrowLeft, Check, CircleAlert, Monitor, RefreshCw, Upload } from 'lucide-react'
 import { z } from 'zod'
 import { AdminClient } from '../api/client'
-import { Alert, Dialog, Field, LoadState, useQuery } from '../components'
+import { Alert, Dialog, LoadState, useQuery } from '../components'
+import { Select } from '../components/Select'
+import { nodeRelease, uploadNodeRelease } from './nodeReleaseUpload'
+import './node-upgrade.css'
 
-const release = z.object({ id: z.string(), label: z.string(), platform: z.string() })
 const status = z.object({
-  releases: z.array(release),
+  releases: z.array(nodeRelease),
   jobs: z.array(
     z.object({ id: z.string(), node: z.string(), state: z.string(), label: z.string() }),
   ),
 })
-const signature = z.object({ payload: z.string(), signature: z.string() })
 const states: Record<string, string> = {
   superseded: '节点已切换其他镜像',
   queued: '等待领取',
@@ -23,7 +25,45 @@ const states: Record<string, string> = {
   unsupported: '未启用更新器或架构不匹配',
   failed: '升级失败，可重新下发相同包',
 }
-const chunkSize = 4 * 1024 * 1024
+
+function ReleaseFile({
+  file,
+  disabled,
+  onChange,
+}: {
+  file?: File
+  disabled: boolean
+  onChange: (file?: File) => void
+}) {
+  const id = useId()
+  return (
+    <div className="upgrade-file">
+      <label className="upgrade-file-picker">
+        <input
+          type="file"
+          className="sr-only"
+          aria-label="完整离线包"
+          aria-describedby={id + '-name ' + id}
+          accept=".tar.gz,.tgz,.gz"
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.files?.[0])}
+        />
+        <span className="upgrade-file-icon">
+          <Archive size={20} aria-hidden="true" />
+        </span>
+        <span className="upgrade-file-name">
+          <strong>完整离线包</strong>
+          <span id={id + '-name'} title={file?.name}>
+            {file?.name ?? '例如 tomnode-linux-amd64-offline.tar.gz'}
+          </span>
+        </span>
+        <span className="upgrade-file-action">{file ? '更换' : '选择文件'}</span>
+      </label>
+      <small id={id}>选择与节点架构匹配的离线包，无需解压。上传后可选择多个节点升级。</small>
+    </div>
+  )
+}
+
 export function NodeUpgradeDialog({
   client,
   nodes,
@@ -33,177 +73,276 @@ export function NodeUpgradeDialog({
   nodes: { id: string; name: string }[]
   onClose: () => void
 }) {
-  const query = useQuery(client, '/node-updates/status', status)
+  const {
+    value,
+    error: loadError,
+    reload,
+  } = useQuery(client, '/node-updates/status', status, { retainOnRefresh: true })
+  const [view, setView] = useState<'dispatch' | 'upload'>()
+  const uploading = view ? view === 'upload' : value?.releases.length === 0
   const [all, setAll] = useState(false)
   const [selected, setSelected] = useState<string[]>([])
   const [target, setTarget] = useState('')
   const [archive, setArchive] = useState<File>()
-  const [descriptor, setDescriptor] = useState<File>()
   const [busy, setBusy] = useState(false)
+  const [uploadPercent, setUploadPercent] = useState(0)
+  const [phase, setPhase] = useState<'hash' | 'upload' | 'verify'>('hash')
   const [notice, setNotice] = useState('')
   const [error, setError] = useState<unknown>()
   const pending = useRef<AbortController | null>(null)
+  const versionID = useId()
+  const scopeID = useId()
+  const currentSelection = nodes.filter((node) => selected.includes(node.id)).map((node) => node.id)
+  const hasTarget = value?.releases.some((release) => release.id === target)
+  const canSubmit = uploading ? !!archive : hasTarget && (all || currentSelection.length > 0)
   useEffect(() => () => pending.current?.abort(), [])
-  const reload = query.reload
   useEffect(() => {
     if (
-      !query.value?.jobs.some((j) => ['running', 'started', 'offline', 'queued'].includes(j.state))
+      uploading ||
+      busy ||
+      !value?.jobs.some((job) => ['running', 'started', 'offline', 'queued'].includes(job.state))
     )
       return
     const timer = window.setTimeout(reload, 8000)
     return () => window.clearTimeout(timer)
-  }, [reload, query.value])
-  async function submit(upload: boolean) {
-    if (busy) return
+  }, [reload, value, uploading, busy])
+
+  function switchView(next: 'dispatch' | 'upload') {
+    setError(undefined)
+    setNotice('')
+    setView(next)
+  }
+  async function submit() {
+    if (pending.current || !canSubmit) return
     const controller = new AbortController()
     pending.current = controller
-    const signal = controller.signal
-    setError(undefined)
     setBusy(true)
+    setError(undefined)
     setNotice('')
     try {
-      if (upload) {
-        if (!archive || !descriptor || descriptor.size > 600 * 1024)
-          throw new Error('请选择完整节点包和配套签名清单')
-        const envelope = signature.parse(JSON.parse(await descriptor.text()))
-        const manifest = z
-          .object({ size: z.number().int().positive() })
-          .parse(JSON.parse(atob(envelope.payload)))
-        if (archive.size !== manifest.size) throw new Error('所选节点包大小与签名清单不一致')
-        const r = await client.request('/node-updates/releases', release, {
-          method: 'POST',
-          body: envelope,
-          signal,
-        })
-        const count = Math.ceil(archive.size / chunkSize)
-        for (let i = 0; i < count; i++) {
-          setNotice('正在上传 ' + (i + 1) + ' / ' + count + ' 个分片')
-          await client.request('/node-updates/parts/' + r.id + '/' + i, z.object({}), {
-            method: 'PUT',
-            body: archive.slice(i * chunkSize, (i + 1) * chunkSize),
-            signal,
-            timeout: 30000,
-          })
-        }
-        setTarget(r.id)
-        setNotice('上传完成，可以选择节点下发')
+      if (uploading && archive) {
+        setUploadPercent(0)
+        setPhase('hash')
+        const release = await uploadNodeRelease(
+          client,
+          archive,
+          controller.signal,
+          (percent, reading) => {
+            setUploadPercent(percent)
+            setPhase(reading)
+          },
+        )
+        setTarget(release.id)
+        setArchive(undefined)
+        setView('dispatch')
+        setNotice('发布包已上传，可选择节点下发升级。')
       } else {
         await client.request('/node-updates/dispatch', z.object({}), {
           method: 'POST',
-          body: { release: target, nodes: all ? [] : selected, all },
-          signal,
+          body: { release: target, nodes: all ? [] : currentSelection, all },
+          signal: controller.signal,
         })
-        setNotice('已提交，请查看每台节点的结果')
+        setNotice('升级任务已下发，可在节点列表查看进度。')
       }
       reload()
     } catch (cause) {
-      if (!signal.aborted) setError(cause)
+      if (!controller.signal.aborted) setError(cause)
     } finally {
-      if (!signal.aborted) setBusy(false)
+      pending.current = null
+      if (!controller.signal.aborted) setBusy(false)
     }
   }
   return (
-    <Dialog title="远程升级" onClose={onClose} busy={busy}>
-      <p className="description">节点服务会重启，当前会话可能中断。已有电脑和磁盘会保留。</p>
-      <Alert error={error} />
-      <details>
-        <summary>上传新的发布包</summary>
-        <Field label="完整离线包">
-          <input
-            type="file"
-            accept=".gz,.tgz"
+    <Dialog
+      title={uploading ? '上传节点发布包' : '远程升级'}
+      className="node-upgrade"
+      onClose={onClose}
+      busy={busy}
+    >
+      <div className="upgrade-body">
+        {uploading ? (
+          <ReleaseFile
+            file={archive}
             disabled={busy}
-            onChange={(e) => setArchive(e.target.files?.[0])}
+            onChange={(file) => {
+              setArchive(file)
+              setError(undefined)
+            }}
           />
-        </Field>
-        <Field label="发布签名清单">
-          <input
-            type="file"
-            accept=".json"
-            disabled={busy}
-            onChange={(e) => setDescriptor(e.target.files?.[0])}
-          />
-        </Field>
-        <button
-          className="secondary-button"
-          disabled={busy || !descriptor || !archive}
-          onClick={() => void submit(true)}
-        >
-          上传发布包
-        </button>
-      </details>
-      {!query.value ? (
-        <LoadState error={query.error} onRetry={reload} />
-      ) : (
-        <>
-          <Field label="目标版本">
-            <select value={target} disabled={busy} onChange={(e) => setTarget(e.target.value)}>
-              <option value="">选择发布包</option>
-              {query.value.releases.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.label} · {r.platform} · {r.id.slice(0, 8)}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <fieldset disabled={busy}>
-            <legend>目标节点</legend>
-            <label>
-              <input type="checkbox" checked={all} onChange={(e) => setAll(e.target.checked)} />
-              所有同架构更新节点（含其他分页）
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                disabled={all}
-                checked={nodes.length > 0 && selected.length === nodes.length}
-                onChange={(e) => setSelected(e.target.checked ? nodes.map((n) => n.id) : [])}
+        ) : !value ? (
+          <LoadState error={loadError} onRetry={reload} />
+        ) : (
+          <>
+            <p className="upgrade-impact">
+              <CircleAlert size={16} aria-hidden="true" />
+              <span>节点服务将重启，当前会话可能中断。已有电脑和磁盘会保留。</span>
+            </p>
+            <div className="upgrade-version">
+              <div className="upgrade-section-heading">
+                <label htmlFor={versionID}>目标版本</label>
+                <button
+                  type="button"
+                  className="text-button upgrade-upload-link"
+                  disabled={busy}
+                  onClick={() => switchView('upload')}
+                >
+                  <Upload size={14} />
+                  上传新版本
+                </button>
+              </div>
+              <Select
+                id={versionID}
+                label="目标版本"
+                value={target}
+                onChange={setTarget}
+                disabled={busy || !value.releases.length}
+                placeholder={value.releases.length ? '选择已上传的发布包' : '暂无已上传的发布包'}
+                options={value.releases.map((r) => ({
+                  value: r.id,
+                  label: r.label + ' · ' + r.platform,
+                  description: r.id.slice(0, 8),
+                }))}
               />
-              选择本页全部节点
-            </label>
-            {nodes.map((n) => {
-              const job = query.value?.jobs.find((j) => j.node === n.id)
-              return (
-                <div key={n.id}>
-                  <label>
-                    <input
-                      type="checkbox"
-                      disabled={all}
-                      checked={selected.includes(n.id)}
-                      onChange={(e) =>
-                        setSelected(
-                          e.target.checked
-                            ? [...selected, n.id]
-                            : selected.filter((id) => id !== n.id),
-                        )
-                      }
-                    />{' '}
-                    {n.name}
-                  </label>
-                  {job && (
-                    <small>
-                      {job.label} · {states[job.state] ?? job.state}
-                    </small>
+            </div>
+            <fieldset className="upgrade-targets" disabled={busy}>
+              <legend>目标节点</legend>
+              <div className="upgrade-scope">
+                <label>
+                  <input
+                    type="radio"
+                    name={scopeID}
+                    checked={!all}
+                    onChange={() => setAll(false)}
+                  />
+                  手动选择
+                </label>
+                <label>
+                  <input type="radio" name={scopeID} checked={all} onChange={() => setAll(true)} />
+                  所有同架构节点
+                </label>
+              </div>
+              {all && (
+                <small className="upgrade-all-hint">包含其他分页中已启用更新器的同架构节点。</small>
+              )}
+              <div className="upgrade-nodes">
+                <div className="upgrade-list-heading">
+                  <span>本页节点</span>
+                  {!all && nodes.length > 0 && (
+                    <label>
+                      <input
+                        type="checkbox"
+                        aria-label="选择本页全部节点"
+                        checked={currentSelection.length === nodes.length}
+                        ref={(input) => {
+                          if (input)
+                            input.indeterminate =
+                              currentSelection.length > 0 && currentSelection.length < nodes.length
+                        }}
+                        onChange={(event) =>
+                          setSelected(event.target.checked ? nodes.map((node) => node.id) : [])
+                        }
+                      />
+                      全选
+                    </label>
                   )}
                 </div>
-              )
-            })}
-          </fieldset>
-          <div className="actions">
-            <button className="secondary-button" disabled={busy} onClick={reload}>
-              刷新状态
-            </button>
-            <button
-              className="primary-button"
-              disabled={busy || !target || (!all && !selected.length)}
-              onClick={() => void submit(false)}
-            >
-              {all ? '升级所有同架构节点' : '升级所选节点（' + selected.length + '）'}
-            </button>
-          </div>
-        </>
-      )}
-      {notice && <p role="status">{notice}</p>}
+                {nodes.map((node) => {
+                  const job = value.jobs.find((job) => job.node === node.id)
+                  const Name = all ? 'span' : 'label'
+                  return (
+                    <div className="upgrade-node" key={node.id}>
+                      <Name className="upgrade-node-name">
+                        {all ? (
+                          <Monitor size={15} aria-hidden="true" />
+                        ) : (
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(node.id)}
+                            onChange={(event) =>
+                              setSelected(
+                                event.target.checked
+                                  ? [...currentSelection, node.id]
+                                  : currentSelection.filter((id) => id !== node.id),
+                              )
+                            }
+                          />
+                        )}
+                        {node.name}
+                      </Name>
+                      {job && (
+                        <span
+                          className={
+                            'status' +
+                            (['verification_failed', 'failed'].includes(job.state)
+                              ? ' status--error'
+                              : '')
+                          }
+                        >
+                          {job.label} · {states[job.state] ?? job.state}
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+                {!nodes.length && <p className="upgrade-empty">本页暂无节点</p>}
+              </div>
+            </fieldset>
+          </>
+        )}
+      </div>
+      {error || notice || (busy && uploading && archive) ? (
+        <div className="upgrade-feedback">
+          <Alert error={error} />
+          {busy && uploading && archive && archive.size > 0 && (
+            <div className="upgrade-progress" role="status">
+              {phase === 'verify'
+                ? '正在校验升级包…'
+                : (phase === 'hash' ? '正在读取文件' : '正在上传') + ' · ' + uploadPercent + '%'}
+              <progress
+                aria-label="发布包上传进度"
+                value={phase === 'verify' ? undefined : uploadPercent}
+                max={100}
+              />
+            </div>
+          )}
+          {notice && (
+            <p role="status" className="upgrade-notice">
+              <Check size={16} aria-hidden="true" />
+              {notice}
+            </p>
+          )}
+        </div>
+      ) : null}
+      <div className="dialog-actions upgrade-actions">
+        {uploading ? (
+          <button
+            className="secondary-button"
+            disabled={busy}
+            onClick={() => switchView('dispatch')}
+          >
+            <ArrowLeft size={15} />
+            返回
+          </button>
+        ) : (
+          <button className="secondary-button" disabled={busy} onClick={reload}>
+            <RefreshCw size={15} />
+            刷新状态
+          </button>
+        )}
+        <button
+          className="primary-button"
+          disabled={busy || !canSubmit}
+          onClick={() => void submit()}
+        >
+          {uploading
+            ? busy
+              ? '正在处理…'
+              : '上传发布包'
+            : all
+              ? '升级所有同架构节点'
+              : '升级所选节点（' + currentSelection.length + '）'}
+        </button>
+      </div>
     </Dialog>
   )
 }
