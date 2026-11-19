@@ -45,17 +45,18 @@ func (service *Service) appendInput(ctx context.Context, tx *sql.Tx, userID, con
 	return event(ctx, tx, userID, "message.created", submitted.MessageID, map[string]any{"conversation_id": conversationID, "sequence": sequence, "turn_id": turnID})
 }
 
-// mergeRunInputs 在模型调用边界固定新增消息及其插入位置，不拆开工具调用与结果。
-// Agent 保持原始执行上下文；服务端每次按持久批次合并，恢复也得到相同的请求摘要。
-func (service *Service) mergeRunInputs(ctx context.Context, lease Lease, key string, input modelgateway.Input) (modelgateway.Input, error) {
+// modelStepInput 在模型边界固定补充消息及插入位置，并读取本段实际操作数。
+// 恢复时按持久批次合并，得到同一请求摘要；用量包含候选模型切换及整批工具。
+func (service *Service) modelStepInput(ctx context.Context, lease Lease, key string, input modelgateway.Input) (modelgateway.Input, int, error) {
+	var operations int
 	step, err := strconv.Atoi(strings.TrimPrefix(key, "model."))
 	if err != nil || key != "model."+strconv.Itoa(step) || step < 1 || step > 64 {
-		return input, ErrInvalidInput
+		return input, 0, ErrInvalidInput
 	}
 	merged := input
 	err = service.worker(ctx, lease, false, func(tx *sql.Tx) error {
 		var exists bool
-		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.run_input_batches WHERE user_id=$1 AND run_id=$2 AND step_key=$3)`, lease.UserID, lease.RunID, key).Scan(&exists); err != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.run_input_batches WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+` AND step_key=$3), (SELECT count(*) FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+`)`, lease.UserID, lease.RunID, key).Scan(&exists, &operations); err != nil {
 			return err
 		}
 		if !exists {
@@ -86,14 +87,14 @@ func (service *Service) mergeRunInputs(ctx context.Context, lease Lease, key str
 			if len(encoded) > service.options.ContextBytes {
 				return ErrContextLimit
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.run_input_batches(user_id,run_id,step_key,step,message_offset,messages) VALUES($1,$2,$3,$4,$5,$6)`, lease.UserID, lease.RunID, key, step, len(input.Messages), encoded); err != nil {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.run_input_batches(user_id,run_id,step_key,step,message_offset,messages,segment) VALUES($1,$2,$3,$4,$5,$6,`+currentSegment+`)`, lease.UserID, lease.RunID, key, step, len(input.Messages), encoded); err != nil {
 				return err
 			}
 			if _, err = tx.ExecContext(ctx, `UPDATE tombot.runs SET input_sequence=$3 WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID, cursor); err != nil {
 				return err
 			}
 		}
-		rows, err := tx.QueryContext(ctx, `SELECT message_offset,messages FROM tombot.run_input_batches WHERE user_id=$1 AND run_id=$2 AND step<=$3 ORDER BY step LIMIT 64`, lease.UserID, lease.RunID, step)
+		rows, err := tx.QueryContext(ctx, `SELECT message_offset,messages FROM tombot.run_input_batches WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+` AND step<=$3 ORDER BY step LIMIT 64`, lease.UserID, lease.RunID, step)
 		if err != nil {
 			return err
 		}
@@ -129,5 +130,5 @@ func (service *Service) mergeRunInputs(ctx context.Context, lease Lease, key str
 		}
 		return nil
 	})
-	return merged, err
+	return merged, operations, err
 }

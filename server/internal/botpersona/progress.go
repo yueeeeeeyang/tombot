@@ -8,7 +8,7 @@ import (
 	"unicode/utf8"
 )
 
-const ProgressInstructions = "\n\nProgress updates\nUse report_progress before substantial work and whenever the current activity changes. Summarize the activity in one short Chinese sentence for the waiting indicator. Do not disclose reasoning or include these updates in the final answer. For a simple greeting or short direct answer, reply directly."
+const ProgressInstructions = "\nProgress updates\nUse report_progress for significant activity changes in one short Chinese sentence. Deliver milestones and continue until done, blocked or canceled. Try safe tool recovery. Never replay uncertain actions or disclose reasoning. Answer simple requests directly."
 
 // ProgressSchema 由运行时提供无副作用的状态工具，不受业务工具权限影响。
 func ProgressSchema() provider.ToolSchema {

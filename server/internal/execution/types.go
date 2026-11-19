@@ -114,6 +114,7 @@ type Lease struct {
 
 // Work 保存运行开始时固定的机器人设定与模型选择，以及有界上下文和已有操作结果。
 type Work struct {
+	Handoff           string
 	IsConsole         bool
 	Run               Run
 	Bot               bots.Spec

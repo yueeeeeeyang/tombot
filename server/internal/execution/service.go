@@ -105,7 +105,7 @@ func translate(err error) error {
 	if errors.Is(err, groupchat.ErrMention) {
 		return groupchat.ErrMention
 	}
-	for _, known := range []error{chatlibrary.ErrInput, chatlibrary.ErrNotFound, chatlibrary.ErrConflict, chatlibrary.ErrCapacity, scheduledtasks.ErrInput, scheduledtasks.ErrNotFound, scheduledtasks.ErrConflict, scheduledtasks.ErrCapacity, ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{errNoProgress, chatlibrary.ErrInput, chatlibrary.ErrNotFound, chatlibrary.ErrConflict, chatlibrary.ErrCapacity, scheduledtasks.ErrInput, scheduledtasks.ErrNotFound, scheduledtasks.ErrConflict, scheduledtasks.ErrCapacity, ErrInvalidInput, ErrNotFound, ErrConflict, ErrCapacity, ErrImageCapacity, ErrOperationLimit, ErrContextLimit, ErrUnavailable, ErrConversationKind, ErrNoWork, ErrLeaseLost, ErrCanceled, ErrUncertain, ErrComputerBusy, ErrComputerLost, botmemory.ErrInput, botmemory.ErrConflict, botmemory.ErrSource, botmemory.ErrCapacity, modelusage.ErrInvalidInput, modelusage.ErrQuota, modelusage.ErrConcurrency, modelusage.ErrConflict, modelusage.ErrNotFound, identity.ErrInvalidSession, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {
 			return known
 		}

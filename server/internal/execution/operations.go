@@ -6,15 +6,18 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+
 	"io.yueyang/tom/internal/botmemory"
 	"io.yueyang/tom/internal/botmessaging"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/chatlibrary"
-	"io.yueyang/tom/internal/scheduledtasks"
-
 	"io.yueyang/tom/internal/infra/ids"
+	"io.yueyang/tom/internal/modelregistry"
 	"io.yueyang/tom/internal/modelusage"
+	"io.yueyang/tom/internal/scheduledtasks"
 )
+
+const currentSegment = `(SELECT segment FROM tombot.runs WHERE user_id=$1 AND id=$2)`
 
 const operationColumns = `id,sequence,step_key,kind,status,result,error_code,attempt,fencing_token,request_digest`
 
@@ -24,7 +27,7 @@ func scanOperation(row scanner) (Operation, error) {
 	return operation, err
 }
 func readOperations(ctx context.Context, transaction *sql.Tx, userID, runID string, limit int) (operations []Operation, result error) {
-	rows, err := transaction.QueryContext(ctx, `SELECT `+operationColumns+` FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 ORDER BY started_at,id LIMIT $3`, userID, runID, limit+1)
+	rows, err := transaction.QueryContext(ctx, `SELECT `+operationColumns+` FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+` ORDER BY started_at,id LIMIT $3`, userID, runID, limit+1)
 	if err != nil {
 		return nil, err
 	}
@@ -46,6 +49,16 @@ func readOperations(ctx context.Context, transaction *sql.Tx, userID, runID stri
 // BeginOperation 先持久记账再允许外部动作，只有返回 isNew=true 时才能执行一次。
 // 重复步骤返回原记录，started 或 unknown 不等于可重试；成功记录应直接复用结果。
 func (service *Service) BeginOperation(ctx context.Context, lease Lease, request OperationRequest) (Operation, bool, error) {
+	return service.beginOperation(ctx, lease, request, service.options.MaxOperations)
+}
+
+// 已派发的一批工具和收尾模型都需要记账空间；只允许受信 Worker 使用这部分有界预留。
+func (service *Service) segmentOperationLimit() int {
+	const maximumToolBatch = 16
+	return service.options.MaxOperations + maximumToolBatch + 2*modelregistry.MaxCandidates
+}
+
+func (service *Service) beginOperation(ctx context.Context, lease Lease, request OperationRequest, limit int) (Operation, bool, error) {
 	if !stepPattern.MatchString(request.StepKey) || (request.Kind != "model" && request.Kind != "tool" && request.Kind != "computer") || len(request.RequestDigest) != 32 {
 		return Operation{}, false, ErrInvalidInput
 	}
@@ -138,9 +151,9 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 			}
 		}
 		var digest []byte
-		err := transaction.QueryRowContext(ctx, `SELECT request_digest FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND step_key=$3`, lease.UserID, lease.RunID, request.StepKey).Scan(&digest)
+		err := transaction.QueryRowContext(ctx, `SELECT request_digest FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+` AND step_key=$3`, lease.UserID, lease.RunID, request.StepKey).Scan(&digest)
 		if err == nil {
-			operation, err = scanOperation(transaction.QueryRowContext(ctx, `SELECT `+operationColumns+` FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND step_key=$3`, lease.UserID, lease.RunID, request.StepKey))
+			operation, err = scanOperation(transaction.QueryRowContext(ctx, `SELECT `+operationColumns+` FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment+` AND step_key=$3`, lease.UserID, lease.RunID, request.StepKey))
 			if err != nil {
 				return err
 			}
@@ -154,18 +167,18 @@ func (service *Service) BeginOperation(ctx context.Context, lease Lease, request
 		}
 		var count int
 		var inFlight bool
-		if err = transaction.QueryRowContext(ctx, `SELECT count(*),COALESCE(bool_or(status IN ('started','unknown')),false) FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2`, lease.UserID, lease.RunID).Scan(&count, &inFlight); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT count(*),COALESCE(bool_or(status IN ('started','unknown')),false) FROM tombot.run_operations WHERE user_id=$1 AND run_id=$2 AND segment=`+currentSegment, lease.UserID, lease.RunID).Scan(&count, &inFlight); err != nil {
 			return err
 		}
 		if inFlight {
 			return ErrUncertain
 		}
-		if count >= service.options.MaxOperations {
+		if count >= limit {
 			return ErrOperationLimit
 		}
 
-		operation, err = scanOperation(transaction.QueryRowContext(ctx, `INSERT INTO tombot.run_operations(user_id,id,run_id,step_key,kind,request_digest,fencing_token,attempt,status,computer_session_id)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,'started',$9) RETURNING `+operationColumns, lease.UserID, ids.New(), lease.RunID, request.StepKey, request.Kind, request.RequestDigest, lease.FencingToken, lease.Attempt, computerID))
+		operation, err = scanOperation(transaction.QueryRowContext(ctx, `INSERT INTO tombot.run_operations(user_id,id,run_id,step_key,kind,request_digest,fencing_token,attempt,status,computer_session_id,segment)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,'started',$9,(SELECT segment FROM tombot.runs WHERE user_id=$1 AND id=$3)) RETURNING `+operationColumns, lease.UserID, ids.New(), lease.RunID, request.StepKey, request.Kind, request.RequestDigest, lease.FencingToken, lease.Attempt, computerID))
 		if err != nil {
 			return err
 		}

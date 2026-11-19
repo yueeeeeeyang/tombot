@@ -66,7 +66,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 		var snapshot []byte
 		var policy *string
 		var version *int64
-		if err = transaction.QueryRowContext(ctx, `SELECT bot_snapshot,model_policy_id,model_version,continuation_after FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&snapshot, &policy, &version, &work.ContinuationAfter); err != nil {
+		if err = transaction.QueryRowContext(ctx, `SELECT bot_snapshot,model_policy_id,model_version,continuation_after,handoff FROM tombot.runs WHERE user_id=$1 AND id=$2`, lease.UserID, lease.RunID).Scan(&snapshot, &policy, &version, &work.ContinuationAfter, &work.Handoff); err != nil {
 			return err
 		}
 		if err = json.Unmarshal(snapshot, &work.Bot); err != nil {
@@ -167,7 +167,7 @@ func (service *Service) Start(ctx context.Context, lease Lease) (Work, error) {
 			}
 		}
 		slices.Reverse(work.Messages)
-		work.Operations, err = readOperations(ctx, transaction, lease.UserID, lease.RunID, service.options.MaxOperations)
+		work.Operations, err = readOperations(ctx, transaction, lease.UserID, lease.RunID, service.segmentOperationLimit())
 		return err
 	})
 	if err != nil {
