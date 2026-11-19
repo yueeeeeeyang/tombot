@@ -21,6 +21,8 @@ var (
 	ErrWaiting        = errors.New("正在等待电脑执行权")
 	ErrCapacity       = errors.New("当前用户的电脑等待队列已满")
 	ErrUnavailable    = errors.New("电脑执行会话当前不可用")
+	ErrStopped        = errors.New("共用电脑已停止")
+	ErrRestarting     = errors.New("共用电脑正在恢复")
 	ErrNode           = errors.New("电脑节点尚未确认执行状态")
 	ErrCleanupBlocked = errors.New("电脑清理未确认，保持隔离")
 )

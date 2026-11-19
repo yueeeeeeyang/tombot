@@ -234,6 +234,12 @@ export class MemoryBackend implements DesktopBackend {
     return Promise.reject(new Error('文件不存在。'))
   }
 
+  async computerStatus(): Promise<import('../../../../shared/computer').ComputerStatus> {
+    throw new Error('当前预览没有连接 Bot 电脑。')
+  }
+  async restartComputer(): Promise<import('../../../../shared/computer').ComputerStatus> {
+    throw new Error('当前预览没有连接 Bot 电脑。')
+  }
   listTasks(): Promise<CatTask[]> {
     return Promise.resolve([])
   }

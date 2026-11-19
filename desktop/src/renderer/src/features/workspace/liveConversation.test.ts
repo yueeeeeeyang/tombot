@@ -63,6 +63,31 @@ it('工作进度只更新活动，晚到的历史快照不能覆盖新的运行�
   expect(result.current.workspace.agents[0]!.messages).toBe(messages)
 })
 
+it('整机故障对所有会话可见，单项任务错误只显示在原聊天，主动取消可清除提示', async () => {
+  const { result, backend } = setup({ messages: [], hasMore: false, runs: [] })
+  await waitFor(() => expect(backend.loadAgentConversation).toHaveBeenCalled())
+  function finish(sequence: number, status: string, code: string) {
+    act(() =>
+      memoryBackend.publishEvent({
+        sequence,
+        kind: 'run.finished',
+        resource_id: 'run-a',
+        created_at: '',
+        payload: { bot_id: 'assistant', conversation_id: 'chat-a', status, error_code: code },
+      }),
+    )
+  }
+  finish(1, 'failed', 'COMPUTER_STOPPED')
+  expect(result.current.computerError).toContain('所有 Bot 共用的电脑已停止')
+  act(() => result.current.clearComputerError())
+  finish(2, 'failed', 'MODEL_QUOTA_EXCEEDED')
+  expect(result.current.runErrors['chat-a']).toContain('额度')
+  expect(result.current.runErrors['chat-b']).toBeUndefined()
+  finish(3, 'canceled', 'CANCELED')
+  expect(result.current.runErrors['chat-a']).toBe('')
+  expect(result.current.computerError).toBe('')
+})
+
 it('消息推送先于回执且回执丢失时，只保留已确认的气泡，重试也不重复', async () => {
   const page: AgentConversation = { messages: [], hasMore: false, runs: [] }
   const { result, backend } = setup(page)

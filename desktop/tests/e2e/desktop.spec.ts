@@ -466,9 +466,9 @@ test('参考图设置页和搜索框的布局与交互', async () => {
   await window.getByRole('button', { name: '打开设置' }).click()
   const settingsDialog = window.getByRole('dialog', { name: '设置' })
   await expect(settingsDialog).toBeVisible()
-  await expect(
-    window.getByRole('navigation', { name: '设置分类' }).getByRole('button'),
-  ).toHaveCount(2)
+  await expect(window.getByRole('navigation', { name: '设置分类' }).getByRole('button')).toHaveText(
+    ['通用', '电脑', '更新'],
+  )
   await window.screenshot({
     path: testInfo.outputPath('desktop-settings-general.png'),
     scale: 'css',

@@ -1,3 +1,4 @@
+import { runFailure } from './runFailure'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getBackend,
@@ -85,6 +86,9 @@ export function useWorkspace(
   const backend = getBackend()
   const [initial] = useState(() => readInitial(backend))
   const [workspace, setWorkspace] = useState(initial.workspace)
+  const [runErrors, setRunErrors] = useState<Record<string, string>>({})
+  const [computerError, setComputerError] = useState('')
+  const clearComputerError = useCallback(() => setComputerError(''), [])
   const [error, setError] = useState(initial.error)
   const [isBlocked, setBlocked] = useState(initial.isBlocked)
   const [ready, setReady] = useState(initial.ready)
@@ -261,8 +265,26 @@ export function useWorkspace(
               runId: event.resource_id,
             })
           }
-          if (event.kind.endsWith('run.finished') && event.payload.status !== 'succeeded') {
-            setError('消息已接收，但本次任务未完成。请重试或联系管理员查看运行日志。')
+          const id = event.payload.conversation_id
+          if (event.kind.endsWith('run.finished')) {
+            const code = event.payload.error_code
+            const message = runFailure(event.payload.status, code)
+            if (
+              code === 'COMPUTER_STOPPED' ||
+              code === 'COMPUTER_RESTARTING' ||
+              code === 'COMPUTER_UNAVAILABLE'
+            )
+              setComputerError(message)
+            else if (
+              typeof id === 'string' &&
+              (event.kind === 'run.finished' || event.kind === 'group.run.finished')
+            ) {
+              setRunErrors((previous) => ({
+                ...previous,
+                [id]: message ? message + '（运行编号 ' + event.resource_id + '）' : '',
+              }))
+            }
+            if (event.payload.status === 'succeeded') clearComputerError()
           }
         }
         if (
@@ -276,7 +298,7 @@ export function useWorkspace(
       },
       (failure) => setError(failure.message),
     )
-  }, [backend, ready, isBlocked, receiveActivity, refreshConversation])
+  }, [backend, ready, isBlocked, receiveActivity, refreshConversation, clearComputerError])
 
   useEffect(() => {
     if (!ready || isBlocked || !backend.loadBotActivities) return
@@ -566,6 +588,10 @@ export function useWorkspace(
     error,
     isBlocked,
     ready,
+    runErrors,
+    computerError,
+    clearComputerError,
+    dismissRunError: (id: string) => setRunErrors((previous) => ({ ...previous, [id]: '' })),
     retryLoadingWorkspace: () => void retryInitialLoad.current?.(),
     commit,
     create,

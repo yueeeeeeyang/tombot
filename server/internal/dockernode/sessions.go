@@ -162,6 +162,17 @@ func (controller *SessionController) Open(ctx context.Context, command computer.
 		return computer.SessionObservation{}, err
 	}
 	defer controller.pending.Done()
+	if command.Validate() != nil || command.Session.NodeID != controller.node.options.NodeID {
+		return computer.SessionObservation{}, failure("session_invalid")
+	}
+	// 重启期间独占锁会一直持有，先读原子意图以便立即说明原因；锁内仍复验身份。
+	state, err := controller.node.journal.read(command.Session.UserID)
+	if err != nil {
+		return computer.SessionObservation{}, err
+	}
+	if state != nil && state.restarting() && state.ContainerID == command.Session.ContainerID && state.Specification.ComputerID == command.Session.ComputerID && state.Specification.Generation == command.Session.Generation {
+		return computer.SessionObservation{}, failure("session_computer_recovering")
+	}
 	deadline := computer.LeaseDeadline(ctx, command.Lifetime)
 	return controller.withLock(ctx, command, func(ctx context.Context, state *sessionRecord) (computer.SessionObservation, error) {
 		if !time.Now().Before(deadline) {
@@ -177,6 +188,12 @@ func (controller *SessionController) Open(ctx context.Context, command computer.
 		resourceState, err := controller.node.journal.read(command.Session.UserID)
 		if err != nil {
 			return computer.SessionObservation{}, err
+		}
+		if resourceState != nil && resourceState.RestartPhase == "failed" {
+			return computer.SessionObservation{}, failure("session_computer_recovery_failed")
+		}
+		if resourceState != nil && resourceState.restarting() {
+			return computer.SessionObservation{}, failure("session_computer_recovering")
 		}
 		if resourceState == nil || resourceState.Phase != "ready" || resourceState.Specification.ComputerID != command.Session.ComputerID || resourceState.Specification.NodeID != command.Session.NodeID || resourceState.Specification.Generation != command.Session.Generation || resourceState.ContainerID != command.Session.ContainerID {
 			return computer.SessionObservation{}, failure("session_computer_mismatch")

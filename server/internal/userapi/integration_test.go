@@ -20,6 +20,8 @@ import (
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/chatlibrary"
+	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/computercontrol"
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/identity"
 	secure "io.yueyang/tom/internal/infra/crypto"
@@ -134,7 +136,14 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler, err := New(catalog, executor, unavailableConsole{}, userEvents, gate, logger)
+	maintenance, err := computercontrol.New(tenant, open(postgres.DispatchRole), maintenanceNode{}, computercontrol.Options{
+		LeaseLifetime: 3 * time.Second, WaitTimeout: 5 * time.Second, HoldTimeout: 20 * time.Second,
+		NodeTimeout: 250 * time.Millisecond, RetryDelay: 100 * time.Millisecond, MaxWaiting: 5, MaxCleanupAttempts: 3,
+	}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := New(catalog, executor, unavailableConsole{}, maintenance, userEvents, gate, logger)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +195,7 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		user, computer, activation, password := ids.New(), ids.New(), randomValue(t), randomValue(t)
 		username := strings.ToLower(user)
 		execute(t, pool, `INSERT INTO tombot.users(id,username,display_name,status) VALUES($1,$2,'业务用户','provisioning')`, user, username)
-		execute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$2,$2,1000,1073741824,1073741824,128)`, user, computer, node, imageID)
+		execute(t, pool, `INSERT INTO tombot.computers(user_id,id,node_id,image_id,status,container_id,volume_ref,cpu_millis,memory_bytes,disk_bytes,process_limit) VALUES($1,$2,$3,$4,'ready',$5,$2,1000,1073741824,1073741824,128)`, user, computer, node, imageID, secure.Hash(computer))
 		execute(t, pool, `UPDATE tombot.users SET status='pending_activation' WHERE id=$1`, user)
 		execute(t, pool, `INSERT INTO tombot.user_limits(user_id,concurrent_model_calls,concurrent_desktops,queued_runs,monthly_token_limit) VALUES($1,2,2,10,100000)`, user)
 		execute(t, pool, `INSERT INTO tombot.activation_tokens(id,user_id,token_digest,expires_at) VALUES($1,$2,decode($3,'hex'),clock_timestamp()+interval '1 hour')`, ids.New(), user, secure.Hash(activation))
@@ -199,6 +208,24 @@ func TestPostgreSQLAndHTTPSUserResources(t *testing.T) {
 		}
 	}
 	first, second := sessions[0].AccessToken, sessions[1].AccessToken
+	firstPC := decode[computer.ComputerStatus](t, call("GET", "/api/v2/computer", nil, first, nil), 200)
+	secondPC := decode[computer.ComputerStatus](t, call("GET", "/api/v2/computer", nil, second, nil), 200)
+	if firstPC.State != "stopped" || firstPC.Version == secondPC.Version {
+		t.Fatal("电脑状态没有按登录账号解析")
+	}
+	restarted := decode[computer.ComputerStatus](t, call("POST", "/api/v2/computer/restart", map[string]string{"expected_version": firstPC.Version}, first, nil), 200)
+	if restarted.State != "restarting" || restarted.Version != firstPC.Version {
+		t.Fatal("重启回执没有绑定原电脑")
+	}
+	for _, body := range []map[string]string{{}, {"expected_version": "bad"}, {"expected_version": firstPC.Version, "user_id": sessions[1].Principal.UserID}} {
+		if resp := call("POST", "/api/v2/computer/restart", body, first, nil); resp.status != 400 {
+			t.Fatal("重启接口未拒绝无效参数", resp.status)
+		}
+	}
+	if resp := call("GET", "/api/v2/computer", nil, "", nil); resp.status != 401 {
+		t.Fatal("电脑状态接口接受了匿名读取", resp.status)
+	}
+
 	spec := bots.Spec{Name: "研究员", Description: "用户自己的自定义资料", SystemPrompt: "You are a research bot. Use verified evidence.", ToolPermissions: []string{"file_read", "send_user_message"}, ApprovalMode: "standard", MessagingPolicy: bots.MessagingPolicy{AcceptDM: true, CanInitiate: true, AcceptGroupInvite: true}, AccentHue: 125, AvatarRef: "client-asset-1"}
 	request := bots.CreateRequest{ClientRequestID: ids.New(), Spec: spec}
 	created := decode[botReply](t, call("POST", "/api/v2/bots", request, first, nil), 201)

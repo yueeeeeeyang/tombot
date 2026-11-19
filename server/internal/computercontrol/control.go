@@ -147,7 +147,19 @@ func (service *Service) confirm(ctx context.Context, expected record, command co
 		}
 		if callErr != nil || !observation.Matches(command, "active") {
 			result = ErrNode
-			return quarantine(write, tx, value, "COMPUTER_NODE_UNKNOWN")
+			code := "COMPUTER_NODE_UNKNOWN"
+			var failure *computer.Failure
+			if errors.As(callErr, &failure) {
+				switch failure.Code {
+				case "session_computer_stopped":
+					result, code = ErrStopped, "COMPUTER_STOPPED"
+				case "session_computer_recovery_failed":
+					result, code = ErrUnavailable, "COMPUTER_UNAVAILABLE"
+				case "session_computer_recovering":
+					result, code = ErrRestarting, "COMPUTER_RESTARTING"
+				}
+			}
+			return quarantine(write, tx, value, code)
 		}
 		if expectedState == "active" {
 			return nil

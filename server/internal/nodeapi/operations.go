@@ -17,6 +17,9 @@ func validateResult(action string, input, result any) error {
 	case "inspect", "ensure", "remove":
 		value, ok := result.(computer.Observation)
 		valid = ok && value.Matches(input.(computer.Specification)) && (value.State != "ready" || value.Capabilities.Ready())
+	case "computer_manage":
+		value, ok := result.(computer.MaintenanceReceipt)
+		valid = ok && value.Matches(input.(computer.Maintenance))
 	case "computer_upgrade":
 		value, ok := result.(computer.Observation)
 		upgrade := input.(computer.ImageUpgrade)
@@ -173,6 +176,9 @@ func (client *Client) Console(ctx context.Context, input computer.ConsoleRequest
 
 var _ computer.ConsoleRuntime = (*Client)(nil)
 
+func (client *Client) ManageComputer(ctx context.Context, input computer.Maintenance) (computer.MaintenanceReceipt, error) {
+	return call[computer.MaintenanceReceipt](ctx, client, "computer_manage", input)
+}
 func (client *Client) PrepareBrowser(ctx context.Context, input computer.ExecutionSession) error {
 	_, err := call[confirmation](ctx, client, "browser_prepare", input)
 	return err

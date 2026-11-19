@@ -99,6 +99,10 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     loadEarlier,
     hasUnsavedChanges,
     dismissError,
+    runErrors,
+    computerError,
+    clearComputerError,
+    dismissRunError,
   } = useWorkspace(receiveActivity, clearActivity)
   const connectionStatus = useConnectionStatus(retryLoadingWorkspace)
   const {
@@ -107,6 +111,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     dismissError: dismissProfileError,
   } = useUserProfile()
   const { preferences, update: updatePreferences, error: sidebarError } = useSidebarPreferences()
+  const [settingsSection, setSettingsSection] = useState<'general' | 'computer'>('general')
   const [openDialog, setOpenDialog] = useState<OpenDialog>(null)
   const [sidebarWidth, setSidebarWidth] = useState<number>(SIDEBAR_WIDTH.default)
   const [isResizing, setResizing] = useState(false)
@@ -171,8 +176,20 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
   const hiddenAgents = workspace.agents.filter((candidate) =>
     preferences.hiddenIds.includes(candidate.id),
   )
+  const conversationId =
+    (surface.kind === 'group'
+      ? chatGroups.find((group) => group.id === surface.id)?.conversation_id
+      : agent?.conversationId) ?? ''
+  const taskError = runErrors[conversationId]
   const bannerMessage =
-    error || profileError || themeError || sidebarError || languageError || notice
+    error ||
+    profileError ||
+    themeError ||
+    sidebarError ||
+    languageError ||
+    computerError ||
+    taskError ||
+    notice
   const closeMenu = useCallback(() => setMenuAnchor(undefined), [])
   const sidebarCategories = [
     ...new Set([...getAgentGroups(workspace), ...Object.values(preferences.chatCategories ?? {})]),
@@ -264,6 +281,7 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
     })
   }
   function openSettings(): void {
+    setSettingsSection('general')
     setOpenDialog('settings')
   }
   const uploadIds = useRef(new WeakMap<File, string>())
@@ -419,6 +437,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
 
   const settingsDialog = openDialog === 'settings' && (
     <SettingsDialog
+      initialSection={settingsSection}
+      onComputerRunning={clearComputerError}
       onClose={() => {
         setOpenDialog(null)
       }}
@@ -472,6 +492,16 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
         <AlertCircle size={16} />
       </span>
       <span className="error-banner-text">{bannerMessage}</span>
+      {computerError && bannerMessage === computerError && (
+        <button
+          onClick={() => {
+            setSettingsSection('computer')
+            setOpenDialog('settings')
+          }}
+        >
+          查看电脑
+        </button>
+      )}
       {error && !isBlocked && hasUnsavedChanges ? (
         <button
           onClick={() =>
@@ -490,6 +520,8 @@ function WorkspaceApp({ session }: { session: ReturnType<typeof useSession> }) {
             onClick={() => {
               if (error) dismissError()
               else if (profileError) dismissProfileError()
+              else if (computerError) clearComputerError()
+              else if (taskError) dismissRunError(conversationId)
               else setNotice('')
             }}
           >

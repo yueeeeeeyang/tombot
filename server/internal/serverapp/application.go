@@ -234,7 +234,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	user, err := userapi.New(catalog, executor, console, userEvents, gate, logger)
+	user, err := userapi.New(catalog, executor, console, control, userEvents, gate, logger)
 	if err != nil {
 		return nil, err
 	}

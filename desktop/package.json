@@ -1,6 +1,6 @@
 {
   "name": "tombot-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TomBot 桌面客户端",
   "private": true,
   "type": "module",

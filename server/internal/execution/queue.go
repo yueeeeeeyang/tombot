@@ -162,7 +162,7 @@ func (service *Service) Recover(ctx context.Context, limit int) (int, error) {
 			} else if pending {
 				return nil
 			}
-			lostComputer, err := computerLost(ctx, transaction, lease)
+			lossCode, err := computerLossCode(ctx, transaction, lease)
 			if err != nil {
 				return err
 			}
@@ -180,8 +180,8 @@ func (service *Service) Recover(ctx context.Context, limit int) (int, error) {
 				status, code = "canceled", "CANCELED"
 			case uncertain:
 				status, code = "unknown", "EXTERNAL_RESULT_UNKNOWN"
-			case lostComputer:
-				status, code = "failed", "COMPUTER_LEASE_LOST"
+			case lossCode != "":
+				status, code = "failed", lossCode
 			case lease.Attempt >= service.options.MaxAttempts:
 				status, code = "failed", "RECOVERY_EXHAUSTED"
 			}
@@ -226,9 +226,20 @@ func computerPending(ctx context.Context, transaction *sql.Tx, lease Lease) (boo
 	return pending, err
 }
 
+// 电脑租约失效后的后台收尾也要保留节点确认的原因，便于用户在原聊天采取行动。
+func computerLossCode(ctx context.Context, transaction *sql.Tx, lease Lease) (string, error) {
+	var code string
+	err := transaction.QueryRowContext(ctx, `SELECT CASE WHEN error_code IN ('COMPUTER_STOPPED','COMPUTER_RESTARTING','COMPUTER_UNAVAILABLE') THEN error_code ELSE 'COMPUTER_LEASE_LOST' END
+		FROM tombot.computer_sessions WHERE user_id=$1 AND run_id=$2 AND status='released'
+		AND error_code IN ('COMPUTER_LEASE_EXPIRED','COMPUTER_WAIT_TIMEOUT','RUN_UNAVAILABLE','COMPUTER_NODE_UNKNOWN','COMPUTER_STOPPED','COMPUTER_RESTARTING','COMPUTER_UNAVAILABLE')
+		ORDER BY job_fencing_token DESC,updated_at DESC LIMIT 1`, lease.UserID, lease.RunID).Scan(&code)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return code, err
+}
+
 func computerLost(ctx context.Context, transaction *sql.Tx, lease Lease) (bool, error) {
-	var lost bool
-	err := transaction.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.computer_sessions WHERE user_id=$1 AND run_id=$2 AND status='released'
-		AND error_code IN ('COMPUTER_LEASE_EXPIRED','COMPUTER_WAIT_TIMEOUT','RUN_UNAVAILABLE','COMPUTER_NODE_UNKNOWN'))`, lease.UserID, lease.RunID).Scan(&lost)
-	return lost, err
+	code, err := computerLossCode(ctx, transaction, lease)
+	return code != "", err
 }

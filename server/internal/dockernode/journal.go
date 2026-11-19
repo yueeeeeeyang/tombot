@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"golang.org/x/sys/unix"
 	"io.yueyang/tom/internal/computer"
 	"io.yueyang/tom/internal/infra/ids"
@@ -22,6 +23,8 @@ import (
 const lifecycleVersion = 4
 
 type record struct {
+	RestartID         string                 `json:"restart_id,omitempty"`
+	RestartPhase      string                 `json:"restart_phase,omitempty"`
 	Version           int                    `json:"version"`
 	Specification     computer.Specification `json:"specification"`
 	Phase             string                 `json:"phase"`
@@ -198,6 +201,14 @@ func (journal *journal) read(userID string) (*record, error) {
 		if state.Phase != "absent" || state.ContainerID != "" || state.Retirement.Inode == 0 || next.Validate() != nil || !sameComputerIdentity(next, previous) || next.Generation <= previous.Generation || next.Generation-previous.Generation != 1 || next.Attempt <= previous.Attempt || next.Attempt-previous.Attempt != 1 || next.FencingToken <= previous.FencingToken {
 			return nil, errors.New("节点控制目录回收记录无效")
 		}
+	}
+	if state.RestartID != "" {
+		if _, err := ulid.ParseStrict(state.RestartID); err != nil {
+			return nil, failure("computer_restart_record_invalid")
+		}
+	}
+	if state.RestartPhase != "" && (state.RestartID == "" || !state.restarting() && state.RestartPhase != "failed") {
+		return nil, failure("computer_restart_record_invalid")
 	}
 	if !validImageUpgradeRecord(&state) {
 		return nil, errors.New("节点电脑镜像更新记录无效")

@@ -254,6 +254,8 @@ func (worker *Worker) Process(parent context.Context, lease Lease) (Run, error) 
 
 func failureCode(err error) string {
 	switch {
+	case errors.Is(err, ErrUncertain):
+		return "EXTERNAL_RESULT_UNKNOWN"
 	case errors.Is(err, modelusage.ErrQuota):
 		return "MODEL_QUOTA_EXCEEDED"
 	case errors.Is(err, modelusage.ErrConcurrency):
@@ -266,12 +268,16 @@ func failureCode(err error) string {
 		return "CONTEXT_LIMIT"
 	case errors.Is(err, ErrUnavailable):
 		return "RESOURCE_UNAVAILABLE"
+	case errors.Is(err, computercontrol.ErrStopped):
+		return "COMPUTER_STOPPED"
+	case errors.Is(err, computercontrol.ErrRestarting):
+		return "COMPUTER_RESTARTING"
 	case errors.Is(err, computercontrol.ErrCapacity):
 		return "COMPUTER_QUEUE_FULL"
-	case errors.Is(err, computercontrol.ErrUnavailable), errors.Is(err, computercontrol.ErrLeaseLost), errors.Is(err, computercontrol.ErrNode):
+	case errors.Is(err, computercontrol.ErrLeaseLost):
+		return "COMPUTER_LEASE_LOST"
+	case errors.Is(err, computercontrol.ErrUnavailable), errors.Is(err, computercontrol.ErrNode):
 		return "COMPUTER_UNAVAILABLE"
-	case errors.Is(err, ErrUncertain):
-		return "EXTERNAL_RESULT_UNKNOWN"
 	case errors.Is(err, botagent.ErrModelOutput):
 		return "MODEL_OUTPUT_INVALID"
 	case errors.Is(err, context.DeadlineExceeded):

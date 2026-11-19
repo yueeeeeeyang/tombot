@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { getBackend, type ApplicationAbout } from '../desktop/backend'
 import { UpdatePanel } from './ClientUpdates'
-import { Download, Settings, X } from 'lucide-react'
+import { ComputerSettings } from './ComputerSettings'
+import { Download, Monitor, Settings, X } from 'lucide-react'
 import { Dialog } from '../../components/Dialog'
 import { Select } from '../../../../../../ui/Select'
 import workspaceCat from '../../assets/cats/workspace-cat.png'
@@ -9,6 +10,8 @@ import type { UserProfile } from '../desktop/backend'
 import { type LanguagePreference, type ThemePreference } from './settings'
 
 interface SettingsDialogProps {
+  initialSection?: 'general' | 'computer'
+  onComputerRunning?: () => void
   theme: ThemePreference
   themeError: string
   onThemeChange: (theme: ThemePreference) => void
@@ -25,6 +28,8 @@ interface SettingsDialogProps {
 
 /** 账号资料来自当前会话；主题即时生效，外观偏好保存在本机。 */
 export function SettingsDialog({
+  initialSection = 'general',
+  onComputerRunning,
   theme,
   themeError,
   languageError,
@@ -38,7 +43,7 @@ export function SettingsDialog({
   onSignOut,
   onClose,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<'general' | 'updates'>('general')
+  const [section, setSection] = useState<'general' | 'computer' | 'updates'>(initialSection)
   return (
     <Dialog title="设置" variant="settings" onClose={onClose}>
       <div className="settings-layout">
@@ -54,6 +59,15 @@ export function SettingsDialog({
           </button>
           <button
             type="button"
+            className={section === 'computer' ? 'is-active' : ''}
+            aria-current={section === 'computer' ? 'page' : undefined}
+            onClick={() => setSection('computer')}
+          >
+            <Monitor size={17} strokeWidth={1.7} />
+            电脑
+          </button>
+          <button
+            type="button"
             className={section === 'updates' ? 'is-active' : ''}
             aria-current={section === 'updates' ? 'page' : undefined}
             onClick={() => setSection('updates')}
@@ -63,7 +77,9 @@ export function SettingsDialog({
           </button>
         </nav>
         <section className="settings-pane" aria-labelledby="settings-section-title">
-          {section === 'updates' ? (
+          {section === 'computer' ? (
+            <ComputerSettings onRunning={onComputerRunning} />
+          ) : section === 'updates' ? (
             <UpdateSettings />
           ) : (
             <>

@@ -117,6 +117,10 @@ export type ApplicationAbout = {
 }
 
 export interface DesktopBackend extends Partial<ConsoleBackend> {
+  computerStatus: () => Promise<import('../../../../shared/computer').ComputerStatus>
+  restartComputer: (
+    version: string,
+  ) => Promise<import('../../../../shared/computer').ComputerStatus>
   loadConversationPreviews: (ids: string[]) => Promise<ConversationPreview[]>
   checkClientUpdate: () => Promise<ClientUpdate | null>
   installClientUpdate: (id: string, onProgress: (message: string) => void) => Promise<boolean>

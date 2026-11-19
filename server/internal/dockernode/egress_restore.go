@@ -59,6 +59,18 @@ func (node *Runtime) restoreUserEgress(ctx context.Context, logger *slog.Logger,
 		return failure("egress_journal_identity_invalid")
 	}
 	resource := node.withStorage(node.resource(state.Specification), state)
+	if state.restarting() {
+		attempt, cancel := context.WithTimeout(ctx, node.restartBudget())
+		defer cancel()
+		if err := node.finishRestart(attempt, logger, state, func(ctx context.Context) error { return node.journal.requireClosedSessions(ctx, userID) }); err != nil {
+			logComputerRecovery(ctx, logger, state, err)
+			return node.egress.stop(ctx, resource)
+		}
+		return nil
+	}
+	if state.RestartPhase == "failed" {
+		return node.egress.stop(ctx, resource)
+	}
 	resuming, err := node.journal.hasComputerRecovery(state)
 	if err != nil {
 		return err

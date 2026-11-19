@@ -227,6 +227,10 @@ contextBridge.exposeInMainWorld(
           ipcRenderer.removeListener('desktop:bootstrap-status', listener)
         }
       },
+      computerStatus: () =>
+        invoke<import('../shared/computer').ComputerStatus>('desktop:computer-status'),
+      restartComputer: (version: string) =>
+        invoke<import('../shared/computer').ComputerStatus>('desktop:computer-restart', version),
       listTasks: (agentId: string) => invoke('desktop:tasks', agentId),
       setTaskEnabled: (agentId: string, id: string, revision: number, enabled: boolean) =>
         invoke('desktop:task-enabled', { agentId, id, revision, enabled }),

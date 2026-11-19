@@ -24,13 +24,16 @@ func (service *Service) Complete(ctx context.Context, lease Lease, outcome Outco
 		} else if pending {
 			return ErrComputerBusy
 		}
-		if outcome.Status == "succeeded" {
-			lost, err := computerLost(ctx, transaction, lease)
+		if outcome.Status == "succeeded" || outcome.ErrorCode == "COMPUTER_LEASE_LOST" {
+			lossCode, err := computerLossCode(ctx, transaction, lease)
 			if err != nil {
 				return err
 			}
-			if lost {
-				return ErrComputerLost
+			if lossCode != "" {
+				if outcome.Status == "succeeded" {
+					return ErrComputerLost
+				}
+				outcome.ErrorCode = lossCode
 			}
 		}
 		var err error

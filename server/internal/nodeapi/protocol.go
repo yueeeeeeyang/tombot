@@ -76,6 +76,13 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 			err = value.Validate()
 		}
 		input, node = value, value.NodeID
+	case "computer_manage":
+		var value computer.Maintenance
+		err = agentchannel.Decode(encoded, &value)
+		if err == nil {
+			err = value.Validate()
+		}
+		input, node = value, value.NodeID
 	case "computer_upgrade":
 		var value computer.ImageUpgrade
 		err = agentchannel.Decode(encoded, &value)
@@ -196,6 +203,12 @@ func (operations Operations) invoke(ctx context.Context, action string, input an
 		return operations.Computers.Ensure(ctx, input.(computer.Specification))
 	case "remove":
 		return operations.Computers.Remove(ctx, input.(computer.Specification))
+	case "computer_manage":
+		manager, ok := operations.Sessions.(computer.ComputerManager)
+		if !ok {
+			return nil, &computer.Failure{Code: "computer_management_unavailable"}
+		}
+		return manager.ManageComputer(ctx, input.(computer.Maintenance))
 	case "browser_prepare":
 		manager, ok := operations.Sessions.(computer.BrowserPreparer)
 		if !ok {

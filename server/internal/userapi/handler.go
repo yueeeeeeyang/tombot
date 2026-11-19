@@ -16,6 +16,8 @@ import (
 	"io.yueyang/tom/internal/authapi"
 	"io.yueyang/tom/internal/bots"
 	"io.yueyang/tom/internal/chatlibrary"
+	"io.yueyang/tom/internal/computer"
+	"io.yueyang/tom/internal/computercontrol"
 	"io.yueyang/tom/internal/execution"
 	"io.yueyang/tom/internal/groupchat"
 	"io.yueyang/tom/internal/httpjson"
@@ -90,7 +92,11 @@ type eventTiming struct {
 	minimumWindow time.Duration
 }
 
+type ComputerManager interface {
+	ManageComputer(context.Context, identity.Principal, string) (computer.ComputerStatus, error)
+}
 type Handler struct {
+	computers   ComputerManager
 	console     ConsoleIO
 	catalog     Catalog
 	executor    Execution
@@ -106,12 +112,13 @@ type requestIdentity struct {
 }
 
 // New 将所有路由置于桌面认证范围，管理 Cookie 不能直接读取用户内容。
-func New(catalog Catalog, executor Execution, console ConsoleIO, events Events, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
-	if catalog == nil || executor == nil || console == nil || events == nil || gate == nil || logger == nil {
+func New(catalog Catalog, executor Execution, console ConsoleIO, computers ComputerManager, events Events, gate *authapi.Handler, logger *slog.Logger) (*Handler, error) {
+	if computers == nil || catalog == nil || executor == nil || console == nil || events == nil || gate == nil || logger == nil {
 		return nil, errors.New("用户 HTTP 依赖无效")
 	}
 	handler := &Handler{catalog: catalog, executor: executor, events: events, logger: logger, eventTiming: eventTiming{pollInterval: eventPollInterval, heartbeat: eventHeartbeat, drainMargin: eventDrainMargin, minimumWindow: eventMinimumWindow}}
 	handler.console = console
+	handler.computers = computers
 	router := chi.NewRouter()
 	router.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		handler.failure(w, r, 404, "NOT_FOUND", "接口不存在")
@@ -119,6 +126,8 @@ func New(catalog Catalog, executor Execution, console ConsoleIO, events Events, 
 	router.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 		handler.failure(w, r, 405, "METHOD_NOT_ALLOWED", "请求方式不支持")
 	})
+	router.Get("/api/v2/computer", handler.computerStatus)
+	router.Post("/api/v2/computer/restart", handler.computerStatus)
 	router.Get("/api/v2/workspace", handler.snapshot)
 	router.Put("/api/v2/workspace", handler.updateWorkspace)
 	router.Get("/api/v2/bots", handler.listBots)
@@ -214,6 +223,12 @@ func (handler *Handler) failure(w http.ResponseWriter, r *http.Request, status i
 func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err error) {
 	status, code, message := 503, "USER_SERVICE_UNAVAILABLE", "用户资源服务暂不可用"
 	switch {
+	case errors.Is(err, computercontrol.ErrInvalidInput):
+		status, code, message = 400, "INPUT_INVALID", "电脑版本无效，请刷新状态"
+	case errors.Is(err, computercontrol.ErrUnavailable):
+		status, code, message = 409, "COMPUTER_UNAVAILABLE", "电脑尚未就绪或正在维护，请稍后刷新状态"
+	case errors.Is(err, computercontrol.ErrNode):
+		status, code, message = 503, "COMPUTER_NODE_UNAVAILABLE", "暂时无法确认电脑状态，请刷新状态；若持续离线，请联系管理员检查电脑节点"
 	case errors.Is(err, chatlibrary.ErrInput):
 		status, code, message = 400, "CHAT_FILE_INPUT_INVALID", chatlibrary.ErrInput.Error()
 	case errors.Is(err, chatlibrary.ErrNotFound):
@@ -302,4 +317,25 @@ func (handler *Handler) result(w http.ResponseWriter, r *http.Request, key strin
 		return
 	}
 	handler.respond(w, r, 200, map[string]any{key: value})
+}
+
+func (handler *Handler) computerStatus(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Version string `json:"expected_version"`
+	}
+	if r.Method == "POST" {
+		if !handler.decode(w, r, &request, 1024) {
+			return
+		}
+		if len(request.Version) != 64 {
+			handler.serviceError(w, r, computercontrol.ErrInvalidInput)
+			return
+		}
+	}
+	status, err := handler.computers.ManageComputer(r.Context(), current(r).principal, request.Version)
+	if err != nil {
+		handler.serviceError(w, r, err)
+		return
+	}
+	handler.respond(w, r, 200, status)
 }

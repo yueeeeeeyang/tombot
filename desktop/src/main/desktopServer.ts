@@ -19,6 +19,7 @@ import {
   renameChatFile,
   deleteChatFile,
 } from './chatFiles'
+import { computerStatus } from '../shared/computer'
 import { listTasks } from './tasks'
 import { openConsole, controlConsole } from './console'
 import { consoleID } from '../shared/console'
@@ -942,6 +943,17 @@ export function registerDesktopIpc(finishUpdate: FinishUpdate): void {
           throw error
         }
       }),
+  )
+  ipcMain.handle('desktop:computer-status', () =>
+    handle(async () => computerStatus.parse(await call('GET', '/computer'))),
+  )
+  ipcMain.handle('desktop:computer-restart', (_event, version: string) =>
+    handle(async () => {
+      const expected = computerStatus.shape.version.parse(version)
+      return computerStatus.parse(
+        await call('POST', '/computer/restart', { expected_version: expected }),
+      )
+    }),
   )
   ipcMain.handle('desktop:tasks', (_event, agentId: string) =>
     handle(() => listTasks(call, agentId)),

@@ -277,6 +277,8 @@ test.beforeEach(async ({ page }) => {
           installClientUpdate: async () => true,
           downloadClientUpdate: async () => false,
           watchUpdateRequest: () => () => undefined,
+          computerStatus: async () => ({ state: 'running', version: 'a'.repeat(64) }),
+          restartComputer: async () => ({ state: 'restarting', version: 'b'.repeat(64) }),
           loadAbout: async () => ({
             clientVersion: '0.1.0',
             serverUrl: session.serverUrl,
@@ -386,6 +388,21 @@ test('群聊提及、头像、资料卡和更新页符合布局要求', async ({
     'rgb(231, 231, 231)',
   )
   await page.screenshot({ path: 'test-results/screenshots/updates.png' })
+})
+
+test('电脑页显示共享范围，确认后重启并重新显示运行状态', async ({ page }) => {
+  await page.getByRole('button', { name: '打开设置' }).click()
+  await page.getByRole('button', { name: '电脑', exact: true }).click()
+  const computer = page.getByRole('region', { name: 'Bot 的电脑' })
+  await expect(computer.getByRole('status')).toHaveText('运行中')
+  await expect(computer).toContainText('所有 Bot 共用这台电脑')
+  await computer.getByRole('button', { name: '重启电脑' }).click()
+  await computer.getByRole('button', { name: '取消' }).click()
+  await expect(computer.getByRole('button', { name: '确认重启' })).toHaveCount(0)
+  await computer.getByRole('button', { name: '重启电脑' }).click()
+  await computer.getByRole('button', { name: '确认重启' }).click()
+  await expect(computer.getByRole('status')).toHaveText('运行中')
+  await expect(computer.getByRole('button', { name: /更新/ })).toHaveCount(0)
 })
 
 test('原生拖拽群聊到机器人分组后刷新保持分类', async ({ page }) => {
