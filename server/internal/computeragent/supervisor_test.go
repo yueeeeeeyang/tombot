@@ -31,6 +31,25 @@ func TestSupervisorIndependentFatalExit(t *testing.T) {
 	}
 }
 
+func TestWatchdogStartsAfterImmediateShutdown(t *testing.T) {
+	controller := newFixture(t).controller
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := controller.Shutdown(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Serve(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("正常停服被判定为失控", err)
+	}
+	if err := controller.Serve(t.Context()); err == nil {
+		t.Fatal("已停止的控制器重新启动")
+	}
+	controller.fail()
+	if err := controller.Serve(ctx); err == nil || errors.Is(err, context.Canceled) {
+		t.Fatal("失控原因被正常停服掩盖", err)
+	}
+}
+
 func TestSupervisorGracefulAndBoundedShutdown(t *testing.T) {
 	t.Run("正常停服先清理再释放", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())

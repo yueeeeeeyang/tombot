@@ -257,6 +257,16 @@ func (controller *Controller) WithTask(ctx context.Context, session computer.Exe
 // Serve 为每个已登记桌面启动独立看门狗，致命失控会立即通知入口退出整个容器。
 func (controller *Controller) Serve(ctx context.Context) error {
 	controller.mu.Lock()
+	// 服务刚开始监听便收到停机信号时，Shutdown 可能先取得锁，尚未启动的看门狗按原取消原因退出。
+	if controller.stopped && !controller.serving && ctx.Err() != nil {
+		controller.mu.Unlock()
+		select {
+		case <-controller.fatal:
+			return errors.New("电脑代理桌面失去可靠控制，必须退出容器")
+		default:
+			return ctx.Err()
+		}
+	}
 	if controller.serving || controller.stopped {
 		controller.mu.Unlock()
 		return errors.New("电脑代理桌面看门狗已启动或已停止")
