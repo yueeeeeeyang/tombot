@@ -22,6 +22,57 @@ function mount(fixture: ReturnType<typeof makeClient>, path: string) {
 }
 
 describe('节点详情与编辑', () => {
+  const basicCapabilities = {
+    terminal: true,
+    files: true,
+    process_reaping: true,
+    disk_quota: true,
+    network_isolation: true,
+  }
+  it('就绪节点省略浏览器探针时，从列表进入详情仍显示五项基础验收', async () => {
+    const node = nodeDetail()
+    node.status = 'ready'
+    node.diagnosis = { code: 'ready', message: '心跳与电脑能力验收均有效，可以接收新电脑。' }
+    node.can_retry_verification = false
+    Object.assign(node.verification!, {
+      state: 'succeeded',
+      error_code: null,
+      node_error_code: null,
+      capabilities: basicCapabilities,
+    })
+    const fixture = makeClient((path) =>
+      json(path.split('?')[0] === '/computer-nodes' ? { nodes: [node] } : node),
+    )
+    mount(fixture, '/computer-nodes')
+    expect(await screen.findByText('就绪')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('link', { name: node.name }))
+    expect(await screen.findByText(node.diagnosis.message)).toBeInTheDocument()
+    expect(screen.getAllByText('已通过')).toHaveLength(5)
+    expect(screen.queryByText('未通过')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+  it('保留历史浏览器探针结果', async () => {
+    const node = nodeDetail()
+    node.verification!.capabilities = { ...basicCapabilities, browser: true }
+    mount(
+      makeClient(() => json(node)),
+      `/computer-nodes/${node.id}`,
+    )
+    expect(await screen.findByText('历史浏览器探针')).toBeInTheDocument()
+    expect(screen.getAllByText('已通过')).toHaveLength(6)
+  })
+  it('缺少必需的基础能力时仍拒绝详情响应', async () => {
+    const node = nodeDetail()
+    const verification = {
+      ...node.verification,
+      capabilities: { ...basicCapabilities, files: undefined },
+    }
+    mount(
+      makeClient(() => json({ ...node, verification })),
+      `/computer-nodes/${node.id}`,
+    )
+    expect(await screen.findByRole('alert')).toHaveTextContent('服务返回的数据不完整')
+  })
   it('列表展示验收隔离，详情显示原因和未确认能力，按原版本重新核对', async () => {
     const node = nodeDetail()
     let retries = 0
@@ -43,7 +94,8 @@ describe('节点详情与编辑', () => {
     expect(screen.queryByText('引导中')).not.toBeInTheDocument()
     await user.click(screen.getByRole('link', { name: node.name }))
     expect(await screen.findByText('container_identity_mismatch')).toBeInTheDocument()
-    expect(screen.getAllByText('未确认')).toHaveLength(6)
+    expect(screen.getAllByText('未确认')).toHaveLength(5)
+    expect(screen.queryByText('历史浏览器探针')).not.toBeInTheDocument()
     expect(screen.getByText(node.url!)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '重新核对验收' }))
     await user.click(screen.getByRole('button', { name: '开始核对' }))

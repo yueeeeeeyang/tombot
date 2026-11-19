@@ -51,12 +51,15 @@ const failureNames: Record<string, string> = {
 }
 const capabilities = {
   terminal: '终端',
-  browser: '浏览器',
   files: '文件读写',
   process_reaping: '进程回收',
   disk_quota: '磁盘配额',
   network_isolation: '网络隔离',
 } as const
+function capabilityResult(value?: boolean) {
+  if (value === undefined) return '未确认'
+  return value ? '已通过' : '未通过'
+}
 const date = (value?: string | null) => (value ? new Date(value).toLocaleString() : '尚无记录')
 const bytes = (value: number) =>
   `${(value / 1024 ** 3).toLocaleString(undefined, { maximumFractionDigits: 2 })} GiB`
@@ -215,17 +218,22 @@ export function NodeDetailPage({ client }: { client: AdminClient }) {
                       <li key={key}>
                         <span>{label}</span>
                         <strong>
-                          {node.verification?.capabilities
-                            ? node.verification.capabilities[key as keyof typeof capabilities]
-                              ? '已通过'
-                              : '未通过'
-                            : '未确认'}
+                          {capabilityResult(
+                            node.verification?.capabilities?.[key as keyof typeof capabilities],
+                          )}
                         </strong>
                       </li>
                     ))}
+                    {(node.verification.capabilities?.browser !== undefined ||
+                      node.verification.node_error_code?.startsWith('browser_')) && (
+                      <li>
+                        <span>历史浏览器探针</span>
+                        <strong>{capabilityResult(node.verification.capabilities?.browser)}</strong>
+                      </li>
+                    )}
                   </ul>
                   <p className="description">
-                    能力结果来自最近一次完整探针；是否可用以当前心跳和验收有效期为准。
+                    基础能力以当前心跳和验收有效期为准。Chrome 由各 Bot 在自己的桌面按需启动。
                   </p>
                   <p className="description">
                     验收电脑资源：{node.verification.resources.cpu_millis / 1000} 核 · 内存{' '}

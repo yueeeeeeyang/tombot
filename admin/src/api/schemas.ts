@@ -70,7 +70,7 @@ export const nodesSchema = z.object({
 })
 const nodeCapabilitiesSchema = z.object({
   terminal: z.boolean(),
-  browser: z.boolean(),
+  browser: z.boolean().optional(),
   files: z.boolean(),
   process_reaping: z.boolean(),
   disk_quota: z.boolean(),
