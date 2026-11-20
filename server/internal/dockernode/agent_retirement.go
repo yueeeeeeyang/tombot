@@ -229,7 +229,7 @@ func validateRetiredEntry(stat os.FileInfo, owner uint32) error {
 		}
 		return nil
 	}
-	known := name == computeragent.ConfigName || name == "agent.lock" || name == computeragent.EgressSocketName+".lock" || name == "probe.json" || name == "browser.json"
+	known := name == computeragent.ConfigName || name == programCoreFile || name == "agent.lock" || name == computeragent.EgressSocketName+".lock" || name == "probe.json" || name == "browser.json"
 	known = known || strings.HasSuffix(name, ".session.json") && canonicalRecordID(strings.TrimSuffix(name, ".session.json"))
 	known = known || strings.HasPrefix(name, ".write-") && canonicalRecordID(strings.TrimPrefix(name, ".write-"))
 	known = known || strings.HasPrefix(name, ".session-") && strings.HasSuffix(name, ".tmp") && canonicalRecordID(strings.TrimSuffix(strings.TrimPrefix(name, ".session-"), ".tmp"))
@@ -256,6 +256,14 @@ func (node *Runtime) verifyRetiredAgent(resource Resource, directory *journal, e
 	var configuration computeragent.Configuration
 	if agentchannel.Decode(encoded, &configuration) != nil || configuration.Validate() != nil || configuration.Identity != node.agentConfiguration(resource).Identity {
 		return failure("agent_retirement_configuration_mismatch")
+	}
+	for _, entry := range entries {
+		if entry.Name() == programCoreFile {
+			if _, err := directory.readProgramCore(); err != nil {
+				return err
+			}
+			break
+		}
 	}
 	encodedBrowser, err := directory.readFile("browser.json")
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"io.yueyang/tom/internal/noderelease"
 )
 
+const programCoreFile = "program-core"
+
 // mountContract 允许旧镜像按原有严格挂载约束排空；当前目标始终使用节点登记的约束。
 func (node *Runtime) mountContract(resource Resource, c container) Resource {
 	if resource.Specification.ImageReference != node.options.ProgramImage && node.options.ProgramCore != "" {
@@ -27,7 +29,7 @@ func (node *Runtime) selectComputerPrograms(resource Resource) (result error) {
 		return err
 	}
 	defer func() { result = errors.Join(result, dir.root.Close()) }()
-	return dir.writeFile("program-core", []byte(node.options.ProgramCore+"\n"))
+	return dir.writeFile(programCoreFile, []byte(node.options.ProgramCore+"\n"))
 }
 
 func (node *Runtime) selectedComputerPrograms(resource Resource) (core string, result error) {
@@ -36,7 +38,12 @@ func (node *Runtime) selectedComputerPrograms(resource Resource) (core string, r
 		return "", err
 	}
 	defer func() { result = errors.Join(result, dir.root.Close()) }()
-	raw, err := dir.readFile("program-core")
+	return dir.readProgramCore()
+}
+
+// readProgramCore 同时用于正在运行的电脑与已关闭的旧代次，选择记录必须是完整的发布摘要。
+func (dir *journal) readProgramCore() (string, error) {
+	raw, err := dir.readFile(programCoreFile)
 	if err != nil {
 		return "", err
 	}

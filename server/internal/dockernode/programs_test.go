@@ -2,6 +2,9 @@ package dockernode
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +13,53 @@ import (
 )
 
 type programTestEngine struct{ *recoveryTestEngine }
+
+func TestVerificationRetiresProgramSelection(t *testing.T) {
+	for _, damaged := range []bool{false, true} {
+		name := "上一版程序"
+		if damaged {
+			name = "损坏的程序选择记录"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			f.node.engine = programTestEngine{&recoveryTestEngine{fakeEngine: f.engine}}
+			f.node.options.ProgramCore = strings.Repeat("a", 64)
+			f.node.options.ProgramImage = f.specification.ImageReference
+			if _, err := f.node.Ensure(t.Context(), f.specification); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.node.Remove(t.Context(), f.specification); err != nil {
+				t.Fatal(err)
+			}
+			dir := f.node.resource(f.specification).ControlPath
+			revision := filepath.Join(dir, "program-core")
+			if damaged {
+				if err := os.WriteFile(revision, []byte("invalid\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			f.node.options.ProgramCore = strings.Repeat("b", 64)
+			next := advanceSpecification(f.specification)
+			_, err := f.node.Inspect(t.Context(), next)
+			if damaged {
+				requireFailure(t, err, "program_revision_unconfirmed")
+				if _, err := os.Stat(revision); err != nil {
+					t.Fatal("损坏的选择记录应保留", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(dir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("上一代验收电脑的控制目录未回收", err)
+			}
+			if observation, err := f.node.Ensure(t.Context(), next); err != nil || observation.State != "ready" {
+				t.Fatal("下一代验收电脑未就绪", observation.State, err)
+			}
+		})
+	}
+}
 
 func (e programTestEngine) inspectImage(ctx context.Context, ref string) (imageDescription, error) {
 	image, err := e.fakeEngine.inspectImage(ctx, ref)
