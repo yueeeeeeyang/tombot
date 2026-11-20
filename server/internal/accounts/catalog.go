@@ -12,6 +12,7 @@ import (
 
 // UserSummary 仅供管理员查看账户和供给元数据，不包含会话、凭据或业务正文。
 type UserSummary struct {
+	Revision            int64     `json:"revision"`
 	ID                  string    `json:"id"`
 	Username            string    `json:"username"`
 	DisplayName         string    `json:"display_name"`
@@ -53,12 +54,12 @@ func validPage(before string, limit int) bool {
 // ListUsers 复验当前管理员后分页读取账户元数据；外键关联在同一查询中完成，避免逐用户查询。
 func (service *Service) ListUsers(ctx context.Context, actor identity.Principal, before string, limit int) ([]UserSummary, error) {
 	return listCatalog(ctx, service, actor, before, limit,
-		`SELECT u.id,u.username,u.display_name,u.status,c.status,o.id,u.created_at FROM tombot.users u
+		`SELECT u.revision,u.id,u.username,u.display_name,u.status,c.status,o.id,u.created_at FROM tombot.users u
 		LEFT JOIN tombot.computers c ON c.user_id=u.id LEFT JOIN tombot.user_creation_operations o ON o.user_id=u.id
 		WHERE ($1='' OR u.id<$1) ORDER BY u.id DESC LIMIT $2`,
 		func(rows *sql.Rows) (UserSummary, error) {
 			var user UserSummary
-			err := rows.Scan(&user.ID, &user.Username, &user.DisplayName, &user.Status, &user.ComputerStatus, &user.CreationOperationID, &user.CreatedAt)
+			err := rows.Scan(&user.Revision, &user.ID, &user.Username, &user.DisplayName, &user.Status, &user.ComputerStatus, &user.CreationOperationID, &user.CreatedAt)
 			return user, err
 		})
 }

@@ -383,3 +383,30 @@ func TestManagementBoundariesAndFailureRedaction(t *testing.T) {
 		requireStatus(t, fixture.run(fixture.request("POST", path, `{}`)), 404)
 	}
 }
+
+func (stub *accountsStub) UserSettings(context.Context, identity.Principal, string) (accounts.UserSettings, error) {
+	return accounts.UserSettings{}, nil
+}
+func (stub *accountsStub) EditUser(context.Context, identity.Principal, string, string, accounts.UserEdit) (accounts.UserSettings, error) {
+	stub.calls++
+	return accounts.UserSettings{}, stub.err
+}
+
+func (stub *accountsStub) SetUserEnabled(context.Context, identity.Principal, string, string, bool, int64) error {
+	return nil
+}
+
+func TestEditUserRejectsUsernameAndRequiresAdminSession(t *testing.T) {
+	f := newFixture(t)
+	path := "/api/v2/admin/users/" + ids.New() + "/settings"
+	requireStatus(t, f.run(f.request("PUT", path, `{"username":"new-name"}`)), 400)
+	requireStatus(t, f.run(f.request("PUT", path, `{"status":"active"}`)), 400)
+	req := f.request("PUT", path, `{}`)
+	req.Header.Del("X-CSRF-Token")
+	requireStatus(t, f.run(req), 403)
+	if f.accounts.calls != 0 {
+		t.Fatal("受保护字段或无凭据请求到达了编辑服务")
+	}
+	f.accounts.err = accounts.ErrEditConflict
+	requireStatus(t, f.run(f.request("PUT", path, `{}`)), 409)
+}

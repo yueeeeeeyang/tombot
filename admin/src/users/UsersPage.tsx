@@ -1,3 +1,4 @@
+import { UserEditDialog, UserStatusDialog } from './UserEditDialog'
 import { Select } from '../components/Select'
 import { useEffect, useRef, useState } from 'react'
 import { Plus, RefreshCw, Users } from 'lucide-react'
@@ -9,6 +10,7 @@ import {
   operationResult,
   usersSchema,
   type Operation,
+  type User,
 } from '../api/schemas'
 import {
   Alert,
@@ -36,6 +38,8 @@ export function UsersPage({ client }: { client: AdminClient }) {
   const users = useQuery(client, pagePath('/users', before), usersSchema)
   const [creating, setCreating] = useState(false)
   const [operationID, setOperationID] = useState<string | null>(null)
+  const [editUser, setEditUser] = useState<string | null>(null)
+  const [statusUser, setStatusUser] = useState<User | null>(null)
   const [activationUser, setActivationUser] = useState<string | null>(null)
   return (
     <>
@@ -90,6 +94,16 @@ export function UsersPage({ client }: { client: AdminClient }) {
                     </td>
                     <td>
                       <div className="actions">
+                        {user.status === 'disabled' && (
+                          <button className="text-button" onClick={() => setEditUser(user.id)}>
+                            编辑
+                          </button>
+                        )}
+                        {['active', 'disabled'].includes(user.status) && (
+                          <button className="text-button" onClick={() => setStatusUser(user)}>
+                            {user.status === 'active' ? '禁用' : '启用'}
+                          </button>
+                        )}
                         {user.creation_operation_id && (
                           <button
                             className="text-button"
@@ -120,6 +134,26 @@ export function UsersPage({ client }: { client: AdminClient }) {
             last={users.value.users.at(-1)?.id}
           />
         </div>
+      )}
+      {editUser && (
+        <UserEditDialog
+          client={client}
+          id={editUser}
+          onClose={() => {
+            setEditUser(null)
+            users.reload()
+          }}
+        />
+      )}
+      {statusUser && (
+        <UserStatusDialog
+          client={client}
+          user={statusUser}
+          onClose={() => {
+            setStatusUser(null)
+            users.reload()
+          }}
+        />
       )}
       {creating && (
         <CreateUser

@@ -20,8 +20,8 @@ const maxUserAvatarDimension = 512
 
 var ErrInvalidAvatar = errors.New("头像须为 PNG 或 JPEG，文件不超过 2 MiB，宽高均不超过 512 像素")
 
-// normalizeUserAvatar 限制解码内存并重新编码，移除元数据和尾随内容，不接受远程地址。
-func normalizeUserAvatar(content []byte) ([]byte, error) {
+// NormalizeUserAvatar 限制解码内存并重新编码，移除元数据和尾随内容，不接受远程地址。
+func NormalizeUserAvatar(content []byte) ([]byte, error) {
 	if len(content) == 0 || len(content) > MaxUserAvatarBytes {
 		return nil, ErrInvalidAvatar
 	}
@@ -41,6 +41,15 @@ func normalizeUserAvatar(content []byte) ([]byte, error) {
 		return nil, ErrInvalidAvatar
 	}
 	return encoded.Bytes(), nil
+}
+
+// NormalizeDisplayName 统一用户自助设置和管理平台的显示名称规则。
+func NormalizeDisplayName(name string) (string, error) {
+	normalized := norm.NFC.String(strings.TrimSpace(name))
+	if !utf8.ValidString(name) || normalized == "" || utf8.RuneCountInString(normalized) > 120 || strings.ContainsFunc(normalized, unicode.IsControl) {
+		return "", ErrInvalidInput
+	}
+	return normalized, nil
 }
 
 // ProfileUpdate 只包含本次变更的字段，未提供的字段保留数据库当前值。
@@ -65,19 +74,16 @@ func (service *Service) UpdateProfile(ctx context.Context, principal Principal, 
 	}
 	var displayName *string
 	if update.DisplayName != nil {
-		if !utf8.ValidString(*update.DisplayName) {
-			return UserProfile{}, ErrInvalidInput
-		}
-		normalized := norm.NFC.String(strings.TrimSpace(*update.DisplayName))
-		if normalized == "" || utf8.RuneCountInString(normalized) > 120 || strings.ContainsFunc(normalized, unicode.IsControl) {
-			return UserProfile{}, ErrInvalidInput
+		normalized, err := NormalizeDisplayName(*update.DisplayName)
+		if err != nil {
+			return UserProfile{}, err
 		}
 		displayName = &normalized
 	}
 	var encoded []byte
 	if update.Avatar != nil {
 		var err error
-		encoded, err = normalizeUserAvatar(update.Avatar)
+		encoded, err = NormalizeUserAvatar(update.Avatar)
 		if err != nil {
 			return UserProfile{}, err
 		}

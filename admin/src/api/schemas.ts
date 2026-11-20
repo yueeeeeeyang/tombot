@@ -50,6 +50,7 @@ export const usersSchema = z.object({
       status: z.string(),
       computer_status: z.string().nullable(),
       creation_operation_id: id.nullable(),
+      revision: z.number().int().positive(),
       created_at: z.string(),
     }),
   ),

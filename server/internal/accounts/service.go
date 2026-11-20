@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ErrInvalidInput          = errors.New("用户创建参数无效")
+	ErrInvalidInput          = errors.New("用户管理参数无效")
 	ErrConflict              = errors.New("用户名或幂等键与已有请求冲突")
 	ErrNoCapacity            = errors.New("电脑节点尚未就绪或容量不足")
 	ErrImageUnavailable      = errors.New("电脑镜像不存在或未启用")
@@ -104,7 +104,7 @@ func (service *Service) transaction(ctx context.Context, apply func(*sql.Tx) err
 	if err == nil {
 		return nil
 	}
-	for _, known := range []error{ErrInvalidInput, ErrConflict, ErrNoCapacity, ErrImageUnavailable, ErrNotFound, ErrLeaseLost, ErrActivationUnavailable, ErrQuarantined, context.Canceled, context.DeadlineExceeded} {
+	for _, known := range []error{ErrInvalidInput, ErrEditConflict, ErrUserMissing, ErrConflict, ErrNoCapacity, ErrImageUnavailable, ErrNotFound, ErrLeaseLost, ErrActivationUnavailable, ErrQuarantined, context.Canceled, context.DeadlineExceeded} {
 		if err == known {
 			return known
 		}

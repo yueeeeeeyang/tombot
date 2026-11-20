@@ -238,7 +238,7 @@ func assemble(configuration Config, databases map[postgres.Role]*postgres.Databa
 	if err != nil {
 		return nil, err
 	}
-	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{fleet.Run, users.Run, worker.Serve, eventRetention.Run, console.Run}}
+	application := &Application{configuration: configuration, databases: databases, tls: inbound, logger: logger, background: []func(context.Context) error{fleet.Run, users.Run, func(ctx context.Context) error { return users.RunEdits(ctx, logger) }, worker.Serve, eventRetention.Run, console.Run}}
 	if upgrader, ok := node.(computer.ImageUpgrader); ok {
 		migrations := computerupgrade.New(databases[postgres.ControlRole], upgrader, control, configuration.Node.CallTimeout.Value(), logger)
 		application.background = append(application.background, migrations.Run)

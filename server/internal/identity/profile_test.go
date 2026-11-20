@@ -21,7 +21,7 @@ func userAvatarPNG(t *testing.T, width, height int) []byte {
 
 func TestNormalizeUserAvatar(t *testing.T) {
 	original := userAvatarPNG(t, maxUserAvatarDimension, maxUserAvatarDimension)
-	normalized, err := normalizeUserAvatar(append(append([]byte{}, original...), []byte("移除尾随内容")...))
+	normalized, err := NormalizeUserAvatar(append(append([]byte{}, original...), []byte("移除尾随内容")...))
 	if err != nil || !bytes.Equal(normalized, original) {
 		t.Fatal("PNG 未规范化", err)
 	}
@@ -29,7 +29,7 @@ func TestNormalizeUserAvatar(t *testing.T) {
 	if err := jpeg.Encode(&jpegImage, image.NewRGBA(image.Rect(0, 0, 24, 24)), nil); err != nil {
 		t.Fatal(err)
 	}
-	normalized, err = normalizeUserAvatar(jpegImage.Bytes())
+	normalized, err = NormalizeUserAvatar(jpegImage.Bytes())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +37,7 @@ func TestNormalizeUserAvatar(t *testing.T) {
 		t.Fatal("JPEG 未转换为 PNG", err)
 	}
 	for _, invalid := range [][]byte{nil, {}, []byte("<svg/>"), original[:len(original)/2], make([]byte, MaxUserAvatarBytes+1), userAvatarPNG(t, 513, 1), userAvatarPNG(t, 1, 513)} {
-		_, err := normalizeUserAvatar(invalid)
+		_, err := NormalizeUserAvatar(invalid)
 		requireError(t, err, ErrInvalidAvatar)
 	}
 }

@@ -39,6 +39,7 @@ describe('管理界面', () => {
       role: 'user',
       status: 'active',
       computer_status: 'ready',
+      revision: 1,
       creation_operation_id: null,
       created_at: new Date().toISOString(),
     }))

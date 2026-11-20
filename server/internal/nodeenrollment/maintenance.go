@@ -99,9 +99,16 @@ func reserveUpgrade(ctx context.Context, tx *sql.Tx, catalog *nodecatalog.Servic
 		if prior != "" && (!finished || prior >= m.OperationID) || currentImage != image && currentImage != claim.Registration.PreviousImageID {
 			return "", ErrConflict
 		}
-		// 会话准入使用同一把共享锁，维护必须在检查和撤销资格之前独占。
+		// 用户编辑对两端使用同一把共享锁，维护必须在检查和撤销资格之前独占。
 		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('tombot.node-maintenance/'||$1,0))`, claim.NodeID); err != nil {
 			return "", err
+		}
+		var editing bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM tombot.computer_edits WHERE stage<>'succeeded' AND (source_spec->>'node_id'=$1 OR target_spec->>'node_id'=$1) AND ($2='' OR lease_until IS NOT NULL OR next_attempt_at<>'infinity'::timestamptz))`, claim.NodeID, m.HostRelease).Scan(&editing); err != nil {
+			return "", err
+		}
+		if editing {
+			return "", maintenanceBlocker("computer_upgrade")
 		}
 		// 登记请求由同一事务锁串行化。行锁与分配、验收共用；撤销资格后，维护结束前不再颁发新证据。
 		if err := catalog.RequireNoVerificationLeaseInTransaction(ctx, tx); err != nil {
@@ -169,7 +176,7 @@ func requireIdleHost(ctx context.Context, tx *sql.Tx, node string) error {
 		WHEN EXISTS(SELECT 1 FROM tombot.computer_image_upgrades WHERE node_id=$1 AND (lease_expires_at IS NOT NULL OR state IN ('switching','quarantined') OR state='draining' AND attempt_count>0)) THEN 'computer_upgrade'
 		WHEN EXISTS(SELECT 1 FROM tombot.computers c WHERE c.node_id=$1 AND (c.status IN ('pending','starting','provisioning','quarantined')
 			OR c.status='stopping' AND NOT EXISTS(SELECT 1 FROM tombot.computer_image_upgrades p WHERE (p.user_id,p.computer_id,p.node_id)=(c.user_id,c.id,c.node_id)
-			AND p.state='draining' AND p.lease_expires_at IS NULL))) THEN 'computer_transition'
+			AND p.state='draining' AND p.lease_expires_at IS NULL) AND NOT EXISTS (SELECT 1 FROM tombot.computer_edits e WHERE e.user_id=c.user_id AND e.stage<>'succeeded' AND e.lease_until IS NULL AND e.next_attempt_at='infinity'::timestamptz))) THEN 'computer_transition'
 		ELSE '' END`, node).Scan(&reason)
 	if err != nil {
 		return err

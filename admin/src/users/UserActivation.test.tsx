@@ -24,6 +24,7 @@ function fixture(reject = false) {
           role: 'user',
           status: 'pending_activation',
           computer_status: 'ready',
+          revision: 1,
           creation_operation_id: id(5),
           created_at: new Date().toISOString(),
         },

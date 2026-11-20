@@ -19,6 +19,9 @@ import (
 
 // Accounts 仅包含平台管理动作；本地首位管理员引导方法不会注册到 HTTP。
 type Accounts interface {
+	SetUserEnabled(context.Context, identity.Principal, string, string, bool, int64) error
+	UserSettings(context.Context, identity.Principal, string) (accounts.UserSettings, error)
+	EditUser(context.Context, identity.Principal, string, string, accounts.UserEdit) (accounts.UserSettings, error)
 	ListUsers(context.Context, identity.Principal, string, int) ([]accounts.UserSummary, error)
 	ListNodes(context.Context, identity.Principal, string, int) ([]accounts.NodeSummary, error)
 	Create(context.Context, identity.Principal, accounts.CreateRequest) (accounts.Operation, error)
@@ -75,6 +78,9 @@ func New(service Accounts, administratorsService Administrators, nodes Nodes, mo
 	router.Post("/api/v2/admin/users", handler.create)
 	router.Get("/api/v2/admin/users", catalogHandler(handler, "users", service.ListUsers))
 	router.Get("/api/v2/admin/computer-nodes", catalogHandler(handler, "nodes", service.ListNodes))
+	router.Get("/api/v2/admin/users/{userID}/settings", handler.userSettings)
+	router.Put("/api/v2/admin/users/{userID}/status", handler.userStatus)
+	router.Put("/api/v2/admin/users/{userID}/settings", handler.editUser)
 	router.Post("/api/v2/admin/users/{userID}/activation", handler.activation)
 	router.Get("/api/v2/admin/administrators", catalogHandler(handler, "administrators", administratorsService.ListAdministrators))
 	router.Post("/api/v2/admin/administrators", handler.createAdministrator)
@@ -299,6 +305,14 @@ func (handler *Handler) serviceError(w http.ResponseWriter, r *http.Request, err
 		handler.failure(w, r, 403, "AUTH_FORBIDDEN", identity.ErrForbidden.Error(), nil)
 	case errors.Is(err, accounts.ErrInvalidInput):
 		handler.failure(w, r, 400, "INPUT_INVALID", accounts.ErrInvalidInput.Error(), nil)
+	case errors.Is(err, accounts.ErrEditNodeUnavailable):
+		handler.failure(w, r, 409, "USER_EDIT_NODE_UNAVAILABLE", err.Error(), nil)
+	case errors.Is(err, accounts.ErrEditConflict):
+		handler.failure(w, r, 409, "USER_EDIT_CONFLICT", err.Error(), nil)
+	case errors.Is(err, accounts.ErrUserMissing):
+		handler.failure(w, r, 404, "USER_NOT_FOUND", err.Error(), nil)
+	case errors.Is(err, identity.ErrInvalidAvatar):
+		handler.failure(w, r, 400, "INPUT_INVALID", err.Error(), nil)
 	case errors.Is(err, accounts.ErrConflict):
 		handler.failure(w, r, 409, "CREATE_CONFLICT", accounts.ErrConflict.Error(), nil)
 	case errors.Is(err, accounts.ErrNoCapacity):
@@ -336,4 +350,47 @@ func (handler *Handler) respond(w http.ResponseWriter, r *http.Request, status i
 	if err := json.NewEncoder(w).Encode(value); err != nil {
 		handler.logger.WarnContext(r.Context(), "管理响应写入失败", "request_id", current(r).attempt.RequestID, "actor_id", current(r).principal.UserID)
 	}
+}
+
+func (handler *Handler) userSettings(w http.ResponseWriter, r *http.Request) {
+	value, err := handler.accounts.UserSettings(r.Context(), current(r).principal, chi.URLParam(r, "userID"))
+	if err != nil {
+		handler.serviceError(w, r, err, accounts.Operation{})
+		return
+	}
+	handler.respond(w, r, http.StatusOK, value)
+}
+func (handler *Handler) editUser(w http.ResponseWriter, r *http.Request) {
+	var edit accounts.UserEdit
+	if err := httpjson.DecodeAttachment(r, &edit, identity.MaxUserAvatarBytes*4/3+8192); err != nil {
+		handler.failure(w, r, err.Status, err.Code, err.Message, nil)
+		return
+	}
+	actor := current(r)
+	value, err := handler.accounts.EditUser(r.Context(), actor.principal, chi.URLParam(r, "userID"), actor.attempt.RequestID, edit)
+	if err != nil {
+		handler.serviceError(w, r, err, accounts.Operation{})
+		return
+	}
+	handler.respond(w, r, http.StatusOK, value)
+}
+
+func (handler *Handler) userStatus(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled  *bool `json:"enabled"`
+		Revision int64 `json:"revision"`
+	}
+	if !handler.decode(w, r, &body) {
+		return
+	}
+	if body.Enabled == nil {
+		handler.serviceError(w, r, accounts.ErrInvalidInput, accounts.Operation{})
+		return
+	}
+	actor := current(r)
+	if err := handler.accounts.SetUserEnabled(r.Context(), actor.principal, chi.URLParam(r, "userID"), actor.attempt.RequestID, *body.Enabled, body.Revision); err != nil {
+		handler.serviceError(w, r, err, accounts.Operation{})
+		return
+	}
+	handler.respond(w, r, http.StatusOK, map[string]bool{"enabled": *body.Enabled})
 }
