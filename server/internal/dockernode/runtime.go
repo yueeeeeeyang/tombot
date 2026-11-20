@@ -321,7 +321,7 @@ func (node *Runtime) guarded(ctx context.Context, specification computer.Specifi
 		state = &record{Version: lifecycleVersion, Specification: specification, Phase: "reserved"}
 	} else {
 		previous := state.Specification
-		if state.upgradeInProgress() {
+		if state.ExportID != "" || state.upgradeInProgress() {
 			return observation, failure("computer_image_upgrade_in_progress")
 		}
 		if !sameComputerIdentity(previous, specification) {

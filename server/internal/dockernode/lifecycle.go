@@ -319,7 +319,7 @@ func (node *Runtime) ensure(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, err
 	}
 	state.Phase = "creating"
-	if state.StorageGeneration != 0 && state.ContainerID == "" && current.hasContainer {
+	if (state.StorageGeneration != 0 || state.ImportID != "") && state.ContainerID == "" && current.hasContainer {
 		// 已识别为本代的 Docker 创建回包即使丢失，也必须先固定容器 ID 再启动。
 		state.ContainerID = current.container.ID
 	}
@@ -327,7 +327,7 @@ func (node *Runtime) ensure(ctx context.Context, resource Resource, state *recor
 		return computer.Observation{}, err
 	}
 	if !current.workspace.Ready {
-		if state.StorageGeneration == 0 {
+		if state.StorageGeneration == 0 && state.ImportID == "" {
 			current.workspace, err = node.storage.Ensure(ctx, resource)
 		} else {
 			current.workspace, err = node.storage.Restore(ctx, node.diskResource(resource, state))

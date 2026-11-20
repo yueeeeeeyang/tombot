@@ -100,3 +100,12 @@ func (router *Router) PrepareBrowser(ctx context.Context, input computer.Executi
 	_, err := routeCall[confirmation](ctx, router, input.NodeID, "browser_prepare", input)
 	return err
 }
+
+func (router *Router) CopyDisk(ctx context.Context, q computer.DiskCopy) (computer.DiskReceipt, error) {
+	return routeCall[computer.DiskReceipt](ctx, router, q.NodeID(), "disk_copy", q)
+}
+
+func (r *Router) CheckEditSupport(ctx context.Context, q computer.NodeQuery) error {
+	_, err := routeCall[confirmation](ctx, r, q.NodeID, "edit_support", q)
+	return err
+}

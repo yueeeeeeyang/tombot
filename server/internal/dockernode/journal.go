@@ -23,6 +23,9 @@ import (
 const lifecycleVersion = 4
 
 type record struct {
+	ExportFrozen      bool                   `json:"export_frozen,omitempty"`
+	ExportID          string                 `json:"export_id,omitempty"`
+	ImportID          string                 `json:"import_id,omitempty"`
 	RestartID         string                 `json:"restart_id,omitempty"`
 	RestartPhase      string                 `json:"restart_phase,omitempty"`
 	Version           int                    `json:"version"`
@@ -201,6 +204,9 @@ func (journal *journal) read(userID string) (*record, error) {
 		if state.Phase != "absent" || state.ContainerID != "" || state.Retirement.Inode == 0 || next.Validate() != nil || !sameComputerIdentity(next, previous) || next.Generation <= previous.Generation || next.Generation-previous.Generation != 1 || next.Attempt <= previous.Attempt || next.Attempt-previous.Attempt != 1 || next.FencingToken <= previous.FencingToken {
 			return nil, errors.New("节点控制目录回收记录无效")
 		}
+	}
+	if state.ExportID != "" && !canonicalRecordID(state.ExportID) || state.ImportID != "" && !canonicalRecordID(state.ImportID) {
+		return nil, failure("disk_copy_record_invalid")
 	}
 	if state.RestartID != "" {
 		if _, err := ulid.ParseStrict(state.RestartID); err != nil {

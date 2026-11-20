@@ -19,8 +19,8 @@ func (upgrade ImageUpgrade) Validate() error {
 		return errors.New("电脑镜像升级身份无效")
 	}
 	if current.UserID != target.UserID || current.ComputerID != target.ComputerID || current.NodeID != target.NodeID ||
-		current.OperationID != target.OperationID || current.VolumeReference != target.VolumeReference || current.Resources != target.Resources ||
-		current.ImageReference == target.ImageReference || target.Generation-current.Generation != 1 ||
+		current.OperationID != target.OperationID || current.VolumeReference != target.VolumeReference || current.Resources.DiskBytes != target.Resources.DiskBytes ||
+		(current.ImageReference == target.ImageReference && current.Resources == target.Resources) || target.Generation-current.Generation != 1 ||
 		target.Attempt-current.Attempt != 1 || target.FencingToken <= current.FencingToken {
 		return errors.New("电脑镜像升级必须保留原身份和磁盘并推进代次")
 	}

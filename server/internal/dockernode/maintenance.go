@@ -19,7 +19,7 @@ func (s *record) restartVersion() string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(s.ContainerID+"/"+s.RestartID)))
 }
 func (s *record) matchesMaintenance(m computer.Maintenance) bool {
-	return s != nil && s.Specification.UserID == m.UserID && s.Specification.ComputerID == m.ComputerID && s.Specification.NodeID == m.NodeID && s.Specification.Generation == m.Generation && s.ContainerID == m.ContainerID
+	return s != nil && s.ExportID == "" && s.Specification.UserID == m.UserID && s.Specification.ComputerID == m.ComputerID && s.Specification.NodeID == m.NodeID && s.Specification.Generation == m.Generation && s.ContainerID == m.ContainerID
 }
 
 // ManageComputer 在独占锁内消费客户端所见版本；回包丢失或双击均不会再次停止同一电脑。

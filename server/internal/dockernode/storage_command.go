@@ -31,7 +31,7 @@ func (output *storageOutput) Write(contents []byte) (int, error) {
 
 func storageCommands(timeout time.Duration) (storageCommand, error) {
 	programs := make(map[string]string)
-	for _, program := range storagehost.Programs() {
+	for _, program := range append(storagehost.Programs(), storagehost.OfflineCopyPrograms()...) {
 		resolved, err := filepath.EvalSymlinks(program.Path)
 		if err != nil {
 			return nil, errors.New("持久磁盘所需宿主工具缺失")

@@ -29,7 +29,7 @@ func (node *Runtime) UpgradeComputer(ctx context.Context, request computer.Image
 	if err != nil {
 		return observation, err
 	}
-	if state == nil || state.Retirement != nil {
+	if state == nil || state.ExportID != "" || state.Retirement != nil {
 		return observation, failure("computer_image_upgrade_source_missing")
 	}
 	if upgrade := state.ImageUpgrade; upgrade != nil && upgrade.Target.Generation == request.Target.Generation {

@@ -62,7 +62,7 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 	var lifetime time.Duration
 	var err error
 	switch action {
-	case "heartbeat":
+	case "heartbeat", "edit_support":
 		var value computer.NodeQuery
 		err = agentchannel.Decode(encoded, &value)
 		if err == nil {
@@ -83,6 +83,13 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 			err = value.Validate()
 		}
 		input, node = value, value.NodeID
+	case "disk_copy":
+		var value computer.DiskCopy
+		err = agentchannel.Decode(encoded, &value)
+		if err == nil {
+			err = value.Validate()
+		}
+		input, node = value, value.NodeID()
 	case "computer_upgrade":
 		var value computer.ImageUpgrade
 		err = agentchannel.Decode(encoded, &value)
@@ -195,6 +202,12 @@ func decodeInput(nodeID, action string, encoded []byte) (any, time.Duration, err
 
 func (operations Operations) invoke(ctx context.Context, action string, input any) (any, error) {
 	switch action {
+	case "edit_support":
+		_, ok := operations.Computers.(computer.DiskCopier)
+		if !ok {
+			return nil, &computer.Failure{Code: "disk_copy_unavailable"}
+		}
+		return confirmation{Done: true}, nil
 	case "heartbeat":
 		return operations.Node.Heartbeat(ctx, input.(computer.NodeQuery))
 	case "inspect":
@@ -216,6 +229,12 @@ func (operations Operations) invoke(ctx context.Context, action string, input an
 		}
 		err := manager.PrepareBrowser(ctx, input.(computer.ExecutionSession))
 		return confirmation{Done: err == nil}, err
+	case "disk_copy":
+		copier, ok := operations.Computers.(computer.DiskCopier)
+		if !ok {
+			return nil, &computer.Failure{Code: "disk_copy_unavailable", IsPermanent: true}
+		}
+		return copier.CopyDisk(ctx, input.(computer.DiskCopy))
 	case "computer_upgrade":
 		upgrader, ok := operations.Computers.(computer.ImageUpgrader)
 		if !ok {

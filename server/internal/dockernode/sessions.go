@@ -195,7 +195,7 @@ func (controller *SessionController) Open(ctx context.Context, command computer.
 		if resourceState != nil && resourceState.restarting() {
 			return computer.SessionObservation{}, failure("session_computer_recovering")
 		}
-		if resourceState == nil || resourceState.Phase != "ready" || resourceState.Specification.ComputerID != command.Session.ComputerID || resourceState.Specification.NodeID != command.Session.NodeID || resourceState.Specification.Generation != command.Session.Generation || resourceState.ContainerID != command.Session.ContainerID {
+		if resourceState == nil || resourceState.ExportID != "" || resourceState.Phase != "ready" || resourceState.Specification.ComputerID != command.Session.ComputerID || resourceState.Specification.NodeID != command.Session.NodeID || resourceState.Specification.Generation != command.Session.Generation || resourceState.ContainerID != command.Session.ContainerID {
 			return computer.SessionObservation{}, failure("session_computer_mismatch")
 		}
 		if recovering, err := controller.node.journal.hasComputerRecovery(resourceState); err != nil {

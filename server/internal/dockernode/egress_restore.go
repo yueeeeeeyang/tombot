@@ -59,6 +59,9 @@ func (node *Runtime) restoreUserEgress(ctx context.Context, logger *slog.Logger,
 		return failure("egress_journal_identity_invalid")
 	}
 	resource := node.withStorage(node.resource(state.Specification), state)
+	if state.ExportID != "" {
+		return node.egress.stop(ctx, resource)
+	}
 	if state.restarting() {
 		attempt, cancel := context.WithTimeout(ctx, node.restartBudget())
 		defer cancel()

@@ -19,3 +19,8 @@ func Programs() []Program {
 		{Name: "umount", Path: "/usr/bin/umount", VersionArgument: "--version"},
 	}
 }
+
+// OfflineCopyPrograms 随 e2fsprogs 安装，仅在复制盘上变更容量和文件系统标识。
+func OfflineCopyPrograms() []Program {
+	return []Program{{Name: "resizefs", Path: "/usr/sbin/resize2fs"}, {Name: "tune", Path: "/usr/sbin/tune2fs"}}
+}

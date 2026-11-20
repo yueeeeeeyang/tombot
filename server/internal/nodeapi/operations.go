@@ -20,6 +20,9 @@ func validateResult(action string, input, result any) error {
 	case "computer_manage":
 		value, ok := result.(computer.MaintenanceReceipt)
 		valid = ok && value.Matches(input.(computer.Maintenance))
+	case "disk_copy":
+		value, ok := result.(computer.DiskReceipt)
+		valid = ok && value.Matches(input.(computer.DiskCopy))
 	case "computer_upgrade":
 		value, ok := result.(computer.Observation)
 		upgrade := input.(computer.ImageUpgrade)
@@ -43,7 +46,7 @@ func validateResult(action string, input, result any) error {
 	case "write":
 		value, ok := result.(computer.TerminalReceipt)
 		valid = ok && value.Validate(input.(computer.TerminalWrite)) == nil
-	case "resize", "agent_start", "browser_prepare":
+	case "resize", "agent_start", "browser_prepare", "edit_support":
 		value, ok := result.(confirmation)
 		valid = ok && value.Done
 	case "desktop_start", "desktop_status":
@@ -181,5 +184,14 @@ func (client *Client) ManageComputer(ctx context.Context, input computer.Mainten
 }
 func (client *Client) PrepareBrowser(ctx context.Context, input computer.ExecutionSession) error {
 	_, err := call[confirmation](ctx, client, "browser_prepare", input)
+	return err
+}
+
+func (client *Client) CopyDisk(ctx context.Context, q computer.DiskCopy) (computer.DiskReceipt, error) {
+	return call[computer.DiskReceipt](ctx, client, "disk_copy", q)
+}
+
+func (c *Client) CheckEditSupport(ctx context.Context, q computer.NodeQuery) error {
+	_, err := call[confirmation](ctx, c, "edit_support", q)
 	return err
 }

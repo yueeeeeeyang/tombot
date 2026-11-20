@@ -34,30 +34,7 @@ func (storage *FileStorage) remove(ctx context.Context, resource Resource) (Work
 	if err = storage.save(state); err != nil {
 		return Workspace{}, err
 	}
-	if mounted {
-		if _, err = storage.command(ctx, "umount", "--no-canonicalize", resource.WorkspacePath); err != nil {
-			return Workspace{}, err
-		}
-		if mounted, err = storage.mounted(ctx, resource, state); err != nil {
-			return Workspace{}, err
-		}
-		if mounted {
-			return Workspace{}, failure("storage_unmount_unconfirmed")
-		}
-	}
-	devices, err := storage.loops(ctx, state)
-	if err != nil {
-		return Workspace{}, err
-	}
-	for _, device := range devices {
-		if err = storage.verifyImage(resource, state, false); err != nil {
-			return Workspace{}, err
-		}
-		if err = storage.detachDevice(ctx, state, device); err != nil {
-			return Workspace{}, err
-		}
-	}
-	if err = storage.confirmDetached(ctx, state); err != nil {
+	if err = storage.unmountDisk(ctx, resource, state, mounted); err != nil {
 		return Workspace{}, err
 	}
 	image, err := storage.openImage(resource, false)
@@ -128,4 +105,36 @@ func (storage *FileStorage) confirmDetached(ctx context.Context, state *storageR
 		}
 	}
 	return failure("storage_loop_detach_unconfirmed")
+}
+
+// unmountDisk 核实正常卸载和 loop 解除关联，离线读取与回收共用这一屏障。
+func (storage *FileStorage) unmountDisk(ctx context.Context, resource Resource, state *storageRecord, mounted bool) error {
+	var err error
+	if mounted {
+		if _, err = storage.command(ctx, "umount", "--no-canonicalize", resource.WorkspacePath); err != nil {
+			return err
+		}
+		if mounted, err = storage.mounted(ctx, resource, state); err != nil {
+			return err
+		}
+		if mounted {
+			return failure("storage_unmount_unconfirmed")
+		}
+	}
+	devices, err := storage.loops(ctx, state)
+	if err != nil {
+		return err
+	}
+	for _, device := range devices {
+		if err = storage.verifyImage(resource, state, false); err != nil {
+			return err
+		}
+		if err = storage.detachDevice(ctx, state, device); err != nil {
+			return err
+		}
+	}
+	if err = storage.confirmDetached(ctx, state); err != nil {
+		return err
+	}
+	return nil
 }
