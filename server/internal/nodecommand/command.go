@@ -94,8 +94,11 @@ func execute(ctx context.Context, args []string, getenv func(string) string, out
 	if len(args) >= 2 && args[1] == "repair" {
 		return runRepair(ctx, args[2:], output, logger, actions.repair)
 	}
+	if len(args) == 3 && args[1] == "upgrade" && args[2] == "--recover-computers" {
+		return runUpgrade(ctx, output, logger, actions.repair, deployment.NodeRepairOptions{Upgrade: true, RecoverComputers: true})
+	}
 	if len(args) == 4 && args[1] == "upgrade" && args[2] == "--image-package" && filepath.IsAbs(args[3]) {
-		return runUpgrade(ctx, output, logger, actions.repair, args[3])
+		return runUpgrade(ctx, output, logger, actions.repair, deployment.NodeRepairOptions{Upgrade: true, ImagePackage: args[3]})
 	}
 	if len(args) != 2 {
 		logger.Error("节点命令只接受一个子命令，请运行 tomnode help")
@@ -113,7 +116,7 @@ func execute(ctx context.Context, args []string, getenv func(string) string, out
 		}
 		return 0
 	case "upgrade":
-		return runUpgrade(ctx, output, logger, actions.repair, "")
+		return runUpgrade(ctx, output, logger, actions.repair, deployment.NodeRepairOptions{Upgrade: true})
 	case "template":
 		return writeText(output, deploy.NodeInstallTemplate(), logger)
 	case "start":
@@ -151,6 +154,7 @@ const usage = `用法：tomnode <子命令>
   template          输出可选的节点高级参数模板
   install [文件]    一次完成配置、证书、程序和系统服务安装并启动
   upgrade [--image-package 绝对目录]  从程序包升级节点；单独更新镜像时用已安装的 tomnode 指定镜像包目录
+  upgrade --recover-computers   使用已激活的程序版本续接隔离电脑的原计划
   repair [选项]     修复已停止的节点，保留节点身份；支持 --listen、--url、--image-package
   start             检查节点配置、准备 Docker 和镜像，然后运行节点
   configure         从部署参数生成配置，不覆盖已有输出目录

@@ -63,10 +63,13 @@ func inspectRecovery(ctx context.Context, tx *sql.Tx, nodeID, imageID, release s
 			return nil, err
 		}
 		result.State = "waiting"
-		return result, nil
+		return diagnoseRecovery(ctx, tx, nodeID, result)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if result.State == "waiting" {
+		return diagnoseRecovery(ctx, tx, nodeID, result)
 	}
 	result.Target.Release = release
 	if result.State == "retry" {
@@ -75,6 +78,17 @@ func inspectRecovery(ctx context.Context, tx *sql.Tx, nodeID, imageID, release s
 			return nil, ErrConflict
 		}
 		result.Source = &spec
+	}
+	return result, nil
+}
+
+// diagnoseRecovery 返回领取前置条件，避免展示上一轮停止容器的历史错误。
+func diagnoseRecovery(ctx context.Context, tx *sql.Tx, node string, result *RecoveryInspection) (*RecoveryInspection, error) {
+	if err := tx.QueryRowContext(ctx, `SELECT tombot.node_upgrade_diagnosis($1)`, node).Scan(&result.ErrorCode); err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(result.ErrorCode, "verification_quarantined/") {
+		result.State = "blocked"
 	}
 	return result, nil
 }

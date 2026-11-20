@@ -161,10 +161,14 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 			}
 			args = []string{"upgrade"}
 		}
+		if _, err = c.call(ctx, "progress", a.Job, "preflight", 0, 0); err != nil {
+			return err
+		}
 		command := exec.CommandContext(ctx, path, args...)
 		command.Dir = dir
 		command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LANG=C"}
-		command.Stdout = os.Stdout
+		var output upgradeOutput
+		command.Stdout = io.MultiWriter(os.Stdout, &output)
 		command.Stderr = os.Stderr
 		command.WaitDelay = 5 * time.Second
 		if err = command.Run(); err != nil {
@@ -172,9 +176,20 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 			if errors.As(err, &exit) && exit.ExitCode() == 3 {
 				state = "busy"
 			}
+			var failure struct{ State, Step string }
+			if json.Unmarshal(output.Bytes(), &failure) == nil && failure.State == "failed" && noderelease.ValidUpgradeStep(failure.Step) {
+				state += "/" + failure.Step
+			}
 			return err
 		}
+		var receipt NodeInstallationReport
+		if err = json.Unmarshal(output.Bytes(), &receipt); err != nil || receipt.NodeID != conf.NodeID {
+			return errors.New("升级程序的完成回执无效")
+		}
 		state = "started"
+		if receipt.State == "program_applied" {
+			state = receipt.State
+		}
 		return nil
 	}()
 	if err != nil {
@@ -185,13 +200,23 @@ func SyncNodeUpgrade(parent context.Context, logger *slog.Logger) (failure error
 	if saved := fs.recordReceipt(a, state); saved != nil {
 		return errors.Join(err, saved)
 	}
-	if state == "started" {
+	if state == "started" || state == "program_applied" {
 		if cleanup := os.RemoveAll(filepath.Join(updateCache, a.Artifact)); cleanup != nil {
 			logger.Warn("节点升级缓存未清理", "job_id", a.Job, "node_id", conf.NodeID, "reason", cleanup)
 		}
 	}
 	_, ack := c.call(ctx, "report", a.Job, state, 0, 0)
 	return errors.Join(err, ack)
+}
+
+// upgradeOutput 只接收有界的结构化完成回执，避免异常子进程无限占用内存。
+type upgradeOutput struct{ bytes.Buffer }
+
+func (out *upgradeOutput) Write(p []byte) (int, error) {
+	if out.Len()+len(p) > 64<<10 {
+		return 0, errors.New("升级程序回执过长")
+	}
+	return out.Buffer.Write(p)
 }
 
 // stage 流式验证升级任务指定的每个分片，再解压并原子发布；重复领取同一包复用私有暂存结果。

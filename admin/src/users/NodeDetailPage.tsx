@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 import { ArrowLeft, Pencil, RefreshCw } from 'lucide-react'
+import { upgradeStep } from './upgradeStep'
 import { AdminClient, isVerificationCanceled } from '../api/client'
 import { nodeDetailSchema, type NodeDetail } from '../api/schemas'
 import { Alert, Dialog, LoadState, Status, useQuery } from '../components'
@@ -134,6 +135,7 @@ export function NodeDetailPage({ client }: { client: AdminClient }) {
             <div>
               <NodeStatus status={node.status} verification={node.verification?.state} />
               <p>{node.diagnosis.message}</p>
+              {node.upgrade_step && <p>升级阶段 · {upgradeStep(node.upgrade_step)}</p>}
             </div>
             {node.can_retry_verification && (
               <button className="secondary-button" onClick={() => setRetrying(true)}>

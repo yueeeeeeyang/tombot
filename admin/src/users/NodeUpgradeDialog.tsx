@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { Archive, ArrowLeft, Check, CircleAlert, Monitor, RefreshCw, Upload } from 'lucide-react'
 import { z } from 'zod'
+import { upgradeStep } from './upgradeStep'
 import { AdminClient } from '../api/client'
 import { Alert, Dialog, LoadState, useQuery } from '../components'
 import { Select } from '../components/Select'
@@ -10,10 +11,17 @@ import './node-upgrade.css'
 const status = z.object({
   releases: z.array(nodeRelease),
   jobs: z.array(
-    z.object({ id: z.string(), node: z.string(), state: z.string(), label: z.string() }),
+    z.object({
+      id: z.string(),
+      node: z.string(),
+      state: z.string(),
+      step: z.string().optional(),
+      label: z.string(),
+    }),
   ),
 })
 const states: Record<string, string> = {
+  program_applied: '程序已生效',
   superseded: '节点已切换其他镜像',
   queued: '等待领取',
   offline: '等待节点上线',
@@ -59,7 +67,9 @@ function ReleaseFile({
         </span>
         <span className="upgrade-file-action">{file ? '更换' : '选择文件'}</span>
       </label>
-      <small id={id}>日常升级上传节点程序包。首次部署或更新桌面环境时，另行上传电脑镜像包。</small>
+      <small id={id}>
+        日常升级直接上传节点程序包，无需解压。首次部署或更新桌面环境时，另行上传电脑镜像包。
+      </small>
     </div>
   )
 }
@@ -290,6 +300,7 @@ export function NodeUpgradeDialog({
                           }
                         >
                           {job.label} · {states[job.state] ?? job.state}
+                          {job.step && <> · {upgradeStep(job.step)}</>}
                         </span>
                       )}
                     </div>

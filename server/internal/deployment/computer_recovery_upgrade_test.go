@@ -1,13 +1,16 @@
 package deployment
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"io.yueyang/tom/deploy"
@@ -16,6 +19,33 @@ import (
 	"io.yueyang/tom/internal/nodeapp"
 	"io.yueyang/tom/internal/nodeenrollment"
 )
+
+func TestRecoveryWaitReportsProgress(t *testing.T) {
+	i, binary, _ := legacyRepairFixture(t)
+	var output bytes.Buffer
+	i.logger = slog.New(slog.NewTextHandler(&output, nil))
+	first, second := ids.New(), ids.New()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 85*time.Second)
+		defer cancel()
+		started := time.Now()
+		i.inspectRecovery = func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error) {
+			id := first
+			if time.Since(started) >= 70*time.Second {
+				id = second
+			}
+			return &nodeenrollment.RecoveryInspection{State: "waiting", Target: nodeenrollment.RecoveryTarget{ComputerID: id}}, nil
+		}
+		_, err := i.upgradeWithRecovery(ctx, "/source/tomnode", binary, NodeRepairOptions{Upgrade: true}, stoppedNode)
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+	})
+	logs := output.String()
+	if strings.Count(logs, "computer_id="+first) != 2 || strings.Count(logs, "computer_id="+second) != 1 || strings.Count(logs, "deadline=") != 3 {
+		t.Fatal("持续等待和切换电脑时应提示验收进度", logs)
+	}
+}
 
 func TestUpgradeRepairsQuarantinedComputerWithOneCommand(t *testing.T) {
 	i, binary, _ := legacyRepairFixture(t)
@@ -56,7 +86,7 @@ func TestUpgradeRepairsQuarantinedComputerWithOneCommand(t *testing.T) {
 		state = "waiting"
 		return nil
 	}
-	i.maintain = func(_ context.Context, r nodeInstallRequest, _ string, finish bool) error {
+	i.maintain = func(_ context.Context, r nodeInstallRequest, _ string, finish bool, _ string) error {
 		if r.ImageID == node.Enrollment.Registration.ImageID {
 			if !finish {
 				t.Fatal("旧计划未取得专用的同镜像恢复窗口")

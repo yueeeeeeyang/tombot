@@ -29,7 +29,11 @@ func (fs filesystem) previousReceipt(a noderelease.Assignment) (string, error) {
 		return "", err
 	}
 	var r updateReceipt
-	if decodePreparation(b, &r) != nil || (computer.NodeQuery{NodeID: r.Job}).Validate() != nil || !noderelease.ValidDigest(r.Release) || (r.State != "started" && r.State != "busy" && r.State != "failed") {
+	if err := decodePreparation(b, &r); err != nil {
+		return "", errors.New("已有升级回执无法读取")
+	}
+	_, _, valid := noderelease.ParseUpgradeOutcome(r.State)
+	if (computer.NodeQuery{NodeID: r.Job}).Validate() != nil || !noderelease.ValidDigest(r.Release) || !valid {
 		return "", errors.New("已有升级回执无效，未重新执行")
 	}
 	if r.Job != a.Job {

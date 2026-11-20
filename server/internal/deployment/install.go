@@ -27,7 +27,8 @@ const nodeServiceName = "tombot-node.service"
 type nodeInstaller struct {
 	inspectRecovery     func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error)
 	holdRecovery        func(context.Context, nodeInstallRequest, string, nodeenrollment.RecoveryTarget) error
-	maintain            func(context.Context, nodeInstallRequest, string, bool) error
+	progress            func(context.Context, nodeInstallRequest, string, string, string) error
+	maintain            func(context.Context, nodeInstallRequest, string, bool, string) error
 	checkListen         func(context.Context, string) error
 	detectHost          func(context.Context) (installationHost, error)
 	fetchBootstrap      func(context.Context, nodeenrollment.JoinCode) (nodeenrollment.BootstrapConfiguration, error)
@@ -295,11 +296,11 @@ func (installer nodeInstaller) publishInstallation(ctx context.Context, files []
 }
 
 func (installer nodeInstaller) verifyInstallation(ctx context.Context, record nodeInstallation) (NodeInstallationReport, error) {
-	return installer.verifyInstallationConfig(ctx, record, nodeapp.ParseConfig)
+	return installer.verifyInstallationConfig(ctx, record, nodeapp.ParseConfig, true)
 }
 
 // verifyInstallationConfig 先核对原始文件摘要，再按当前安装或旧配置迁移的规则解析节点参数。
-func (installer nodeInstaller) verifyInstallationConfig(ctx context.Context, record nodeInstallation, parseNode func([]byte) (nodeapp.Config, error)) (NodeInstallationReport, error) {
+func (installer nodeInstaller) verifyInstallationConfig(ctx context.Context, record nodeInstallation, parseNode func([]byte) (nodeapp.Config, error), verifyArchive bool) (NodeInstallationReport, error) {
 	names := []string{"node.json", "docker-install.json", "computer-image.json", "certificate.pem", "private.key"}
 	contents := map[string][]byte{}
 	defer func() { clear(contents["private.key"]) }()
@@ -357,8 +358,10 @@ func (installer nodeInstaller) verifyInstallationConfig(ctx context.Context, rec
 		if _, err := installer.fs.inspect(fileRule{path: imageManifest.ArchiveFile, maximum: dockernode.MaximumImageArchive, private: true}, account{}); err != nil {
 			return NodeInstallationReport{}, err
 		}
-		if err := installer.fs.verifyInstallationArchive(ctx, imageManifest.ArchiveFile, imageManifest.ArchiveSHA256); err != nil {
-			return NodeInstallationReport{}, err
+		if verifyArchive {
+			if err := installer.fs.verifyInstallationArchive(ctx, imageManifest.ArchiveFile, imageManifest.ArchiveSHA256); err != nil {
+				return NodeInstallationReport{}, err
+			}
 		}
 		names = append(names, filepath.Base(imageManifest.ArchiveFile))
 	}

@@ -87,14 +87,15 @@ func TestProgramUpgradeReusesImageAndRollsBackBotWithoutRestart(t *testing.T) {
 	i.inspectRecovery = func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error) {
 		return &nodeenrollment.RecoveryInspection{State: "clear"}, nil
 	}
-	var stops, holds int
-	i.maintain = func(_ context.Context, _ nodeInstallRequest, _ string, end bool) error {
+	var stops, holds, commands int
+	i.maintain = func(_ context.Context, _ nodeInstallRequest, _ string, end bool, _ string) error {
 		if !end {
 			holds++
 		}
 		return nil
 	}
 	i.systemctl = func(_ context.Context, args ...string) error {
+		commands++
 		if args[0] == "stop" {
 			stops++
 		}
@@ -127,14 +128,21 @@ func TestProgramUpgradeReusesImageAndRollsBackBotWithoutRestart(t *testing.T) {
 	if _, err := run("/missing-image"); err == nil || stops != 1 {
 		t.Fatal("显式指定的镜像包缺失仍继续升级", err)
 	}
+	inspect := i.inspectRecovery
+	i.inspectRecovery = func(context.Context, nodeInstallRequest, string) (*nodeenrollment.RecoveryInspection, error) {
+		t.Fatal("Bot 热更新进入电脑验收等待")
+		return nil, nil
+	}
+	systemCalls := commands
 	for _, version := range []string{"second", "first"} {
 		writeNodePrograms(t, i, "/programs", bin, version, "core")
 		before := holds
 		report, err := run("")
-		if err != nil || holds != before || stops != 1 || report.ImageID != initial.ImageID || (active() == first) != (version == "first") {
+		if err != nil || commands != systemCalls || report.UpgradeScope != "bot" || holds != before || stops != 1 || report.ImageID != initial.ImageID || (active() == first) != (version == "first") {
 			t.Fatal(version, report, err, holds, stops)
 		}
 	}
+	i.inspectRecovery = inspect
 	writeNodePrograms(t, i, "/programs", bin, "first", "changed core")
 	if report, err := run(""); err != nil || report.ImageID != initial.ImageID || stops != 2 {
 		t.Fatal(report, err, stops)

@@ -51,10 +51,14 @@ func runRepair(ctx context.Context, args []string, output io.Writer, logger *slo
 }
 
 // runUpgrade 使用程序所在目录的配套包；部署层核验节点身份、发布镜像及控制服务返回的原电脑计划。
-func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode, directory string) int {
-	report, err := repair(ctx, deployment.NodeRepairOptions{Upgrade: true, ImagePackage: directory})
+func runUpgrade(ctx context.Context, output io.Writer, logger *slog.Logger, repair repairNode, options deployment.NodeRepairOptions) int {
+	report, err := repair(ctx, options)
 	if err != nil {
-		logger.Error("节点升级未完成，保留原身份；请使用同一发布包重试", "reason", err)
+		stage := deployment.FailedUpgradeStep(err)
+		logger.Error("节点升级未完成", "stage", stage, "reason", err)
+		if emitErr := json.NewEncoder(output).Encode(map[string]string{"state": "failed", "step": stage}); emitErr != nil {
+			logger.Error("节点升级失败回执无法输出", "stage", stage)
+		}
 		if errors.Is(err, nodeenrollment.ErrMaintenanceConflict) {
 			return 3
 		}

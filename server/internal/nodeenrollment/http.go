@@ -75,6 +75,10 @@ func (handler *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, nodecatalog.ErrInvalidInput):
 			status = http.StatusBadRequest
 		}
+		var blocker maintenanceBlocker
+		if errors.As(err, &blocker) {
+			w.Header().Set("Tombot-Upgrade-Blocker", string(blocker))
+		}
 		handler.logger.WarnContext(ctx, "节点接入未确认", "request_id", requestID, "status", status)
 		w.WriteHeader(status)
 		return

@@ -46,12 +46,21 @@ it('仅向所选范围下发，未通过验收的节点不显示就绪', async (
     }
     return json({
       releases: [release],
-      jobs: [{ id: 'j', node: id(4), state: 'started', label: 'v1' }],
+      jobs: [
+        {
+          id: 'j',
+          node: id(4),
+          state: 'started',
+          label: 'v1',
+          step: 'verification_quarantined/agent_retirement_entry_unknown',
+        },
+      ],
     })
   })
   render(<NodeUpgradeDialog client={fixture.client} nodes={nodes} onClose={() => {}} />)
   const user = userEvent.setup()
   expect(await screen.findByText(/等待验收/)).toBeInTheDocument()
+  expect(screen.getByText(/节点验收已隔离 · agent_retirement_entry_unknown/)).toBeInTheDocument()
   expect(screen.queryByText('验收就绪')).not.toBeInTheDocument()
   await chooseOption(user, '目标版本', 'v1 · linux/amd64')
   const selectPage = screen.getByRole('checkbox', { name: '选择本页全部节点' })

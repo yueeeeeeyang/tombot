@@ -76,3 +76,14 @@ func TestUpgradeAcceptsOnlyAnExplicitAbsoluteImageDirectory(t *testing.T) {
 		}
 	}
 }
+
+func TestRecoveryFlagSelectsInstalledPrograms(t *testing.T) {
+	called := false
+	code := execute(t.Context(), []string{"tomnode", "upgrade", "--recover-computers"}, func(string) string { return "" }, io.Discard, slog.Default(), dependencies{repair: func(_ context.Context, o deployment.NodeRepairOptions) (deployment.NodeInstallationReport, error) {
+		called = o.RecoverComputers && o.Upgrade && o.ImagePackage == ""
+		return deployment.NodeInstallationReport{}, nil
+	}})
+	if !called || code != 0 {
+		t.Fatal(called, code)
+	}
+}

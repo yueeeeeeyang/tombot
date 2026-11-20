@@ -64,7 +64,7 @@ func (installer nodeInstaller) checkUpgradePackage(directory string, legacyProgr
 	return contentDigest(sums), nil
 }
 
-func (installer nodeInstaller) maintainNode(ctx context.Context, request nodeInstallRequest, operation string, finish bool) error {
+func (installer nodeInstaller) maintainNode(ctx context.Context, request nodeInstallRequest, operation string, finish bool, hostRelease string) error {
 	if request.Server == nil {
 		return errors.New("该节点没有已登记的控制服务")
 	}
@@ -72,7 +72,15 @@ func (installer nodeInstaller) maintainNode(ctx context.Context, request nodeIns
 	if err != nil {
 		return err
 	}
-	return nodeenrollment.Maintain(ctx, request.NodeID, enrollmentConfig(request), pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Finish: finish})
+	return nodeenrollment.Maintain(ctx, request.NodeID, enrollmentConfig(request), pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Finish: finish, HostRelease: hostRelease})
+}
+
+func (installer nodeInstaller) reportNodeUpgradeStage(ctx context.Context, request nodeInstallRequest, operation, stage, release string) error {
+	pair, err := installer.fs.nodeKeyPair()
+	if err != nil {
+		return err
+	}
+	return nodeenrollment.Maintain(ctx, request.NodeID, enrollmentConfig(request), pair, nodeenrollment.MaintenanceRequest{OperationID: operation, Stage: stage, HostRelease: release})
 }
 
 func enrollmentConfig(request nodeInstallRequest) nodeenrollment.Config {

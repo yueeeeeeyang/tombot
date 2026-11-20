@@ -48,6 +48,7 @@ type NodeDiagnosis struct {
 
 // NodeDetail 仅返回管理员运维所需的目录、公开连接地址与能力证据，不包含接入凭据或私钥。
 type NodeDetail struct {
+	UpgradeStep string `json:"upgrade_step,omitempty"`
 	Node
 	ConfigurationVersion   int64             `json:"configuration_version"`
 	IsDraining             bool              `json:"is_draining"`
@@ -99,12 +100,15 @@ func readNodeDetail(ctx context.Context, tx *sql.Tx, nodeID string) (NodeDetail,
 		c.url,c.certificate_fingerprint,n.runtime_id,n.control_expires_at,n.control_sequence,i.id,i.reference,i.is_enabled,
 		CASE WHEN v.node_id IS NOT NULL THEN jsonb_build_object('state',v.state,'is_valid',v.is_valid,'attempts',v.attempts,'fencing_token',v.fencing_token,
 		'error_code',v.error_code,'node_error_code',v.node_error_code,'updated_at',v.updated_at,'next_attempt_at',v.next_attempt_at,'verified_at',v.verified_at,'lease_expires_at',v.lease_expires_at) END,
-		v.capabilities,v.specification,clock_timestamp()
+		v.capabilities,v.specification,clock_timestamp(),
+		CASE WHEN EXISTS(SELECT 1 FROM tombot.node_upgrades WHERE node_id=n.id AND NOT is_finished)
+			OR EXISTS(SELECT 1 FROM tombot.computer_image_upgrades WHERE node_id=n.id AND state IN ('draining','switching','quarantined'))
+			THEN coalesce(tombot.node_upgrade_diagnosis(n.id),'') ELSE '' END
 		FROM tombot.computer_nodes n LEFT JOIN tombot.node_connections c ON c.node_id=n.id
 		LEFT JOIN tombot.computer_images i ON i.id=c.image_id LEFT JOIN tombot.node_verifications v ON v.node_id=n.id WHERE n.id=$1`, nodeID).
 		Scan(&detail.ID, &detail.Name, &detail.Status, &detail.Capacity, &detail.Reserved, &detail.Generation, &detail.LastSeenAt, &detail.VerifiedImageID, &detail.CapabilityExpiresAt,
 			&detail.ConfigurationVersion, &detail.IsDraining, &detail.CreatedAt, &detail.URL, &detail.CertificateFingerprint, &detail.RuntimeID, &detail.ControlExpiresAt, &detail.ControlSequence,
-			&imageID, &reference, &imageEnabled, &verification, &capabilities, &specification, &now)
+			&imageID, &reference, &imageEnabled, &verification, &capabilities, &specification, &now, &detail.UpgradeStep)
 	if errors.Is(err, sql.ErrNoRows) {
 		return detail, ErrNotFound
 	}

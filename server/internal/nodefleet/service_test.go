@@ -182,6 +182,35 @@ func verifyFleetDistribution(t *testing.T, kind string) {
 		t.Fatal(status, err)
 	}
 
+	for _, test := range []struct{ outcome, state, step string }{
+		{"failed/verification_quarantined/agent_retirement_entry_unknown", "failed", "verification_quarantined/agent_retirement_entry_unknown"},
+		{"busy/active_session", "busy", "active_session"}, {"program_applied", "program_applied", ""},
+	} {
+		response := call(noderelease.Call{Node: n, Action: "poll", PackageVersion: 2})
+		var job noderelease.Assignment
+		if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &job) != nil {
+			t.Fatal("任务领取失败", response.Code)
+		}
+		if response = call(noderelease.Call{Node: n, Action: "progress", Job: job.Job, State: "preflight"}); response.Code != 204 {
+			t.Fatal(response.Code)
+		}
+		if response = call(noderelease.Call{Node: n, Action: "report", Job: job.Job, State: "failed/extra/input"}); response.Code != 403 {
+			t.Fatal("接受了未知错误字段", response.Code)
+		}
+		for range 2 {
+			if response = call(noderelease.Call{Node: n, Action: "report", Job: job.Job, State: test.outcome}); response.Code != 204 {
+				t.Fatal(response.Code, test.outcome)
+			}
+		}
+		status, err = s.status(ctx)
+		if err != nil || len(status.Jobs) != 1 || status.Jobs[0].State != test.state || status.Jobs[0].Step != test.step {
+			t.Fatal(status, err)
+		}
+		if err = s.dispatch(ctx, r.ID, []string{n}, false, admin, ids.New()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	t.Run("目标节点已有任务时整批回滚", func(t *testing.T) {
 		ctx := t.Context()
 		if _, err := pool.ExecContext(ctx, `INSERT INTO tombot.node_update_agents(node_id,platform) VALUES($1,'linux/amd64')`, secondNode); err != nil {

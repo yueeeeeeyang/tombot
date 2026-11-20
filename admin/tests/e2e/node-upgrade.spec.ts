@@ -43,7 +43,15 @@ for (const theme of ['light', 'dark'] as const) {
               { id: 'release-a', label: '0.2.2-rc.1', platform: 'linux/amd64' },
               ...(received ? [approved] : []),
             ],
-            jobs: [{ id: 'job-a', label: '0.2.1', node: node.id, state: 'ready' }],
+            jobs: [
+              {
+                id: 'job-a',
+                label: '0.2.1',
+                node: node.id,
+                state: 'failed',
+                step: 'verification_quarantined/agent_retirement_entry_unknown',
+              },
+            ],
           },
         })
       return route.fulfill({ status: 404, json: { code: 'NOT_FOUND', message: '未找到' } })
@@ -53,6 +61,7 @@ for (const theme of ['light', 'dark'] as const) {
     await trigger.click()
     const dialog = page.getByRole('dialog')
     const version = dialog.getByRole('combobox', { name: '目标版本' })
+    await expect(dialog.getByText(/节点验收已隔离 · agent_retirement_entry_unknown/)).toBeVisible()
     await version.focus()
     await page.keyboard.press('Enter')
     await page.keyboard.press('Enter')
@@ -62,10 +71,10 @@ for (const theme of ['light', 'dark'] as const) {
     await dialog.screenshot({ path: testInfo.outputPath(`dispatch-${theme}.png`) })
     await dialog.getByRole('button', { name: '上传新版本' }).click()
     await expect(dialog.locator('input[type=file]')).toHaveCount(1)
-    await expect(dialog.getByLabel('完整离线包')).toHaveAccessibleDescription(/无需解压/)
+    await expect(dialog.getByLabel('程序包或电脑镜像包')).toHaveAccessibleDescription(/无需解压/)
     await dialog.screenshot({ path: testInfo.outputPath(`upload-${theme}.png`) })
     await page.setViewportSize({ width: 360, height: 540 })
-    const archive = dialog.getByLabel('完整离线包')
+    const archive = dialog.getByLabel('程序包或电脑镜像包')
     await archive.setInputFiles({
       name: 'tomnode-linux-amd64-' + 'release-'.repeat(10) + 'offline.tar.gz',
       mimeType: 'application/gzip',

@@ -32,6 +32,7 @@ type Release struct {
 	Platform string `json:"platform"`
 }
 type Job struct {
+	Step  string `json:"step,omitempty"`
 	ID    string `json:"id"`
 	Node  string `json:"node"`
 	State string `json:"state"`
@@ -105,7 +106,7 @@ func (s Service) dispatch(ctx context.Context, id string, nodes []string, all bo
 		}
 		result, err := tx.ExecContext(ctx, `INSERT INTO tombot.node_update_jobs(node_id,id,release_id,state)
 			SELECT target,operation,$1,state FROM unnest($2::text[],$3::text[],$4::text[]) AS batch(target,operation,state)
-			ON CONFLICT(node_id) DO UPDATE SET id=EXCLUDED.id,release_id=EXCLUDED.release_id,state=EXCLUDED.state,applied_image=NULL,updated_at=clock_timestamp()
+			ON CONFLICT(node_id) DO UPDATE SET id=EXCLUDED.id,release_id=EXCLUDED.release_id,state=EXCLUDED.state,stage=NULL,applied_image=NULL,updated_at=clock_timestamp()
 			WHERE tombot.node_update_jobs.state NOT IN ('queued','running')`, id, targets, operations, states)
 		if err != nil {
 			return err

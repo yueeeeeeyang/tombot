@@ -94,6 +94,7 @@ export const nodeDetailSchema = z.object({
   control_expires_at: z.string().nullable(),
   control_sequence: z.number().int(),
   image: z.object({ id, reference: z.string(), is_enabled: z.boolean() }).nullable(),
+  upgrade_step: z.string().optional(),
   diagnosis: z.object({ code: z.string(), message: z.string() }),
   can_retry_verification: z.boolean(),
   verification: z

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"strings"
 	"time"
 
 	"io.yueyang/tom/internal/computer"
@@ -100,11 +101,22 @@ func (service *Service) Register(ctx context.Context, request Request, token, re
 			if claim.Maintenance != nil {
 				m := claim.Maintenance
 				if m.InspectRelease != "" {
-					if m.Recovery != nil || m.Finish || m.OperationID != "" || !validRelease(m.InspectRelease) || claim.Registration.ImageID != imageID || !claim.SupportsComputerUpgrades {
+					if m.HostRelease != "" || m.Stage != "" || m.Recovery != nil || m.Finish || m.OperationID != "" || !validRelease(m.InspectRelease) || claim.Registration.ImageID != imageID || !claim.SupportsComputerUpgrades {
 						return ErrConflict
 					}
 					state = "recovery_inspected"
 					inspection, err = inspectRecovery(ctx, tx, claim.NodeID, imageID, m.InspectRelease)
+					if err == nil && (inspection.State == "waiting" || inspection.State == "blocked") {
+						step := inspection.ErrorCode
+						if inspection.State == "blocked" && !strings.HasPrefix(step, "verification_quarantined/") {
+							step = "computer_quarantined/" + step
+						}
+						// 仅将诊断附到同一份发布的在途远程作业，防止人工检查覆盖其他版本的结果。
+						_, err = tx.ExecContext(ctx, `UPDATE tombot.node_update_jobs j SET stage=$3
+							FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact)
+							WHERE j.node_id=$1 AND j.release_id=r.id AND j.state='running' AND a.manifest->>'checksums'=$2
+								AND j.stage IS DISTINCT FROM $3`, claim.NodeID, m.InspectRelease, step)
+					}
 					return err
 				}
 				if m.Recovery != nil && (m.Finish || m.Recovery.validate() != nil) {
@@ -225,6 +237,10 @@ func (service *Service) List(ctx context.Context, after string, limit int) ([]no
 func transactionError(err error) error {
 	if err == nil {
 		return nil
+	}
+	var blocker maintenanceBlocker
+	if errors.As(err, &blocker) {
+		return blocker
 	}
 	for _, known := range []error{ErrUnauthorized, ErrConflict, ErrCapacity, nodecatalog.ErrConflict, nodecatalog.ErrInvalidInput, context.Canceled, context.DeadlineExceeded} {
 		if errors.Is(err, known) {

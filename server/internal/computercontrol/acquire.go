@@ -41,6 +41,10 @@ func (service *Service) Acquire(ctx context.Context, reference RunReference) (co
 		if _, err = tx.ExecContext(ctx, `INSERT INTO tombot.computer_execution_heads(user_id,computer_id) SELECT user_id,id FROM tombot.computers WHERE user_id=$1 ON CONFLICT(user_id) DO NOTHING`, reference.UserID); err != nil {
 			return err
 		}
+		// 与宿主修复的排空检查串行化，防止维护事务检查后另一个事务才签发会话。
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared(hashtextextended('tombot.node-maintenance/'||node_id,0)) FROM tombot.computers WHERE user_id=$1`, reference.UserID); err != nil {
+			return err
+		}
 		if err = lockHead(ctx, tx, reference.UserID); err != nil {
 			return err
 		}

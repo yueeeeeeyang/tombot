@@ -24,7 +24,7 @@ func TestUpgradeStopsOnlyAfterValidationAndResumesWithoutStopping(t *testing.T) 
 	var sequence []string
 	i.systemctl = func(ctx context.Context, args ...string) error { sequence = append(sequence, args[0]); return nil }
 	held, finish := false, false
-	i.maintain = func(_ context.Context, _ nodeInstallRequest, _ string, end bool) error {
+	i.maintain = func(_ context.Context, _ nodeInstallRequest, _ string, end bool, _ string) error {
 		if end {
 			sequence = append(sequence, "finish")
 			if !finish {

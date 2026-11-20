@@ -51,6 +51,18 @@ describe('节点详情与编辑', () => {
     expect(screen.queryByText('未通过')).not.toBeInTheDocument()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
+  it('显示阻止电脑升级的节点验收错误', async () => {
+    const node = nodeDetail()
+    mount(
+      makeClient(() =>
+        json({ ...node, upgrade_step: 'verification_quarantined/agent_retirement_entry_unknown' }),
+      ),
+      `/computer-nodes/${node.id}`,
+    )
+    expect(
+      await screen.findByText(/升级阶段 · 节点验收已隔离 · agent_retirement_entry_unknown/),
+    ).toBeInTheDocument()
+  })
   it('保留历史浏览器探针结果', async () => {
     const node = nodeDetail()
     node.verification!.capabilities = { ...basicCapabilities, browser: true }

@@ -169,14 +169,30 @@ func (s Service) status(ctx context.Context) (dashboard, error) {
 		if err := rows.Err(); err != nil {
 			return err
 		}
-		rows, err = tx.QueryContext(ctx, `SELECT j.id,j.node_id,CASE WHEN j.state='started' AND c.image_id<>j.applied_image THEN 'superseded' WHEN j.state='queued' AND a.last_seen_at<clock_timestamp()-interval '3 minutes' THEN 'offline' WHEN j.state='started' AND n.verified_image_id=c.image_id AND tombot.computer_node_status(n.status,n.runtime_id,n.control_expires_at,n.capability_expires_at)='ready' THEN 'ready' WHEN j.state='started' AND v.image_id=c.image_id AND v.state IN ('failed','quarantined') AND v.updated_at>=j.updated_at THEN 'verification_failed' ELSE j.state END,r.label FROM tombot.node_update_jobs j LEFT JOIN tombot.node_update_agents a ON a.node_id=j.node_id JOIN tombot.node_releases r ON r.id=j.release_id JOIN tombot.computer_nodes n ON n.id=j.node_id JOIN tombot.node_connections c ON c.node_id=j.node_id LEFT JOIN tombot.node_verifications v ON v.node_id=j.node_id ORDER BY j.updated_at DESC LIMIT 1000`)
+		rows, err = tx.QueryContext(ctx, `SELECT j.id,j.node_id,CASE
+			WHEN j.state='started' AND j.stage='program_applied' THEN 'program_applied'
+			WHEN j.state='started' AND c.image_id<>j.applied_image THEN 'superseded'
+			WHEN j.state='queued' AND a.last_seen_at<clock_timestamp()-interval '3 minutes' THEN 'offline'
+			WHEN diagnosis.step='ready' THEN 'ready'
+			WHEN j.state='started' AND v.image_id=c.image_id AND v.state IN ('failed','quarantined') AND v.updated_at>=j.updated_at THEN 'verification_failed'
+			ELSE j.state END,r.label,
+			CASE WHEN j.stage='program_applied' OR diagnosis.step='ready' THEN ''
+				WHEN diagnosis.step IS NOT NULL THEN diagnosis.step
+				WHEN j.state='running' AND NOT m.is_finished THEN coalesce(m.stage,'maintenance')
+				ELSE coalesce(j.stage,'') END
+			FROM tombot.node_update_jobs j LEFT JOIN tombot.node_update_agents a ON a.node_id=j.node_id
+			JOIN tombot.node_releases r ON r.id=j.release_id JOIN tombot.node_connections c ON c.node_id=j.node_id
+			LEFT JOIN tombot.node_verifications v ON v.node_id=j.node_id LEFT JOIN tombot.node_upgrades m ON m.node_id=j.node_id
+			LEFT JOIN LATERAL (SELECT tombot.node_upgrade_diagnosis(j.node_id) AS step
+				WHERE j.state='started' AND j.stage IS DISTINCT FROM 'program_applied' AND c.image_id=j.applied_image OFFSET 0) diagnosis ON true
+			ORDER BY j.updated_at DESC LIMIT 1000`)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
 			var j Job
-			if err := rows.Scan(&j.ID, &j.Node, &j.State, &j.Label); err != nil {
+			if err := rows.Scan(&j.ID, &j.Node, &j.State, &j.Label, &j.Step); err != nil {
 				return err
 			}
 			value.Jobs = append(value.Jobs, j)

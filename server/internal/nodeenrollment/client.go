@@ -63,6 +63,8 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 		expected = "upgrade_held"
 		if maintenance.InspectRelease != "" {
 			expected = "recovery_inspected"
+		} else if maintenance.Stage != "" {
+			expected = "upgrade_progress"
 		} else if maintenance.Finish {
 			expected = "upgrade_finished"
 		}
@@ -90,7 +92,7 @@ func registration(ctx context.Context, nodeID string, configuration Config, cert
 			status, err = sendRegistration(ctx, client, configuration.Server.URL, body, token, nodeID, configuration.Registration.ImageID, expected, inspection)
 		}
 		if maintenance != nil && status == http.StatusConflict {
-			return ErrMaintenanceConflict
+			return errors.Join(ErrMaintenanceConflict, err)
 		}
 		if err == nil {
 			return nil
@@ -134,6 +136,12 @@ func sendRegistration(ctx context.Context, client *http.Client, origin string, b
 		}
 	}()
 	if response.StatusCode != http.StatusOK {
+		if response.StatusCode == http.StatusConflict {
+			switch code := response.Header.Get("Tombot-Upgrade-Blocker"); code {
+			case "active_session", "computer_upgrade", "computer_transition", "verification_lease":
+				return response.StatusCode, maintenanceBlocker(code)
+			}
+		}
 		return response.StatusCode, errors.New("节点登记被拒绝或服务暂不可用")
 	}
 	encoded, err := io.ReadAll(io.LimitReader(response.Body, maximumBodyBytes+1))

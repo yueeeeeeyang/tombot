@@ -3,10 +3,12 @@ package deployment
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"io.yueyang/tom/deploy"
 	"io.yueyang/tom/internal/noderelease"
 )
 
@@ -183,4 +185,39 @@ func (fs filesystem) hasPackageFile(dir, name string) (bool, error) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+// programUpgradeScope 根据受管安装快照和已核验包确定范围；镜像或服务布局变化时沿用完整维护。
+func programUpgradeScope(record nodeInstallation, current nodeInstallRequest, binary string, opts NodeRepairOptions) string {
+	if !opts.Upgrade || opts.ImagePackage != "" || !current.Programs.valid() || !opts.Programs.valid() || opts.Recovery.ComputerID != "" || record.ServiceSHA256 != contentDigest([]byte(deploy.NodeService())) || !maps.Equal(record.UpdateUnits, updateUnitDigests()) {
+		return "runtime"
+	}
+	if current.Programs.Core != opts.Programs.Core {
+		return "core"
+	}
+	if binary != record.BinarySHA256 {
+		if current.Programs.Bot == opts.Programs.Bot {
+			return "host"
+		}
+		return "host_bot"
+	}
+	if current.Programs.Bot != opts.Programs.Bot {
+		return "bot"
+	}
+	return "unchanged"
+}
+
+func (opts NodeRepairOptions) localProgramUpgrade() bool {
+	return opts.ProgramScope == "bot" || opts.hostProgramUpgrade() || opts.ProgramScope == "unchanged"
+}
+
+func (opts NodeRepairOptions) hostProgramUpgrade() bool {
+	return opts.ProgramScope == "host" || opts.ProgramScope == "host_bot"
+}
+
+func (opts NodeRepairOptions) hostRelease() string {
+	if opts.hostProgramUpgrade() {
+		return opts.PackageSHA256
+	}
+	return ""
 }

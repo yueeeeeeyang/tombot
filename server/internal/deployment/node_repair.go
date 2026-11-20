@@ -19,6 +19,7 @@ import (
 	"io.yueyang/tom/internal/dockernode"
 	"io.yueyang/tom/internal/infra/ids"
 	"io.yueyang/tom/internal/nodeapi"
+	"io.yueyang/tom/internal/nodeapp"
 	"io.yueyang/tom/internal/nodeenrollment"
 )
 
@@ -26,14 +27,16 @@ const nodeRepairDirectory = "/etc/tombot/node-repair"
 
 // NodeRepairOptions 允许修正端点和导入完整离线镜像包，不接受新节点身份或凭据。
 type NodeRepairOptions struct {
-	Programs       programVersions               `json:"programs,omitzero"`
-	AwaitComputers bool                          `json:"await_computers,omitempty"`
-	Recovery       nodeenrollment.RecoveryTarget `json:"recovery,omitzero"`
-	PackageSHA256  string                        `json:"package_sha256,omitempty"`
-	Upgrade        bool                          `json:"upgrade,omitempty"`
-	ImagePackage   string                        `json:"image_package,omitempty"`
-	Listen         string                        `json:"listen"`
-	URL            string                        `json:"url"`
+	RecoverComputers bool                          `json:"recover_computers,omitempty"`
+	ProgramScope     string                        `json:"program_scope,omitempty"`
+	Programs         programVersions               `json:"programs,omitzero"`
+	AwaitComputers   bool                          `json:"await_computers,omitempty"`
+	Recovery         nodeenrollment.RecoveryTarget `json:"recovery,omitzero"`
+	PackageSHA256    string                        `json:"package_sha256,omitempty"`
+	Upgrade          bool                          `json:"upgrade,omitempty"`
+	ImagePackage     string                        `json:"image_package,omitempty"`
+	Listen           string                        `json:"listen"`
+	URL              string                        `json:"url"`
 }
 
 type nodeRepairFile struct {
@@ -90,6 +93,7 @@ func RepairNode(ctx context.Context, executable string, caller uint32, options N
 	}
 	if options.Upgrade {
 		installer.maintain = installer.maintainNode
+		installer.progress = installer.reportNodeUpgradeStage
 		installer.inspectRecovery = installer.inspectNodeRecovery
 		installer.holdRecovery = installer.holdNodeRecovery
 		installer.systemctl = func(ctx context.Context, args ...string) error {
@@ -250,7 +254,7 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	if currentImage.ArchiveFile != "" {
 		currentRecord.Files[filepath.Base(currentImage.ArchiveFile)] = currentImage.ArchiveSHA256
 	}
-	if _, err := installer.verifyInstallationConfig(ctx, currentRecord, parseRepairNodeConfig); err != nil {
+	if _, err := installer.verifyInstallationConfig(ctx, currentRecord, parseRepairNodeConfig, !options.localProgramUpgrade()); err != nil {
 		return report, err
 	}
 	// 升级首次准备时仍在线。只有维护授权落定才允许停服务，完成回执丢失后只重发交还。
@@ -268,16 +272,15 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	for _, file := range journal.Files {
 		noChange = noChange && file.Before == file.After
 	}
-	botOnly := options.Upgrade && !recovering && options.ImagePackage == "" && request.Programs.valid()
-	if botOnly {
+	botOnly := journal.Options.ProgramScope == "bot" || journal.Options.ProgramScope == "unchanged"
+	if scope := journal.Options.ProgramScope; journal.Options.localProgramUpgrade() {
 		original, _, err := parseNodeInstallRequest(previous.Request)
-		if err != nil {
-			return report, err
+		if err != nil || scope != programUpgradeScope(previous, original, record.BinarySHA256, options) {
+			return report, errors.New("程序升级范围与备份快照不一致")
 		}
-		botOnly = original.Programs.Core == request.Programs.Core && original.Programs.Bot != request.Programs.Bot && previous.BinarySHA256 == record.BinarySHA256
 		for _, item := range journal.Files {
-			if item.Name != "installation.json" && item.Before != item.After {
-				botOnly = false
+			if item.Name != "installation.json" && !(options.hostProgramUpgrade() && item.Name == "program") && item.Before != item.After {
+				return report, errors.New("组件升级计划包含额外配置或服务变更，请使用配套发布包执行完整升级")
 			}
 		}
 	}
@@ -286,13 +289,39 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 			return report, err
 		}
 	}
+	tracked := options.Upgrade && (!noChange || recovering) && !botOnly
+	phase := "preflight"
+	defer func() {
+		if result != nil && options.Upgrade {
+			var specific interface{ UpgradeStep() string }
+			if !errors.As(result, &specific) {
+				result = upgradeFailure{phase, result}
+			}
+		}
+	}()
+	step := func(stage string) error {
+		phase = stage
+		installer.logger.InfoContext(ctx, "节点升级阶段", "node_id", request.NodeID, "operation_id", journal.OperationID, "stage", stage)
+		if !tracked || installer.progress == nil || stage == "maintenance" {
+			return nil
+		}
+		return installer.progress(ctx, request, journal.OperationID, stage, options.hostRelease())
+	}
+	if _, err := os.Lstat(installer.fs.resolve(nodeRepairDirectory + "/rollback")); err == nil {
+		return report, installer.rollbackHost(ctx, journal, previous, request, checkStopped)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return report, err
+	}
 	if (!noChange || recovering) && !resumeFinish && !botOnly {
 		if options.Upgrade {
+			if err := step("maintenance"); err != nil {
+				return report, err
+			}
 			var holdErr error
 			if recovering {
 				holdErr = installer.holdRecovery(ctx, request, journal.OperationID, options.Recovery)
 			} else {
-				holdErr = installer.maintain(ctx, request, journal.OperationID, false)
+				holdErr = installer.maintain(ctx, request, journal.OperationID, false, options.hostRelease())
 			}
 			if err := holdErr; err != nil {
 				// 只有明确拒绝且目标完全未动才可撤下准备计划；网络回执未知时保留同一操作身份。
@@ -312,8 +341,23 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 			}
 		}
 	}
-	if !noChange && !resumeFinish {
+	activated := false
+	if options.hostProgramUpgrade() {
+		if _, err := os.Lstat(installer.fs.resolve(nodeRepairDirectory + "/activated")); err == nil {
+			body, err := installer.fs.readConfig(fileRule{path: nodeRepairDirectory + "/activated", private: true, maximum: 64}, account{})
+			if err != nil || string(body) != journal.OperationID || !allApplied {
+				return report, errors.New("已激活记录与宿主文件不符")
+			}
+			activated = true
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return report, err
+		}
+	}
+	if !noChange && !resumeFinish && !activated {
 		if options.Upgrade && !botOnly {
+			if err := step("stop"); err != nil {
+				return report, err
+			}
 			if err := installer.systemctl(ctx, "stop", nodeServiceName); err != nil {
 				return report, err
 			}
@@ -326,7 +370,13 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 				return report, err
 			}
 		}
+		if err := step("activate"); err != nil {
+			return report, err
+		}
 		for _, target := range nodeRepairTargets() {
+			if options.hostProgramUpgrade() && target.name != "installation.json" && target.name != "program" {
+				continue
+			}
 			if botOnly && target.name != "installation.json" {
 				continue
 			}
@@ -338,7 +388,7 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 			}
 		}
 	}
-	report, err = installer.verifyInstallation(ctx, record)
+	report, err = installer.verifyInstallationConfig(ctx, record, nodeapp.ParseConfig, !options.localProgramUpgrade())
 	if err != nil {
 		return NodeInstallationReport{}, err
 	}
@@ -350,21 +400,44 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 			return report, err
 		}
 	}
-	if !botOnly {
+	if options.hostProgramUpgrade() && !activated && !resumeFinish {
+		if err := installer.saveRepairMarker("activated", journal.OperationID); err != nil {
+			return report, err
+		}
+	}
+	if resumeFinish {
+		phase = "finish"
+	}
+	if resumeFinish && options.hostProgramUpgrade() {
+		if err := installer.systemctl(ctx, "is-active", "--quiet", nodeServiceName); err != nil {
+			return report, err
+		}
+	} else if !botOnly {
+		if !resumeFinish {
+			if err := step("start"); err != nil {
+				return report, err
+			}
+		}
 		if err := installer.startNodeServices(ctx, request.Server != nil, previous.UpdateUnits); err != nil {
+			if options.hostProgramUpgrade() && ctx.Err() == nil {
+				if saveErr := installer.saveRepairMarker("rollback", journal.OperationID); saveErr != nil {
+					return report, errors.Join(err, saveErr)
+				}
+				return report, errors.Join(err, installer.rollbackHost(ctx, journal, previous, request, checkStopped))
+			}
 			return report, err
 		}
 	}
 	if options.Upgrade && (!noChange || recovering) && !botOnly {
 		if !resumeFinish {
-			if err := writeConfigurationFile(installer.fs.resolve(nodeRepairDirectory+"/started"), []byte(journal.OperationID), 0600); err != nil {
+			if err := installer.saveRepairMarker("started", journal.OperationID); err != nil {
 				return report, err
 			}
-			if err := syncDirectory(installer.fs.resolve(nodeRepairDirectory)); err != nil {
+			if err := step("finish"); err != nil {
 				return report, err
 			}
 		}
-		if err := installer.maintain(ctx, request, journal.OperationID, true); err != nil {
+		if err := installer.maintain(ctx, request, journal.OperationID, true, options.hostRelease()); err != nil {
 			return report, err
 		}
 	}
@@ -377,6 +450,13 @@ func (installer nodeInstaller) applyNodeRepair(ctx context.Context, executable s
 	}
 	installer.logger.Info("节点修复已保存备份，节点身份保持不变", "node_id", report.NodeID, "image_id", report.ImageID, "backup", backup)
 	report.State = "control_started"
+	report.UpgradeScope = options.ProgramScope
+	if options.Upgrade && report.UpgradeScope == "" {
+		report.UpgradeScope = "runtime"
+	}
+	if botOnly {
+		report.State = "program_applied"
+	}
 	return report, nil
 }
 
@@ -402,7 +482,7 @@ func (installer nodeInstaller) prepareNodeRepair(ctx context.Context, program []
 	if err != nil || digest != record.RequestSHA256 {
 		return errors.New("原节点安装请求已变化，未覆盖")
 	}
-	if _, err := installer.verifyInstallationConfig(ctx, record, parseRepairNodeConfig); err != nil {
+	if _, err := installer.verifyInstallationConfig(ctx, record, parseRepairNodeConfig, !options.localProgramUpgrade()); err != nil {
 		return err
 	}
 	request.Node, err = migrateBrowserLimits(request.Node, true)

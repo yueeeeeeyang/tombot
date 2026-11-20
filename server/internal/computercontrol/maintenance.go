@@ -16,7 +16,7 @@ func (service *Service) ManageComputer(ctx context.Context, p identity.Principal
 		if err := identity.CheckTenantSession(ctx, tx, p); err != nil {
 			return err
 		}
-		return tx.QueryRowContext(ctx, `SELECT c.user_id,c.id,c.node_id,c.container_id,c.generation FROM tombot.computers c WHERE c.user_id=$1 AND c.status='ready' AND NOT EXISTS(SELECT 1 FROM tombot.computer_image_upgrades u WHERE u.user_id=c.user_id AND u.computer_id=c.id AND u.state IN ('draining','switching','quarantined'))`, p.UserID).Scan(&m.UserID, &m.ComputerID, &m.NodeID, &m.ContainerID, &m.Generation)
+		return tx.QueryRowContext(ctx, `SELECT c.user_id,c.id,c.node_id,c.container_id,c.generation FROM tombot.computers c WHERE c.user_id=$1 AND c.status='ready' AND NOT EXISTS(SELECT 1 FROM tombot.node_upgrades m WHERE m.node_id=c.node_id AND NOT m.is_finished) AND NOT EXISTS(SELECT 1 FROM tombot.computer_image_upgrades u WHERE u.user_id=c.user_id AND u.computer_id=c.id AND u.state IN ('draining','switching','quarantined'))`, p.UserID).Scan(&m.UserID, &m.ComputerID, &m.NodeID, &m.ContainerID, &m.Generation)
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return computer.ComputerStatus{}, ErrUnavailable

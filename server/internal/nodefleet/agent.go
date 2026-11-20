@@ -38,7 +38,7 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 			return
 		}
 		c := signed.Call
-		var job, release, state string
+		var job, release, state, priorStep string
 		err := s.DB.Platform(ctx, func(tx *sql.Tx) error {
 			var pin string
 			if err := tx.QueryRowContext(ctx, `SELECT certificate_fingerprint FROM tombot.node_connections WHERE node_id=$1`, c.Node).Scan(&pin); err != nil {
@@ -55,13 +55,13 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 				if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('tombot.fleet.claim',0))`); err != nil {
 					return err
 				}
-				err := tx.QueryRowContext(ctx, `UPDATE tombot.node_update_jobs j SET state='running',updated_at=clock_timestamp() FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE (a.manifest->>'version')::int <= $3 AND j.node_id=$1 AND j.release_id=r.id AND r.platform=$2 AND (j.state='running' OR (j.state='queued' AND (SELECT count(*) FROM tombot.node_update_jobs WHERE state='running' AND updated_at>clock_timestamp()-interval '4 hours')<3)) RETURNING j.id,j.release_id`, c.Node, c.Platform, max(1, c.PackageVersion)).Scan(&job, &release)
+				err := tx.QueryRowContext(ctx, `UPDATE tombot.node_update_jobs j SET state='running',stage=coalesce(j.stage,'download'),updated_at=clock_timestamp() FROM tombot.node_releases r JOIN tombot.node_release_archives a USING(artifact) WHERE (a.manifest->>'version')::int <= $3 AND j.node_id=$1 AND j.release_id=r.id AND r.platform=$2 AND (j.state='running' OR (j.state='queued' AND (SELECT count(*) FROM tombot.node_update_jobs WHERE state='running' AND updated_at>clock_timestamp()-interval '4 hours')<3)) RETURNING j.id,j.release_id`, c.Node, c.Platform, max(1, c.PackageVersion)).Scan(&job, &release)
 				if errors.Is(err, sql.ErrNoRows) {
 					return nil
 				}
 				return err
 			}
-			if err := tx.QueryRowContext(ctx, `SELECT id,release_id,state FROM tombot.node_update_jobs WHERE node_id=$1 AND id=$2 FOR UPDATE`, c.Node, c.Job).Scan(&job, &release, &state); err != nil {
+			if err := tx.QueryRowContext(ctx, `SELECT id,release_id,state,coalesce(stage,'') FROM tombot.node_update_jobs WHERE node_id=$1 AND id=$2 FOR UPDATE`, c.Node, c.Job).Scan(&job, &release, &state, &priorStep); err != nil {
 				return err
 			}
 			switch c.Action {
@@ -70,17 +70,33 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 					return ErrConflict
 				}
 				return nil
+			case "progress":
+				if state != "running" || c.State != "preflight" {
+					return ErrConflict
+				}
+				_, err := tx.ExecContext(ctx, `UPDATE tombot.node_update_jobs SET stage=$2,updated_at=clock_timestamp() WHERE id=$1 AND (stage IS NULL OR stage='download')`, job, c.State)
+				return err
 			case "report":
-				if c.State != "started" && c.State != "failed" && c.State != "busy" {
+				outcome, step, valid := noderelease.ParseUpgradeOutcome(c.State)
+				if !valid {
 					return ErrInput
 				}
-				if state == c.State {
+				if outcome == "program_applied" {
+					outcome, step = "started", "program_applied"
+				}
+				if state == outcome {
+					if (step != "" || priorStep == "program_applied") && step != priorStep {
+						return ErrConflict
+					}
 					return nil
 				}
 				if state != "running" {
 					return ErrConflict
 				}
-				_, err := tx.ExecContext(ctx, `UPDATE tombot.node_update_jobs SET state=$2,applied_image=CASE WHEN $2='started' THEN (SELECT image_id FROM tombot.node_connections WHERE node_id=$3) END,updated_at=clock_timestamp() WHERE id=$1`, job, c.State, c.Node)
+				_, err := tx.ExecContext(ctx, `UPDATE tombot.node_update_jobs SET state=$2,
+					stage=CASE WHEN $4<>'' THEN $4 WHEN $2 IN ('failed','busy') THEN stage END,
+					applied_image=CASE WHEN $2='started' THEN (SELECT image_id FROM tombot.node_connections WHERE node_id=$3) END,
+					updated_at=clock_timestamp() WHERE id=$1`, job, outcome, c.Node, step)
 				return err
 			}
 			return ErrInput
@@ -94,7 +110,7 @@ func (s Service) Agent(logger *slog.Logger) http.Handler {
 			}
 			return
 		}
-		if job == "" || c.Action == "report" {
+		if job == "" || c.Action == "report" || c.Action == "progress" {
 			w.WriteHeader(204)
 			return
 		}

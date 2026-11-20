@@ -67,6 +67,7 @@ type nodeInstallRequest struct {
 
 // NodeInstallationReport 只公开接入主服务所需的节点身份，不包含私钥或认证内容。
 type NodeInstallationReport struct {
+	UpgradeScope           string    `json:"upgrade_scope,omitempty"`
 	Scope                  string    `json:"scope"`
 	State                  string    `json:"state"`
 	NodeID                 string    `json:"node_id"`
